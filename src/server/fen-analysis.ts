@@ -1,6 +1,5 @@
 import { readFile } from "fs/promises";
 import path from "path";
-import { loadPyodide } from "pyodide";
 import type { GameEngine, PythonBoard } from "@/game/engine-v2";
 import type {
   FenAnalysisRequest,
@@ -14,6 +13,7 @@ import type { Player } from "@/game/engine";
 import { predictWinProbability } from "@/game/value-model/inference";
 import { evaluatePersonalityPosition } from "@/game/value-model/styled-evaluation";
 import { PERSONALITIES } from "@/game/value-model/personalities";
+import { loadServerPyodide } from "@/server/pyodide";
 
 interface PythonProxy {
   destroy?: () => void;
@@ -45,12 +45,7 @@ function destroyProxy(value: unknown): void {
 async function loadAnalysisEngine(): Promise<LoadedAnalysisEngine> {
   if (loadedEngine) return loadedEngine;
   loadedEngine = (async () => {
-    const pyodidePackage = path.dirname(
-      require.resolve("pyodide/package.json")
-    );
-    const pyodide = await loadPyodide({
-      indexURL: `${pyodidePackage}${path.sep}`,
-    });
+    const pyodide = await loadServerPyodide();
     const [engineCode, searchCode] = await Promise.all([
       readFile(path.join(process.cwd(), "public/engine.py"), "utf8"),
       readFile(path.join(process.cwd(), "scripts/ghq_ai.py"), "utf8"),
