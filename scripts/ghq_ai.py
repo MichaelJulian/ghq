@@ -1034,8 +1034,12 @@ class Searcher:
             return cached
 
         original_turn = board.turn
-        partial_width = max(48, self.beam_width * 6)
-        evaluation_pool_width = max(72, self.beam_width * 8)
+        if self.time_ms < 1000:
+            partial_width = max(24, self.beam_width * 4)
+            evaluation_pool_width = max(36, self.beam_width * 6)
+        else:
+            partial_width = max(48, self.beam_width * 6)
+            evaluation_pool_width = max(72, self.beam_width * 8)
         turn_width = max(8, self.beam_width * 2)
         frontier = [PartialTurn([], board.copy(), 0.0)]
         completed: List[PartialTurn] = []

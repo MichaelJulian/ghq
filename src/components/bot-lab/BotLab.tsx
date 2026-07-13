@@ -47,7 +47,7 @@ export default function BotLab() {
     useState<PersonalityId>("battery_commander");
   const [bluePersonality, setBluePersonality] =
     useState<PersonalityId>("mobile_raider");
-  const [timeMs, setTimeMs] = useState(500);
+  const [timeMs, setTimeMs] = useState(1500);
   const [maxDepth, setMaxDepth] = useState(1);
   const [beamWidth, setBeamWidth] = useState(6);
   const [snapshots, setSnapshots] = useState<ArenaSnapshot[]>([
