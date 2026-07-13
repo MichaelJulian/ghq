@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { BoardType, getBoardInfo } from "@/game/tutorial";
 import { useRouter, useSearchParams } from "next/navigation";
 import { boards } from "@/game/tutorial";
@@ -16,7 +16,7 @@ import Link from "next/link";
 import LearnBasics from "./LearnBasics";
 import { GHQBoardV3 } from "@/components/board-v3/boardv3";
 
-export default function Page() {
+function LearnPage() {
   const searchParams = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [boardFen, setBoardFen] = useState<string | undefined>(undefined);
@@ -129,6 +129,14 @@ export default function Page() {
     <div>
       <GHQBoardV3 isPassAndPlayMode={true} fen={boardFen} />
     </div>
+  );
+}
+
+export default function Page() {
+  return (
+    <Suspense fallback={null}>
+      <LearnPage />
+    </Suspense>
   );
 }
 

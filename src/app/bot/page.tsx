@@ -1,11 +1,11 @@
 "use client";
 
 import { GHQBoardV3 } from "@/components/board-v3/boardv3";
-import { useMemo, useEffect } from "react";
+import { Suspense, useMemo, useEffect } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { nanoid } from "nanoid";
 
-export default function Page() {
+function BotPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const fen = useMemo(
@@ -26,5 +26,13 @@ export default function Page() {
     <div>
       <GHQBoardV3 fen={fen} bot={true} playerId="0" id={id} />
     </div>
+  );
+}
+
+export default function Page() {
+  return (
+    <Suspense fallback={null}>
+      <BotPage />
+    </Suspense>
   );
 }

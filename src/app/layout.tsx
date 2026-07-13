@@ -4,7 +4,10 @@ import "./globals.css";
 import { ClerkProvider } from "@clerk/nextjs";
 import { Toaster } from "@/components/ui/sonner";
 import { BoardArrowProvider } from "@/game/BoardArrowProvider";
-import { MatchmakingProvider } from "@/components/MatchmakingProvider";
+import {
+  MatchmakingProvider,
+  OfflineMatchmakingProvider,
+} from "@/components/MatchmakingProvider";
 import MatchmakingToast from "@/components/MatchmakingToast";
 import { config } from "@/lib/config";
 import { LatestMoveProvider } from "@/components/LatestMoveContext";
@@ -50,14 +53,16 @@ export default function RootLayout({
     return (
       <BoardArrowProvider>
         <LatestMoveProvider>
-          <html lang="en">
-            <body
-              className={`${geistSans.variable} ${geistMono.variable} antialiased`}
-            >
-              {children}
-              <Toaster />
-            </body>
-          </html>
+          <OfflineMatchmakingProvider>
+            <html lang="en">
+              <body
+                className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+              >
+                {children}
+                <Toaster />
+              </body>
+            </html>
+          </OfflineMatchmakingProvider>
         </LatestMoveProvider>
       </BoardArrowProvider>
     );

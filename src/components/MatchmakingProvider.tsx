@@ -45,6 +45,22 @@ interface MatchmakingData {
   };
 }
 
+const offlineMatchmaking: MatchmakingContextType = {
+  matchmakingMode: null,
+  matchmakingRated: false,
+  startMatchmaking: () => undefined,
+  cancelMatchmaking: () => undefined,
+  usersOnline: null,
+};
+
+export const OfflineMatchmakingProvider: React.FC<{ children: ReactNode }> = ({
+  children,
+}) => (
+  <MatchmakingContext.Provider value={offlineMatchmaking}>
+    {children}
+  </MatchmakingContext.Provider>
+);
+
 export const MatchmakingProvider: React.FC<{ children: ReactNode }> = ({
   children,
 }) => {
