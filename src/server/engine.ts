@@ -1,7 +1,7 @@
 import { loadPyodide } from "pyodide";
 import path from "path";
 import { readFile } from "fs/promises";
-import { GameEngine } from "@/game/engine-v2";
+import type { GameEngine } from "@/game/engine-v2";
 
 export async function loadV2Engine(): Promise<GameEngine> {
   let pyodide = await loadPyodide();

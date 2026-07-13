@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:bot-lab": "next dev",
     "dev:server": "tsx watch src/server.ts",
     "build": "next build",
     "start": "next start",

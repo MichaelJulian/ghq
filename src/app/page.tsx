@@ -57,6 +57,9 @@ function App() {
                 <Button onClick={() => router.push("/editor")}>
                   ✏️ Board Editor{" "}
                 </Button>
+                <Button onClick={() => router.push("/bot-lab")}>
+                  🧪 Bot Lab
+                </Button>
                 {/* {showVariants && (
                   <>
                   </>

@@ -80,3 +80,61 @@ console.log(best.evaluation.styleContributions);
 `styleContributions` provides an explanation of which normalized preferences
 raised or lowered a candidate. The self-play search will supply tacticality,
 risk, and search-derived objective values when those are available.
+
+## Self-play game runner
+
+`playOneGame(config)` in `src/game/self-play/play-one-game.ts` runs a complete,
+headless game through the same `public/engine.py` board used by production. It
+does not duplicate GHQ rules: agents only choose from `generate_legal_moves()`,
+and the production board applies captures, the three-action limit, turn changes,
+and terminal outcomes.
+
+Load the Pyodide engine once per worker and reuse it across a batch:
+
+```ts
+const engine = await loadV2Engine();
+const result = await playOneGame({
+  engine,
+  red: createRandomAgent("red-random"),
+  blue: createRandomAgent("blue-random"),
+  seed: 42,
+});
+```
+
+The result contains only serializable FEN, UCI, agent, seed, turn, and outcome
+data. Supplying the same seed and deterministic agents reproduces the game.
+
+## Bot Lab and FEN API
+
+`/bot-lab` provides two views over the same production engine:
+
+Run `pnpm dev:bot-lab`, then open `http://localhost:3000/bot-lab` to use the
+dashboard locally.
+
+- Character Arena plays one or several complete player turns, preserves the
+  serialized engine state between requests, and allows every resulting position
+  to be replayed.
+- FEN Analysis returns the best turn found within a chosen time, depth, and beam
+  budget. It shows the gradient-boosted model probabilities, personality style
+  output, heuristic contributions, principal variation, and search statistics.
+
+The underlying endpoint is public and accepts JSON:
+
+```http
+POST /api/ai/analyze
+Content-Type: application/json
+
+{
+  "fen": "qr↓6/iii5/8/8/8/8/5III/6R↑Q IIIIIFFFPRRTH iiiiifffprrth r",
+  "personality": "balanced",
+  "turnNumber": 1,
+  "timeMs": 750,
+  "maxDepth": 2,
+  "beamWidth": 8
+}
+```
+
+The response includes `serializedState`; send that value instead of `fen` for
+the next arena turn so draw offers and other state not represented by FEN are
+preserved. Recommendations are labeled `best found` unless the requested search
+horizon was exhaustive.

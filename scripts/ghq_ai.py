@@ -59,6 +59,33 @@ PERSONALITIES: Dict[str, Dict[str, float]] = {
         "support": 1.20,
         "open_board_armored_infantry": 0.70,
     },
+    "mobile_raider": {
+        "material": 0.90,
+        "support": 0.85,
+        "mobility": 1.60,
+        "open_board_armored_infantry": 1.55,
+        "artillery_formation": 0.70,
+    },
+    "battery_commander": {
+        "artillery_formation": 1.55,
+        "artillery_pressure": 1.45,
+        "support": 1.20,
+        "open_board_armored_infantry": 0.70,
+    },
+    "para_specialist": {
+        "airborne_survival": 1.65,
+        "support": 1.15,
+        "mobility": 1.10,
+        "artillery_pressure": 1.10,
+    },
+    "tactical_gambler": {
+        "material": 0.82,
+        "support": 0.72,
+        "overextension": 0.65,
+        "artillery_pressure": 1.55,
+        "mobility": 1.35,
+        "hq_safety": 0.85,
+    },
 }
 
 BASE_WEIGHTS = {
