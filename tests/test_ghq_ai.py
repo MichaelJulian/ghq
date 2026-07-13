@@ -27,6 +27,14 @@ TURN_28_FORCED_MATE_FEN = (
     "q2r↓4/ir↓i2r↘2/8/3h↘4/fi5P/3FH↑1f1/4IF1p/"
     "2R↑2T↗1Q IIIIIF iiiii b"
 )
+VERTICAL_INFANTRY_FEN = (
+    "qr↓h↓r↓iiii/iiiffr↓t←p/5f2/7I/7I/7I/1R↑1R↑4/"
+    "FIFPT↑H↑R↑Q - - r"
+)
+STAGGERED_INFANTRY_FEN = (
+    "qr↓h↓r↓iiii/iiiffr↓t←p/5f2/8/6I1/5I1I/1R↑1R↑4/"
+    "FIFPT↑H↑R↑Q - - r"
+)
 
 
 class EvaluationTests(unittest.TestCase):
@@ -87,8 +95,59 @@ class EvaluationTests(unittest.TestCase):
             ghq_ai.artillery_exposure_penalty(cardinal, engine.RED),
         )
 
+    def test_staggered_infantry_front_beats_same_file_column(self):
+        vertical = engine.BaseBoard(VERTICAL_INFANTRY_FEN)
+        staggered = engine.BaseBoard(STAGGERED_INFANTRY_FEN)
+        self.assertGreater(
+            ghq_ai.infantry_shape_score(staggered, engine.RED),
+            ghq_ai.infantry_shape_score(vertical, engine.RED),
+        )
+        self.assertLess(
+            ghq_ai.infantry_isolation_penalty(staggered, engine.RED),
+            ghq_ai.infantry_isolation_penalty(vertical, engine.RED),
+        )
+        self.assertGreater(
+            ghq_ai.evaluation_breakdown(staggered)["total_red"],
+            ghq_ai.evaluation_breakdown(vertical)["total_red"],
+        )
+
 
 class SearchTests(unittest.TestCase):
+    def test_blocked_non_threatening_artillery_rotation_is_discarded(self):
+        board = engine.BaseBoard(VERTICAL_INFANTRY_FEN[:-1] + "b")
+        searcher = ghq_ai.Searcher("balanced", time_ms=2000, beam_width=8)
+        self.assertFalse(
+            searcher.artillery_move_allowed(
+                board, engine.Move.from_uci("g7g7←")
+            )
+        )
+
+    def test_greedy_fallback_preserves_idle_paratrooper_and_breaks_column(self):
+        board = engine.BaseBoard(VERTICAL_INFANTRY_FEN)
+        before_shape = ghq_ai.infantry_shape_score(board, engine.RED)
+        result = ghq_ai.greedy_complete_turn(board, "balanced", turn_number=12)
+        ucis = [move.uci() for move in result.pv]
+        self.assertNotEqual(ucis, ["h5h6", "h4h5", "h3h4"])
+        self.assertFalse(any(uci.startswith("d1") for uci in ucis))
+        after = board.copy()
+        for move in result.pv:
+            after.push(move)
+        self.assertGreater(
+            ghq_ai.infantry_shape_score(after, engine.RED), before_shape
+        )
+
+    def test_greedy_fallback_does_not_stage_para_just_to_spend_an_action(self):
+        result = ghq_ai.greedy_complete_turn(
+            engine.BaseBoard(), "balanced", turn_number=2
+        )
+        self.assertFalse(
+            any(
+                move.name == "Reinforce"
+                and move.unit_type == engine.AIRBORNE_INFANTRY
+                for move in result.pv
+            )
+        )
+
     def test_diagonal_infantry_cover_removes_clean_para_capture(self):
         exposed = engine.BaseBoard(
             "2p4q/8/8/8/8/2R↑5/8/7Q - - b"
@@ -176,7 +235,8 @@ class SearchTests(unittest.TestCase):
         searcher = ghq_ai.Searcher("balanced", time_ms=1000, beam_width=8)
         self.assertFalse(searcher.artillery_move_allowed(board, engine.Move.from_uci("g1g1→")))
         self.assertFalse(searcher.artillery_move_allowed(board, engine.Move.from_uci("g1g1↓")))
-        self.assertTrue(searcher.artillery_move_allowed(board, engine.Move.from_uci("g1f1↑")))
+        self.assertFalse(searcher.artillery_move_allowed(board, engine.Move.from_uci("g1f1↑")))
+        self.assertTrue(searcher.artillery_move_allowed(board, engine.Move.from_uci("g1f1↖")))
 
     def test_quiet_unblock_and_paratrooper_extraction_stay_in_beam(self):
         board = engine.BaseBoard(PARATROOPER_EXTRACTION_FEN)

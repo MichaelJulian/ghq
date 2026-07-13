@@ -422,7 +422,9 @@ function SearchControls({
       <p className="mt-2 text-[11px] leading-4 text-slate-500">
         Beam controls how many diverse complete turns survive at each search
         node. A larger beam considers more plans but leaves less time to finish
-        the requested reply depth.
+        the requested reply depth. For opponent-aware analysis, start with
+        depth 2 and beam 6–8; depth 3 with beam 15 is usually too wide for a
+        three-second budget.
       </p>
     </div>
   );
@@ -612,8 +614,9 @@ function AnalysisDetails({ analysis }: { analysis: FenAnalysisResponse }) {
           )}
           {analysis.search.search.fallback_used !== "none" && (
             <div className="mt-2 text-xs text-slate-300">
-              Deadline fallback: {analysis.search.search.fallback_used}. The
-              label above intentionally does not call this a best-found line.
+              {analysis.search.search.fallback_used === "safe"
+                ? "Search timed out after producing this tactically screened root turn, but before completing the requested depth."
+                : "Search timed out before a tactically screened root turn was ready, so this came from the emergency positional policy and has no opponent-response verification."}
             </div>
           )}
         </CardContent>

@@ -96,6 +96,8 @@ BASE_WEIGHTS = {
     "artillery_formation": 1.0,
     "artillery_pressure": 1.0,
     "artillery_protection": 1.0,
+    "infantry_shape": 1.0,
+    "infantry_isolation": 1.0,
     "mobility": 1.0,
     "open_board_armored_infantry": 1.0,
     "airborne_survival": 1.0,
@@ -163,6 +165,67 @@ def support_penalty(board: engine.BaseBoard, color: bool) -> float:
             penalty += 0.50 * value
         if nearest >= 3:
             penalty += 0.25 * value
+    return penalty
+
+
+def infantry_shape_score(board: engine.BaseBoard, color: bool) -> float:
+    """Reward interlocking diagonals and penalize penetrable infantry files."""
+    infantry = squares(
+        board.occupied_co[color] & (board.infantry | board.armored_infantry)
+    )
+    score = 0.0
+    for index, first in enumerate(infantry):
+        first_file = engine.square_file(first)
+        first_rank = engine.square_rank(first)
+        for second in infantry[index + 1 :]:
+            file_distance = abs(first_file - engine.square_file(second))
+            rank_distance = abs(first_rank - engine.square_rank(second))
+            if file_distance == 1 and rank_distance == 1:
+                score += 0.50
+            elif file_distance == 0 and rank_distance == 1:
+                score -= 0.60
+
+    for file_index in range(8):
+        ranks = sorted(
+            engine.square_rank(square)
+            for square in infantry
+            if engine.square_file(square) == file_index
+        )
+        run = 1
+        for index in range(1, len(ranks)):
+            if ranks[index] == ranks[index - 1] + 1:
+                run += 1
+                if run >= 3:
+                    score -= 1.25
+            else:
+                run = 1
+    return score
+
+
+def infantry_isolation_penalty(board: engine.BaseBoard, color: bool) -> float:
+    """Do not let a same-file chain count as its own connection to the army."""
+    infantry = squares(
+        board.occupied_co[color] & (board.infantry | board.armored_infantry)
+    )
+    friendly = squares(
+        board.occupied_co[color] & ~board.hq & ~board.airborne_infantry
+    )
+    penalty = 0.0
+    for square in infantry:
+        file_index = engine.square_file(square)
+        anchors = [
+            other
+            for other in friendly
+            if other != square
+            and (
+                board.piece_type_at(other) not in (engine.INFANTRY, engine.ARMORED_INFANTRY)
+                or engine.square_file(other) != file_index
+            )
+        ]
+        nearest = min((chebyshev(square, other) for other in anchors), default=8)
+        if nearest > 1:
+            piece_type = board.piece_type_at(square)
+            penalty += 0.18 * (nearest - 1) * PIECE_VALUES.get(piece_type, 0.0)
     return penalty
 
 
@@ -345,6 +408,10 @@ def evaluation_breakdown(
         "artillery_pressure": artillery_pressure(board, engine.RED) - artillery_pressure(board, engine.BLUE),
         "artillery_protection": artillery_exposure_penalty(board, engine.BLUE)
         - artillery_exposure_penalty(board, engine.RED),
+        "infantry_shape": infantry_shape_score(board, engine.RED)
+        - infantry_shape_score(board, engine.BLUE),
+        "infantry_isolation": infantry_isolation_penalty(board, engine.BLUE)
+        - infantry_isolation_penalty(board, engine.RED),
         "mobility": 0.30 * (action_mobility(board, engine.RED) - action_mobility(board, engine.BLUE)),
         "open_board_armored_infantry": 0.0,
         "airborne_survival": airborne_survival_penalty(board, engine.BLUE)
@@ -383,6 +450,18 @@ def quick_evaluation(board: engine.BaseBoard, turn_number: int) -> float:
         - artillery_formation(board, engine.BLUE)
         + artillery_exposure_penalty(board, engine.BLUE)
         - artillery_exposure_penalty(board, engine.RED)
+        + infantry_shape_score(board, engine.RED)
+        - infantry_shape_score(board, engine.BLUE)
+        + infantry_isolation_penalty(board, engine.BLUE)
+        - infantry_isolation_penalty(board, engine.RED)
+        + support_penalty(board, engine.BLUE)
+        - support_penalty(board, engine.RED)
+        + overextension_penalty(board, engine.BLUE)
+        - overextension_penalty(board, engine.RED)
+        + airborne_survival_penalty(board, engine.BLUE)
+        - airborne_survival_penalty(board, engine.RED)
+        + hq_safety(board, engine.RED)
+        - hq_safety(board, engine.BLUE)
     )
 
 
@@ -647,14 +726,42 @@ class Searcher:
         enemies = squares(board.occupied_co[not color])
         return min((chebyshev(square, enemy) for enemy in enemies), default=8)
 
+    @staticmethod
+    def artillery_lane_masks(
+        board: engine.BaseBoard, move: engine.Move
+    ) -> Tuple[int, int]:
+        if (
+            move.from_square is None
+            or move.to_square is None
+            or move.orientation is None
+        ):
+            return engine.BB_EMPTY, engine.BB_EMPTY
+        piece_type = board.piece_type_at(move.from_square)
+        if piece_type not in ARTILLERY_TYPES:
+            return engine.BB_EMPTY, engine.BB_EMPTY
+        distance = 3 if piece_type == engine.HEAVY_ARTILLERY else 2
+        target = board.get_bombardment_target(
+            move.to_square, move.orientation, distance
+        )
+        if target is None:
+            return engine.BB_EMPTY, engine.BB_EMPTY
+        lane = engine.between_inclusive_end(move.to_square, target)
+        friendly_after = (
+            board.occupied_co[board.turn]
+            & ~engine.BB_SQUARES[move.from_square]
+        ) | engine.BB_SQUARES[move.to_square]
+        return (
+            lane & board.occupied_co[not board.turn],
+            lane & friendly_after,
+        )
+
     def artillery_move_allowed(self, board: engine.BaseBoard, move: engine.Move) -> bool:
         """Apply the user's provisional artillery-orientation search rules.
 
-        Artillery farther than three squares from its nearest enemy may still
-        relocate, but it keeps its current useful facing rather than creating
-        eight equivalent orientation branches. Pure distant rotations are
-        discarded. Homeward-facing rotations are currently discarded at all
-        distances.
+        Pure rotations must create an actual threat. Relocations may choose a
+        new useful facing because orientation clones are collapsed later.
+        Homeward-facing rotations and lanes aimed only through friendly pieces
+        are discarded.
         """
         if move.name != "MoveAndOrient" or move.from_square is None or move.to_square is None:
             return True
@@ -664,16 +771,16 @@ class Searcher:
         if self.points_toward_home(board.turn, move.orientation):
             return False
 
-        distance = self.closest_enemy_distance(board, move.to_square, board.turn)
-        if distance <= 3:
-            return True
-        if move.from_square == move.to_square:
+        enemy_targets, friendly_blocks = self.artillery_lane_masks(board, move)
+        if move.from_square == move.to_square and not enemy_targets:
+            return False
+        if friendly_blocks and not enemy_targets:
             return False
 
-        current = board.get_orientation(move.from_square)
-        if current is None or self.points_toward_home(board.turn, current):
-            current = engine.ORIENT_N if board.turn == engine.RED else engine.ORIENT_S
-        return move.orientation == current
+        distance = self.closest_enemy_distance(board, move.to_square, board.turn)
+        if distance > 3 and move.from_square == move.to_square:
+            return False
+        return True
 
     @staticmethod
     def move_piece_type(board: engine.BaseBoard, move: engine.Move) -> Optional[int]:
@@ -792,6 +899,9 @@ class Searcher:
             # enough for the next action, h2-g3, to be considered.
             priority += 4800.0
         priority += self.artillery_target_bonus(board, move)
+        if piece_type in ARTILLERY_TYPES and move.name == "MoveAndOrient":
+            _, friendly_blocks = self.artillery_lane_masks(board, move)
+            priority -= 150.0 * engine.popcount(friendly_blocks)
         if piece_type == engine.ARMORED_INFANTRY:
             priority += 20.0
         elif piece_type in ARTILLERY_TYPES:
@@ -1020,6 +1130,50 @@ class Searcher:
             add(candidate)
         return selected
 
+    def consider_early_root_fallback(
+        self,
+        root: engine.BaseBoard,
+        cache_key: str,
+        partial: PartialTurn,
+        mover: bool,
+    ) -> None:
+        """Capture a screened fallback before wide root generation can time out."""
+        if self.root_key != cache_key or self.root_fallback is not None:
+            return
+        _, wasteful_rotation = self.turn_action_classes(root, partial.moves)
+        if wasteful_rotation:
+            return
+        replay = root.copy()
+        for move in partial.moves:
+            piece_type = self.move_piece_type(replay, move)
+            if (
+                piece_type == engine.AIRBORNE_INFANTRY
+                and move.capture_preference is None
+            ):
+                if move.name == "Reinforce":
+                    return
+                if (
+                    move.from_square is not None
+                    and move.to_square is not None
+                    and self.home_distance(move.to_square, replay.turn)
+                    >= self.home_distance(move.from_square, replay.turn)
+                ):
+                    return
+            replay.push(move)
+        try:
+            safety = self.assess_turn_safety(root, partial.board, mover)
+        except SearchTimeout:
+            return
+        if safety.tactically_safe:
+            self.root_fallback = TurnCandidate(
+                partial.moves,
+                partial.board,
+                partial.priority,
+                self.quick_score(partial.board),
+                0.0,
+                True,
+            )
+
     def generate_turn_candidates(self, board: engine.BaseBoard) -> List[TurnCandidate]:
         """Generate, deduplicate, then prune complete player turns.
 
@@ -1068,6 +1222,10 @@ class Searcher:
                         child,
                         partial.priority + priority,
                     )
+                    if child.is_game_over() or child.turn != original_turn:
+                        self.consider_early_root_fallback(
+                            board, cache_key, candidate, original_turn
+                        )
                     key = child.serialize()
                     incumbent = expanded.get(key)
                     if incumbent is not None:
@@ -1079,6 +1237,9 @@ class Searcher:
             for partial in expanded.values():
                 if partial.board.is_game_over() or partial.board.turn != original_turn:
                     completed.append(partial)
+                    self.consider_early_root_fallback(
+                        board, cache_key, partial, original_turn
+                    )
                 else:
                     next_frontier.append(partial)
 
@@ -1255,34 +1416,64 @@ class Searcher:
 def greedy_complete_turn(
     board: engine.BaseBoard, personality: str, turn_number: int = 1
 ) -> SearchResult:
-    """Fast emergency completion used only when no search depth finishes."""
+    """Fast positional completion used only when no search depth finishes."""
     working = board.copy()
     original_turn = working.turn
     moves: List[engine.Move] = []
+    fallback_rules = Searcher(
+        personality,
+        time_ms=60_000,
+        beam_width=4,
+        turn_number=turn_number,
+    )
     while working.turn == original_turn and not working.is_game_over():
         legal = list(working.generate_legal_moves())
         if not legal:
             break
         candidates: List[Tuple[float, str, engine.Move]] = []
         for move in legal:
-            target = working.piece_type_at(move.capture_preference) if move.capture_preference is not None else None
             piece_type = Searcher.move_piece_type(working, move)
-            score = 0.0
-            if move.name == "AutoCapture":
-                score += 10000.0
-            if target is not None:
-                score += 5000.0 + 100.0 * PIECE_VALUES.get(target, 0.0)
-            if move.name == "Reinforce":
-                score += 300.0 + (30.0 if piece_type in INFANTRY_TYPES else 0.0)
-            elif piece_type in INFANTRY_TYPES:
-                score += 120.0
-            elif piece_type in ARTILLERY_TYPES and move.from_square != move.to_square:
-                score += 60.0
-            elif piece_type in ARTILLERY_TYPES:
-                score -= 200.0
-            if move.name == "Skip":
-                score -= 1000.0 if working.turn_moves < 2 else 20.0
-            candidates.append((score, move.uci(), move))
+            if move.name == "Skip" and working.turn_moves < 2:
+                continue
+            if (
+                move.name == "Reinforce"
+                and piece_type == engine.AIRBORNE_INFANTRY
+                and move.capture_preference is None
+            ):
+                # A deadline fallback may not commit the para merely to spend
+                # an action. Preserve it until search proves a capture plan.
+                continue
+            if piece_type in ARTILLERY_TYPES and not fallback_rules.artillery_move_allowed(
+                working, move
+            ):
+                continue
+            if (
+                piece_type == engine.AIRBORNE_INFANTRY
+                and move.name != "Reinforce"
+                and move.capture_preference is None
+                and move.from_square is not None
+                and move.to_square is not None
+                and fallback_rules.home_distance(move.to_square, working.turn)
+                >= fallback_rules.home_distance(move.from_square, working.turn)
+            ):
+                continue
+
+            child = working.copy()
+            child.push(move)
+            red_score = quick_evaluation(child, turn_number)
+            utility = red_score if original_turn == engine.RED else -red_score
+            candidates.append((utility, move.uci(), move))
+        if not candidates:
+            skip = next((move for move in legal if move.name == "Skip"), None)
+            if skip is None:
+                break
+            candidates.append((
+                quick_evaluation(working, turn_number)
+                if original_turn == engine.RED
+                else -quick_evaluation(working, turn_number),
+                skip.uci(),
+                skip,
+            ))
         chosen = max(candidates, key=lambda item: (item[0], item[1]))[2]
         moves.append(chosen)
         working.push(chosen)
