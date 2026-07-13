@@ -173,8 +173,14 @@ export async function analyzeFen(
     2_000,
     "turnNumber"
   );
-  const timeMs = integerInRange(request.timeMs, 750, 50, 3_000, "timeMs");
-  const maxDepth = integerInRange(request.maxDepth, 2, 1, 3, "maxDepth");
+  const timeMs = integerInRange(
+    request.timeMs,
+    30_000,
+    50,
+    30_000,
+    "timeMs"
+  );
+  const maxDepth = integerInRange(request.maxDepth, 3, 1, 3, "maxDepth");
   const beamWidth = integerInRange(request.beamWidth, 8, 2, 16, "beamWidth");
   const { engine, search } = await loadAnalysisEngine();
   let board: PythonBoard;

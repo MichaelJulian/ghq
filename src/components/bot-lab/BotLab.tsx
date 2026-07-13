@@ -47,9 +47,9 @@ export default function BotLab() {
     useState<PersonalityId>("battery_commander");
   const [bluePersonality, setBluePersonality] =
     useState<PersonalityId>("mobile_raider");
-  const [timeMs, setTimeMs] = useState(1500);
-  const [maxDepth, setMaxDepth] = useState(1);
-  const [beamWidth, setBeamWidth] = useState(6);
+  const [timeMs, setTimeMs] = useState(30_000);
+  const [maxDepth, setMaxDepth] = useState(3);
+  const [beamWidth, setBeamWidth] = useState(8);
   const [snapshots, setSnapshots] = useState<ArenaSnapshot[]>([
     initialSnapshot(GHQ_STARTING_FEN),
   ]);
@@ -401,7 +401,7 @@ function SearchControls({
           label="Time (ms)"
           value={timeMs}
           min={50}
-          max={3000}
+          max={30_000}
           onChange={setTimeMs}
         />
         <NumericControl
@@ -420,11 +420,12 @@ function SearchControls({
         />
       </div>
       <p className="mt-2 text-[11px] leading-4 text-slate-500">
-        Beam controls how many diverse complete turns survive at each search
-        node. A larger beam considers more plans but leaves less time to finish
-        the requested reply depth. For opponent-aware analysis, start with
-        depth 2 and beam 6–8; depth 3 with beam 15 is usually too wide for a
-        three-second budget.
+        The default quality setting thinks for up to 30 seconds and attempts
+        depth 3. Iterative deepening preserves the last fully completed result,
+        so an unfinished depth 3 still returns its verified depth-2 line. Beam
+        controls how many diverse complete turns survive at each search node.
+        Use the reported completed depth—not just elapsed time—to judge the
+        result.
       </p>
     </div>
   );

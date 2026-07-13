@@ -4,7 +4,9 @@ import { AnalysisInputError, analyzeFen } from "@/server/fen-analysis";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-export const maxDuration = 15;
+// Leave room for a full 30-second search plus Pyodide cold-start and response
+// serialization. The search still enforces its own requested deadline.
+export const maxDuration = 60;
 
 export async function POST(request: Request) {
   try {
