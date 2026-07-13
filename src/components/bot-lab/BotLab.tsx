@@ -395,28 +395,35 @@ function SearchControls({
   setBeamWidth: (value: number) => void;
 }) {
   return (
-    <div className="grid grid-cols-3 gap-2">
-      <NumericControl
-        label="Time (ms)"
-        value={timeMs}
-        min={50}
-        max={3000}
-        onChange={setTimeMs}
-      />
-      <NumericControl
-        label="Depth"
-        value={maxDepth}
-        min={1}
-        max={3}
-        onChange={setMaxDepth}
-      />
-      <NumericControl
-        label="Beam"
-        value={beamWidth}
-        min={2}
-        max={16}
-        onChange={setBeamWidth}
-      />
+    <div>
+      <div className="grid grid-cols-3 gap-2">
+        <NumericControl
+          label="Time (ms)"
+          value={timeMs}
+          min={50}
+          max={3000}
+          onChange={setTimeMs}
+        />
+        <NumericControl
+          label="Depth"
+          value={maxDepth}
+          min={1}
+          max={3}
+          onChange={setMaxDepth}
+        />
+        <NumericControl
+          label="Beam"
+          value={beamWidth}
+          min={2}
+          max={16}
+          onChange={setBeamWidth}
+        />
+      </div>
+      <p className="mt-2 text-[11px] leading-4 text-slate-500">
+        Beam controls how many diverse complete turns survive at each search
+        node. A larger beam considers more plans but leaves less time to finish
+        the requested reply depth.
+      </p>
     </div>
   );
 }
@@ -595,6 +602,18 @@ function AnalysisDetails({ analysis }: { analysis: FenAnalysisResponse }) {
             <div className="mt-4 rounded border border-amber-400/30 bg-amber-300/10 px-3 py-2 text-xs text-amber-100">
               This is the strongest line found inside the time and beam budget,
               not a proof of the globally optimal turn.
+            </div>
+          )}
+          {analysis.search.search.completed_depth_in_turns < 2 && (
+            <div className="mt-2 rounded border border-red-400/30 bg-red-300/10 px-3 py-2 text-xs text-red-100">
+              No full opponent reply was completed. Treat this turn as
+              tactically unverified; increase time or reduce the beam.
+            </div>
+          )}
+          {analysis.search.search.fallback_used !== "none" && (
+            <div className="mt-2 text-xs text-slate-300">
+              Deadline fallback: {analysis.search.search.fallback_used}. The
+              label above intentionally does not call this a best-found line.
             </div>
           )}
         </CardContent>

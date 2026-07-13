@@ -59,8 +59,77 @@ class EvaluationTests(unittest.TestCase):
         after = ghq_ai.airborne_survival_penalty(board, engine.BLUE)
         self.assertGreater(after, before)
 
+    def test_paratrooper_in_bombardment_has_catastrophic_penalty(self):
+        safe = engine.BaseBoard("7q/8/8/8/p7/8/8/R↑6Q - - r")
+        exposed = engine.BaseBoard("7q/8/8/8/8/8/p7/R↑6Q - - r")
+        self.assertGreater(
+            ghq_ai.airborne_survival_penalty(exposed, engine.BLUE),
+            ghq_ai.airborne_survival_penalty(safe, engine.BLUE) + 6.0,
+        )
+
+    def test_early_development_rewards_material_on_the_board(self):
+        undeveloped = engine.BaseBoard("7q/8/8/8/8/8/8/7Q IIIII - r")
+        developed = engine.BaseBoard("7q/8/8/8/8/8/8/IIIII2Q - - r")
+        self.assertGreater(
+            ghq_ai.development_for(developed, engine.RED, 3),
+            ghq_ai.development_for(undeveloped, engine.RED, 3),
+        )
+
+    def test_diagonal_infantry_cover_is_better_for_artillery(self):
+        diagonal = engine.BaseBoard(
+            "2p4q/8/8/8/8/2R↑5/1I6/7Q - - r"
+        )
+        cardinal = engine.BaseBoard(
+            "2p4q/8/8/8/8/2R↑5/2I5/7Q - - r"
+        )
+        self.assertLess(
+            ghq_ai.artillery_exposure_penalty(diagonal, engine.RED),
+            ghq_ai.artillery_exposure_penalty(cardinal, engine.RED),
+        )
+
 
 class SearchTests(unittest.TestCase):
+    def test_diagonal_infantry_cover_removes_clean_para_capture(self):
+        exposed = engine.BaseBoard(
+            "2p4q/8/8/8/8/2R↑5/8/7Q - - b"
+        )
+        covered = engine.BaseBoard(
+            "2p4q/8/8/8/8/2R↑5/1I1I4/7Q - - b"
+        )
+        searcher = ghq_ai.Searcher("balanced", time_ms=2000, beam_width=4)
+        self.assertEqual(searcher.tactical_risk(exposed, engine.RED)[0], 3.0)
+        self.assertEqual(searcher.tactical_risk(covered, engine.RED)[0], 0.0)
+
+    def test_leaving_bombarded_heavy_artillery_is_tactically_unsafe(self):
+        before = engine.BaseBoard(PARATROOPER_EXTRACTION_FEN)
+        after = before.copy()
+        for uci in ("g3f4", "h2g3", "skip"):
+            after.push(engine.Move.from_uci(uci))
+        searcher = ghq_ai.Searcher("balanced", time_ms=2000, beam_width=6)
+        safety = searcher.assess_turn_safety(before, after, engine.BLUE)
+        self.assertFalse(safety.tactically_safe)
+        self.assertGreaterEqual(safety.forced_loss_value, 6.0)
+
+    def test_value_model_is_used_in_leaf_score(self):
+        searcher = ghq_ai.Searcher(
+            "balanced",
+            time_ms=1000,
+            beam_width=4,
+            value_function=lambda _fen, _turn: 0.8,
+        )
+        board = engine.BaseBoard()
+        self.assertGreater(searcher.static_score(board), searcher.heuristic_score(board))
+        self.assertEqual(searcher.value_model_evaluations, 1)
+
+    def test_non_forcing_rotation_turns_have_a_quota(self):
+        board = engine.BaseBoard("7q/8/8/8/i2R→4/8/8/7Q - - r")
+        searcher = ghq_ai.Searcher("balanced", time_ms=3000, beam_width=4)
+        turns = searcher.generate_turn_candidates(board)
+        wasteful = sum(
+            searcher.turn_action_classes(board, turn.moves)[1] for turn in turns
+        )
+        self.assertLessEqual(wasteful, 1)
+
     def test_regression_trapped_paratrooper_capture_stays_inside_beam(self):
         """The c1 paratrooper cannot be valued as a clean armored trade.
 

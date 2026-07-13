@@ -26,7 +26,9 @@ interface SearchModule extends PythonProxy {
     personality: PersonalityId,
     timeMs: number,
     maxDepth: number,
-    beamWidth: number
+    beamWidth: number,
+    turnNumber: number,
+    valueFunction: (fen: string, turnNumber: number) => number
   ) => PythonProxy;
 }
 
@@ -111,6 +113,20 @@ function modelOutput(
   };
 }
 
+function redModelValue(fen: string, turnNumber: number): number {
+  const state = FENtoBoardState(fen);
+  return predictWinProbability(
+    {
+      board: state.board,
+      redReserve: state.redReserve,
+      blueReserve: state.blueReserve,
+      currentPlayer: state.currentPlayerTurn ?? "RED",
+      turnNumber,
+    },
+    "RED"
+  );
+}
+
 function pythonOutcome(board: PythonBoard): FenAnalysisResponse["outcome"] {
   const outcome = board.outcome();
   if (!outcome) return undefined;
@@ -180,7 +196,9 @@ export async function analyzeFen(
       personality,
       timeMs,
       maxDepth,
-      beamWidth
+      beamWidth,
+      turnNumber,
+      redModelValue
     );
     let searchResult: GhqSearchResult;
     try {

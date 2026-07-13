@@ -28,7 +28,11 @@ export interface SearchEvaluationBreakdown {
 }
 
 export interface GhqSearchResult {
-  recommendation_label: "best move" | "best found";
+  recommendation_label:
+    | "best move"
+    | "best found"
+    | "safe fallback"
+    | "greedy fallback";
   input_fen: string;
   side_to_move: "red" | "blue";
   best_turn: {
@@ -49,6 +53,7 @@ export interface GhqSearchResult {
     nodes: number;
     elapsed_ms: number;
     timed_out: boolean;
+    fallback_used: "none" | "safe" | "greedy";
     approximate: boolean;
     exhaustive_within_requested_horizon: boolean;
     rule_filtered_actions: number;
@@ -57,6 +62,9 @@ export interface GhqSearchResult {
     complete_turns_generated: number;
     complete_turns_deduplicated: number;
     complete_turns_pruned: number;
+    tactically_unsafe_turns: number;
+    rotation_quota_pruned: number;
+    value_model_evaluations: number;
     turn_cache_hits: number;
     transposition_hits: number;
   };
