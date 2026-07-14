@@ -50,6 +50,8 @@ export default function BotLab() {
   const [timeMs, setTimeMs] = useState(30_000);
   const [maxDepth, setMaxDepth] = useState(3);
   const [beamWidth, setBeamWidth] = useState(8);
+  const [explorationTemperature, setExplorationTemperature] = useState(0.35);
+  const [matchSeed, setMatchSeed] = useState(20260713);
   const [snapshots, setSnapshots] = useState<ArenaSnapshot[]>([
     initialSnapshot(GHQ_STARTING_FEN),
   ]);
@@ -95,6 +97,9 @@ export default function BotLab() {
           timeMs,
           maxDepth,
           beamWidth,
+          explorationTemperature,
+          explorationSeed:
+            (matchSeed + Math.imul(working.turnNumber, 0x9e3779b1)) >>> 0,
         });
         const moves = analysis.search.best_turn.actions;
         const next: ArenaSnapshot = {
@@ -131,6 +136,7 @@ export default function BotLab() {
           timeMs,
           maxDepth,
           beamWidth,
+          explorationTemperature: 0,
         })
       );
     } catch (error) {
@@ -229,6 +235,10 @@ export default function BotLab() {
                   setTimeMs={setTimeMs}
                   setMaxDepth={setMaxDepth}
                   setBeamWidth={setBeamWidth}
+                  explorationTemperature={explorationTemperature}
+                  setExplorationTemperature={setExplorationTemperature}
+                  matchSeed={matchSeed}
+                  setMatchSeed={setMatchSeed}
                 />
                 {error && (
                   <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
@@ -386,6 +396,10 @@ function SearchControls({
   setTimeMs,
   setMaxDepth,
   setBeamWidth,
+  explorationTemperature,
+  setExplorationTemperature,
+  matchSeed,
+  setMatchSeed,
 }: {
   timeMs: number;
   maxDepth: number;
@@ -393,10 +407,14 @@ function SearchControls({
   setTimeMs: (value: number) => void;
   setMaxDepth: (value: number) => void;
   setBeamWidth: (value: number) => void;
+  explorationTemperature: number;
+  setExplorationTemperature: (value: number) => void;
+  matchSeed: number;
+  setMatchSeed: (value: number) => void;
 }) {
   return (
     <div>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
         <NumericControl
           label="Time (ms)"
           value={timeMs}
@@ -418,14 +436,30 @@ function SearchControls({
           max={16}
           onChange={setBeamWidth}
         />
+        <NumericControl
+          label="Explore"
+          value={explorationTemperature}
+          min={0}
+          max={2}
+          step={0.05}
+          onChange={setExplorationTemperature}
+        />
+        <NumericControl
+          label="Seed"
+          value={matchSeed}
+          min={0}
+          max={0xffff_ffff}
+          onChange={setMatchSeed}
+        />
       </div>
       <p className="mt-2 text-[11px] leading-4 text-slate-500">
         The default quality setting thinks for up to 30 seconds and attempts
         depth 3. Iterative deepening preserves the last fully completed result,
         so an unfinished depth 3 still returns its verified depth-2 line. Beam
         controls how many diverse complete turns survive at each search node.
-        Use the reported completed depth—not just elapsed time—to judge the
-        result.
+        Explore samples only among safe near-best turns; the seed makes a
+        matchup reproducible. Use the reported completed depth—not just elapsed
+        time—to judge the result.
       </p>
     </div>
   );
@@ -436,12 +470,14 @@ function NumericControl({
   value,
   min,
   max,
+  step,
   onChange,
 }: {
   label: string;
   value: number;
   min: number;
   max: number;
+  step?: number;
   onChange: (value: number) => void;
 }) {
   return (
@@ -451,6 +487,7 @@ function NumericControl({
         type="number"
         min={min}
         max={max}
+        step={step}
         value={value}
         onChange={(event) => onChange(Number(event.target.value))}
         className="mt-1"
@@ -585,6 +622,36 @@ function AnalysisDetails({ analysis }: { analysis: FenAnalysisResponse }) {
                   {analysis.search.best_turn.automatic_captures.join(" ")}
                 </div>
               )}
+              <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-300">
+                {(analysis.search.best_turn.action_purposes ?? [])
+                  .filter((item) => item.roles[0] !== "end_turn")
+                  .map((item) => (
+                    <span key={item.move}>
+                      <span className="font-mono">{item.move}</span>: {" "}
+                      {item.roles.join(" + ").replaceAll("_", " ")}
+                    </span>
+                  ))}
+              </div>
+              <div className="mt-2 text-xs text-slate-400">
+                Turn-purpose penalty:{" "}
+                {analysis.search.best_turn.purpose.total_penalty.toFixed(2)}
+                {analysis.search.best_turn.purpose.paratrooper_mission_penalty >
+                  0 &&
+                  ` (missionless para ${analysis.search.best_turn.purpose.paratrooper_mission_penalty.toFixed(2)})`}
+              </div>
+              <div className="mt-1 text-xs text-slate-400">
+                Frontier {analysis.search.best_turn.purpose.frontier_rank ?? "—"}/
+                {analysis.search.best_turn.purpose.frontier_limit ?? "—"} · forward
+                infantry actions {analysis.search.best_turn.purpose.forward_infantry_actions ?? "—"}
+                {analysis.search.best_turn.purpose.dispersion_increase > 0 &&
+                  ` · dispersion +${analysis.search.best_turn.purpose.dispersion_increase.toFixed(2)}`}
+              </div>
+              <div className="mt-1 text-xs text-slate-400">
+                Relocation options {analysis.search.best_turn.purpose.relocation_options ?? "—"}
+                {` · immobile units ${analysis.search.best_turn.purpose.immobile_units ?? "—"}`}
+                {analysis.search.best_turn.purpose.optionality_gain > 0 &&
+                  ` · optionality +${analysis.search.best_turn.purpose.optionality_gain.toFixed(2)}`}
+              </div>
             </div>
             <div className="grid grid-cols-3 gap-4 text-center text-xs">
               <Metric
@@ -601,13 +668,29 @@ function AnalysisDetails({ analysis }: { analysis: FenAnalysisResponse }) {
               />
             </div>
           </div>
-          {!analysis.search.search.exhaustive_within_requested_horizon && (
+          {analysis.search.search.opening_book_used && (
+            <div className="mt-4 rounded border border-sky-400/30 bg-sky-300/10 px-3 py-2 text-xs text-sky-100">
+              Data-backed opening line; legality and tactical safety were
+              checked before use.
+            </div>
+          )}
+          {analysis.search.recommendation_label === "exploratory" && (
+            <div className="mt-4 rounded border border-violet-400/30 bg-violet-300/10 px-3 py-2 text-xs text-violet-100">
+              Seeded exploration selected safe candidate rank {analysis.search.exploration?.selectedRank}
+              {` of ${analysis.search.exploration?.candidateCount}`}. Reusing the
+              same seed reproduces this choice.
+            </div>
+          )}
+          {!analysis.search.search.opening_book_used &&
+            analysis.search.recommendation_label !== "exploratory" &&
+            !analysis.search.search.exhaustive_within_requested_horizon && (
             <div className="mt-4 rounded border border-amber-400/30 bg-amber-300/10 px-3 py-2 text-xs text-amber-100">
               This is the strongest line found inside the time and beam budget,
               not a proof of the globally optimal turn.
             </div>
           )}
-          {analysis.search.search.completed_depth_in_turns < 2 && (
+          {!analysis.search.search.opening_book_used &&
+            analysis.search.search.completed_depth_in_turns < 2 && (
             <div className="mt-2 rounded border border-red-400/30 bg-red-300/10 px-3 py-2 text-xs text-red-100">
               No full opponent reply was completed. Treat this turn as
               tactically unverified; increase time or reduce the beam.

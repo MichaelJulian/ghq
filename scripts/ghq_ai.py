@@ -10,9 +10,10 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import random
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -46,11 +47,13 @@ PERSONALITIES: Dict[str, Dict[str, float]] = {
         "artillery_formation": 1.25,
         "hq_safety": 1.35,
         "mobility": 0.80,
+        "optionality": 0.90,
     },
     "mobile": {
         "material": 0.90,
         "support": 0.85,
         "mobility": 1.60,
+        "optionality": 1.45,
         "open_board_armored_infantry": 1.55,
         "artillery_formation": 0.70,
     },
@@ -64,12 +67,14 @@ PERSONALITIES: Dict[str, Dict[str, float]] = {
         "material": 0.90,
         "support": 0.85,
         "mobility": 1.60,
+        "optionality": 1.45,
         "open_board_armored_infantry": 1.55,
         "artillery_formation": 0.70,
     },
     "battery_commander": {
         "artillery_formation": 1.55,
         "artillery_pressure": 1.45,
+        "optionality": 0.90,
         "support": 1.20,
         "open_board_armored_infantry": 0.70,
     },
@@ -93,6 +98,9 @@ BASE_WEIGHTS = {
     "material": 1.0,
     "support": 1.0,
     "overextension": 1.0,
+    "phase_extension": 1.0,
+    "cohesion": 1.0,
+    "optionality": 1.0,
     "artillery_formation": 1.0,
     "artillery_pressure": 1.0,
     "artillery_protection": 1.0,
@@ -106,6 +114,77 @@ BASE_WEIGHTS = {
 }
 
 MATE_SCORE = 1_000_000.0
+MISSIONLESS_PARATROOPER_PENALTY = 9.0
+EARLY_GAME_LAST_TURN = 12
+
+# In 194 reconstructed complete games (12,083 positions), the 90th-95th
+# percentile non-paratrooper frontier was rank 2 on turns 1-2, rank 3 on
+# turns 3-4, and rank 4 on turns 5-6.  Continue that two-turn cadence through
+# the opening.  The value is a rank from the moving side's perspective: its
+# deployment rank is 1.
+EARLY_FRONTIER_RANKS: Tuple[Tuple[int, int], ...] = (
+    (2, 2),
+    (4, 3),
+    (6, 4),
+    (8, 5),
+    (10, 6),
+    (12, 7),
+)
+
+# Human opening book mined from completed games created 2025-10-14 or later.
+# Only formations seen at least ten times are admitted on the first turn. The
+# continuation book keeps repeated plans (and excludes the observed 0-2 line).
+# Counts become sampling weights, tempered with sqrt so variety survives.
+OPENING_FIRST_TURNS: Tuple[Tuple[Tuple[str, ...], int], ...] = (
+    (("rhd1", "rte1", "rpb1"), 76),
+    (("rhe1", "rtd1", "rpa1"), 15),
+    (("rhe1", "rtd1", "rpb1"), 10),
+)
+
+OPENING_CONTINUATIONS: Dict[str, Tuple[Tuple[Tuple[str, ...], int], ...]] = {
+    "A": ((("e1e3↑", "d1d2↑", "rfc1"), 69),),
+    "B": ((("d1f3↑", "e1e2↑", "rfd1"), 12),),
+    "C": (
+        (("e1e2↑", "g2g3", "rfe1"), 3),
+        (("d1f3↑", "e1e2↑", "rfd1"), 2),
+        (("e1e2↑", "d1d3↑", "rfd1"), 2),
+    ),
+}
+
+OPENING_SIGNATURE_KEYS: Dict[str, Tuple[Tuple[Any, ...], Tuple[int, ...]]] = {
+    "A": (
+        ((1, 7, None), (2, 13, None), (2, 14, None), (2, 15, None),
+         (4, 1, None), (5, 6, 0), (6, 4, 0), (7, 3, 0)),
+        (5, 3, 2),
+    ),
+    "B": (
+        ((1, 7, None), (2, 13, None), (2, 14, None), (2, 15, None),
+         (4, 0, None), (5, 6, 0), (6, 3, 0), (7, 4, 0)),
+        (5, 3, 2),
+    ),
+    "C": (
+        ((1, 7, None), (2, 13, None), (2, 14, None), (2, 15, None),
+         (4, 1, None), (5, 6, 0), (6, 3, 0), (7, 4, 0)),
+        (5, 3, 2),
+    ),
+}
+
+OPENING_BOOK_ANCHORS: Dict[Tuple[bool, int], Tuple[Tuple[str, int], ...]] = {
+    (engine.RED, 1): (
+        ("h1", engine.HQ),
+        ("g1", engine.ARTILLERY),
+        ("f2", engine.INFANTRY),
+        ("g2", engine.INFANTRY),
+        ("h2", engine.INFANTRY),
+    ),
+    (engine.BLUE, 2): (
+        ("a8", engine.HQ),
+        ("b8", engine.ARTILLERY),
+        ("a7", engine.INFANTRY),
+        ("b7", engine.INFANTRY),
+        ("c7", engine.INFANTRY),
+    ),
+}
 
 
 def squares(mask: int) -> List[int]:
@@ -240,6 +319,12 @@ def airborne_survival_penalty(board: engine.BaseBoard, color: bool) -> float:
     """
     penalty = 0.0
     home_rank = 0 if color == engine.RED else 7
+    enemy_home_rank = 7 if color == engine.RED else 0
+    enemy = not color
+    enemy_infantry_reserve = (
+        board.get_reserve_count(engine.INFANTRY, enemy)
+        + board.get_reserve_count(engine.ARMORED_INFANTRY, enemy)
+    )
     friendly_support = board.occupied_co[color] & ~board.hq
     enemy_infantry = board.occupied_co[not color] & (
         board.infantry | board.armored_infantry | board.airborne_infantry
@@ -251,6 +336,12 @@ def airborne_survival_penalty(board: engine.BaseBoard, color: bool) -> float:
         distance_home = abs(rank - home_rank)
         adjacent = engine.BB_ADJACENT_SQUARES[square]
         penalty += 0.20 * distance_home
+        if rank == enemy_home_rank and enemy_infantry_reserve > 0:
+            # A paradrop onto the opponent's deployment rank is not an
+            # extraction plan. Fresh infantry can be introduced around it,
+            # so the unit is treated as tactically trapped unless the search
+            # has an immediate capture mission that justifies the commitment.
+            penalty += 10.0
         if engine.BB_SQUARES[square] & board.get_bombarded_squares(not color):
             # A deployed para in a live bombardment is not merely awkward: it
             # is an automatic capture at the opponent's next turn boundary.
@@ -298,6 +389,162 @@ def overextension_penalty(board: engine.BaseBoard, color: bool) -> float:
             if piece_type is not None:
                 penalty += 0.35 * PIECE_VALUES[piece_type] * (advance - 1)
     return penalty
+
+
+def relative_rank(square: int, color: bool) -> int:
+    """Return rank 1-8 measured outward from ``color``'s home rank."""
+    rank = engine.square_rank(square)
+    return rank + 1 if color == engine.RED else 8 - rank
+
+
+def early_frontier_rank(turn_number: int) -> int:
+    """Data-backed maximum quiet frontier for the opening."""
+    for last_turn, frontier in EARLY_FRONTIER_RANKS:
+        if turn_number <= last_turn:
+            return frontier
+    return 8
+
+
+def phase_extension_penalty(
+    board: engine.BaseBoard, color: bool, turn_number: int
+) -> float:
+    """Penalize ordinary material beyond the opening's supported frontier."""
+    if turn_number > EARLY_GAME_LAST_TURN:
+        return 0.0
+    limit = early_frontier_rank(turn_number)
+    material = board.occupied_co[color] & ~board.hq & ~board.airborne_infantry
+    penalty = 0.0
+    for square in squares(material):
+        excess = max(0, relative_rank(square, color) - limit)
+        if excess:
+            piece_type = board.piece_type_at(square)
+            penalty += 0.90 * excess * PIECE_VALUES.get(piece_type, 0.0)
+    return penalty
+
+
+def structure_metrics(board: engine.BaseBoard, color: bool) -> Dict[str, float]:
+    """Measure army dispersion without punishing a broad connected front."""
+    units = squares(
+        board.occupied_co[color] & ~board.hq & ~board.airborne_infantry
+    )
+    if not units:
+        return {
+            "frontier_rank": 1.0,
+            "rank_span": 0.0,
+            "mean_nearest_distance": 0.0,
+            "isolated_units": 0.0,
+            "components": 0.0,
+            "largest_component_ratio": 1.0,
+        }
+
+    ranks = [relative_rank(square, color) for square in units]
+    nearest = [
+        min((chebyshev(square, other) for other in units if other != square), default=0)
+        for square in units
+    ]
+    unseen = set(units)
+    component_sizes: List[int] = []
+    while unseen:
+        stack = [unseen.pop()]
+        size = 1
+        while stack:
+            square = stack.pop()
+            connected = {
+                other for other in unseen if chebyshev(square, other) <= 1
+            }
+            unseen -= connected
+            stack.extend(connected)
+            size += len(connected)
+        component_sizes.append(size)
+
+    return {
+        "frontier_rank": float(max(ranks)),
+        "rank_span": float(max(ranks) - min(ranks)),
+        "mean_nearest_distance": sum(nearest) / len(nearest),
+        "isolated_units": float(sum(distance > 1 for distance in nearest)),
+        "components": float(len(component_sizes)),
+        "largest_component_ratio": max(component_sizes) / len(units),
+    }
+
+
+def dispersion_penalty(board: engine.BaseBoard, color: bool) -> float:
+    """Penalize detached groups and unsupported pieces, not horizontal width."""
+    metrics = structure_metrics(board, color)
+    return (
+        0.65 * metrics["isolated_units"]
+        + 0.55 * max(0.0, metrics["components"] - 1.0)
+        + 1.20 * (1.0 - metrics["largest_component_ratio"])
+        + 0.30 * max(0.0, metrics["mean_nearest_distance"] - 1.0)
+    )
+
+
+def optionality_metrics(board: engine.BaseBoard, color: bool) -> Dict[str, float]:
+    """Estimate how much deployed material can actually relocate.
+
+    This deliberately ignores in-place artillery rotations: a boxed-in gun
+    may still rotate, but it does not create the positional optionality the
+    user is describing. Paratroopers are evaluated separately as a held threat.
+    """
+    material = squares(
+        board.occupied_co[color] & ~board.hq & ~board.airborne_infantry
+    )
+    home_rank = 0 if color == engine.RED else 7
+    total_options = 0
+    immobile = 0
+    home_immobile = 0
+    for square in material:
+        piece_type = board.piece_type_at(square)
+        speed = 2 if piece_type in (
+            engine.ARMORED_INFANTRY,
+            engine.ARMORED_ARTILLERY,
+        ) else 1
+        file_index = engine.square_file(square)
+        rank_index = engine.square_rank(square)
+        options = 0
+        for rank in range(max(0, rank_index - speed), min(7, rank_index + speed) + 1):
+            for file in range(max(0, file_index - speed), min(7, file_index + speed) + 1):
+                if rank == rank_index and file == file_index:
+                    continue
+                destination = engine.square(file, rank)
+                if chebyshev(square, destination) <= speed and not (
+                    engine.BB_SQUARES[destination] & board.occupied
+                ):
+                    options += 1
+        total_options += options
+        if options == 0:
+            immobile += 1
+            if rank_index == home_rank:
+                home_immobile += 1
+
+    home_occupancy = engine.popcount(
+        board.occupied_co[color] & engine.BB_RANKS[home_rank]
+    )
+    mean_options = total_options / len(material) if material else 0.0
+    return {
+        "relocation_options": float(total_options),
+        "mean_relocation_options": mean_options,
+        "immobile_units": float(immobile),
+        "home_rank_immobile_units": float(home_immobile),
+        "home_rank_occupancy": float(home_occupancy),
+    }
+
+
+def congestion_penalty(board: engine.BaseBoard, color: bool) -> float:
+    metrics = optionality_metrics(board, color)
+    excess_home = max(0.0, metrics["home_rank_occupancy"] - 4.0)
+    return (
+        0.90 * metrics["immobile_units"]
+        + 0.45 * metrics["home_rank_immobile_units"]
+        + 0.16 * excess_home * excess_home
+        + 0.15 * max(0.0, 1.5 - metrics["mean_relocation_options"])
+    )
+
+
+def optionality_score(board: engine.BaseBoard, color: bool) -> float:
+    metrics = optionality_metrics(board, color)
+    return math.log1p(metrics["relocation_options"]) - congestion_penalty(
+        board, color
+    )
 
 
 def artillery_formation(board: engine.BaseBoard, color: bool) -> float:
@@ -404,6 +651,12 @@ def evaluation_breakdown(
         "material": material_for(board, engine.RED) - material_for(board, engine.BLUE),
         "support": support_penalty(board, engine.BLUE) - support_penalty(board, engine.RED),
         "overextension": overextension_penalty(board, engine.BLUE) - overextension_penalty(board, engine.RED),
+        "phase_extension": phase_extension_penalty(board, engine.BLUE, turn_number)
+        - phase_extension_penalty(board, engine.RED, turn_number),
+        "cohesion": dispersion_penalty(board, engine.BLUE)
+        - dispersion_penalty(board, engine.RED),
+        "optionality": optionality_score(board, engine.RED)
+        - optionality_score(board, engine.BLUE),
         "artillery_formation": artillery_formation(board, engine.RED) - artillery_formation(board, engine.BLUE),
         "artillery_pressure": artillery_pressure(board, engine.RED) - artillery_pressure(board, engine.BLUE),
         "artillery_protection": artillery_exposure_penalty(board, engine.BLUE)
@@ -458,6 +711,12 @@ def quick_evaluation(board: engine.BaseBoard, turn_number: int) -> float:
         - support_penalty(board, engine.RED)
         + overextension_penalty(board, engine.BLUE)
         - overextension_penalty(board, engine.RED)
+        + phase_extension_penalty(board, engine.BLUE, turn_number)
+        - phase_extension_penalty(board, engine.RED, turn_number)
+        + dispersion_penalty(board, engine.BLUE)
+        - dispersion_penalty(board, engine.RED)
+        + optionality_score(board, engine.RED)
+        - optionality_score(board, engine.BLUE)
         + airborne_survival_penalty(board, engine.BLUE)
         - airborne_survival_penalty(board, engine.RED)
         + hq_safety(board, engine.RED)
@@ -483,6 +742,10 @@ class TurnCandidate:
     static_score: float = 0.0
     safety_penalty: float = 0.0
     tactically_safe: bool = True
+    purpose_penalty: float = 0.0
+    paratrooper_mission_penalty: float = 0.0
+    action_purposes: List[Dict[str, Any]] = field(default_factory=list)
+    early_plan_score: float = 0.0
 
 
 @dataclass
@@ -530,12 +793,14 @@ class Searcher:
         self.complete_turns_pruned = 0
         self.tactically_unsafe_turns = 0
         self.rotation_quota_pruned = 0
+        self.purpose_filtered_turns = 0
         self.value_model_evaluations = 0
         self.turn_cache: Dict[str, List[TurnCandidate]] = {}
         self.value_cache: Dict[str, float] = {}
         self.safety_cache: Dict[Tuple[str, bool], Tuple[float, float, float]] = {}
         self.root_key: Optional[str] = None
         self.root_fallback: Optional[TurnCandidate] = None
+        self.root_ranked_turns: List[Tuple[float, TurnCandidate]] = []
 
     def check_time(self, count_node: bool = True) -> None:
         if count_node:
@@ -560,6 +825,456 @@ class Searcher:
     def quick_score(self, board: engine.BaseBoard) -> float:
         """Cheap deadline score with no legal-move enumeration."""
         return quick_evaluation(board, self.turn_number)
+
+    @staticmethod
+    def infantry_pressure(board: engine.BaseBoard, color: bool) -> float:
+        """Value distinct enemy pieces currently engaged by friendly infantry."""
+        attackers = board.occupied_co[color] & (
+            board.infantry | board.armored_infantry | board.airborne_infantry
+        )
+        targets = engine.BB_EMPTY
+        for square in squares(attackers):
+            targets |= engine.BB_ADJACENT_SQUARES[square] & board.occupied_co[not color]
+        return 0.22 * Searcher.mask_value(board, targets)
+
+    def positional_risk(self, board: engine.BaseBoard, color: bool) -> float:
+        """Cheap, non-search risk used to decide whether a turn accomplished work."""
+        return (
+            support_penalty(board, color)
+            + overextension_penalty(board, color)
+            + phase_extension_penalty(board, color, self.turn_number)
+            + dispersion_penalty(board, color)
+            + congestion_penalty(board, color)
+            + artillery_exposure_penalty(board, color)
+            + airborne_survival_penalty(board, color)
+            - hq_safety(board, color)
+        )
+
+    def is_paradrop(self, board: engine.BaseBoard, move: engine.Move) -> bool:
+        """Whether a staged para is leaving its own deployment rank."""
+        return (
+            self.move_piece_type(board, move) == engine.AIRBORNE_INFANTRY
+            and move.name != "Reinforce"
+            and move.from_square is not None
+            and move.to_square is not None
+            and self.home_distance(move.from_square, board.turn) == 0
+            and self.home_distance(move.to_square, board.turn) > 0
+        )
+
+    def paradrop_capture_targets(
+        self, board: engine.BaseBoard, move: engine.Move
+    ) -> Dict[int, float]:
+        """Return pieces the para could legally capture from its landing square."""
+        if not self.is_paradrop(board, move) or move.to_square is None:
+            return {}
+        mover = board.turn
+        child = board.copy()
+        child.push(move)
+        probe = self.board_as_turn(child, mover)
+        # We are inspecting the para's voluntary move options, not unrelated
+        # start-of-turn bombardments or automatic captures elsewhere.
+        probe.turn_moves = 1
+        source_mask = engine.BB_SQUARES[move.to_square]
+        targets: Dict[int, float] = {}
+        for candidate in probe.generate_legal_moves(from_mask=source_mask):
+            if (
+                candidate.from_square == move.to_square
+                and candidate.capture_preference is not None
+            ):
+                target = candidate.capture_preference
+                targets[target] = PIECE_VALUES.get(probe.piece_type_at(target), 0.0)
+        return targets
+
+    def paradrop_allowed(self, board: engine.BaseBoard, move: engine.Move) -> bool:
+        """A paradrop is legal for search only when it arrives with a capture."""
+        if not self.is_paradrop(board, move):
+            return True
+        if move.capture_preference is not None:
+            return True
+        return bool(self.paradrop_capture_targets(board, move))
+
+    def early_extension_allowed(
+        self, board: engine.BaseBoard, move: engine.Move
+    ) -> bool:
+        """Reject quiet opening moves beyond the data-backed frontier."""
+        if self.turn_number > EARLY_GAME_LAST_TURN:
+            return True
+        piece_type = self.move_piece_type(board, move)
+        if (
+            piece_type in (None, engine.HQ, engine.AIRBORNE_INFANTRY)
+            or move.name == "Reinforce"
+            or move.capture_preference is not None
+            or move.from_square is None
+            or move.to_square is None
+        ):
+            return True
+        if relative_rank(move.to_square, board.turn) <= early_frontier_rank(
+            self.turn_number
+        ):
+            return True
+
+        # A gun or infantry that is already under automatic bombardment may
+        # cross the frontier to survive. This is an escape, not speculative
+        # development.
+        source = engine.BB_SQUARES[move.from_square]
+        destination = engine.BB_SQUARES[move.to_square]
+        return bool(
+            source & board.get_bombarded_squares(not board.turn)
+            and not destination & board.get_bombarded_squares(not board.turn)
+        )
+
+    @staticmethod
+    def forward_infantry_actions(
+        before: engine.BaseBoard,
+        moves: Sequence[engine.Move],
+        mover: bool,
+    ) -> int:
+        """Count non-capturing infantry actions that increase relative rank."""
+        working = before.copy()
+        count = 0
+        for move in moves:
+            piece_type = Searcher.move_piece_type(working, move)
+            if (
+                piece_type in (engine.INFANTRY, engine.ARMORED_INFANTRY)
+                and move.name != "Reinforce"
+                and move.capture_preference is None
+                and move.from_square is not None
+                and move.to_square is not None
+                and relative_rank(move.to_square, mover)
+                > relative_rank(move.from_square, mover)
+            ):
+                count += 1
+            working.push(move)
+        return count
+
+    def early_structure_allowed(
+        self,
+        before: engine.BaseBoard,
+        after: engine.BaseBoard,
+        moves: Sequence[engine.Move],
+        mover: bool,
+        purposes: Sequence[Dict[str, Any]],
+    ) -> bool:
+        """Keep early turns cohesive and reject purposeless mass advances."""
+        if self.turn_number > EARLY_GAME_LAST_TURN:
+            return True
+        forward_actions = self.forward_infantry_actions(before, moves, mover)
+        forcing_roles = {"capture", "save", "threat", "protect"}
+        forcing_actions = sum(
+            bool(forcing_roles.intersection(item["roles"])) for item in purposes
+        )
+        captures = any(
+            move.capture_preference is not None or move.name == "AutoCapture"
+            for move in moves
+        )
+
+        # Spending the whole turn pushing three infantry is not development.
+        # It is allowed only when at least two actions have concrete tactical
+        # jobs, rather than merely acquiring a "form" label after the fact.
+        if forward_actions >= 3 and forcing_actions < 2:
+            return False
+
+        dispersion_gain = dispersion_penalty(after, mover) - dispersion_penalty(before, mover)
+        optionality_gain = optionality_score(after, mover) - optionality_score(
+            before, mover
+        )
+        has_save = any("save" in item["roles"] for item in purposes)
+        # Cohesion is a band, not a mandate to pack the home rank. A modest
+        # increase in spacing is welcome when it unlocks real relocation
+        # options; splitting without gaining optionality is still rejected.
+        if dispersion_gain > 1.50 and not captures and not has_save:
+            return False
+        if (
+            dispersion_gain > 0.50
+            and optionality_gain <= 0.10
+            and not captures
+            and not has_save
+        ):
+            return False
+        # Even a two-piece push may not split the army unless the turn captures
+        # material or saves something already in danger.
+        if forward_actions >= 2 and dispersion_gain > 0.20 and not captures:
+            if not has_save:
+                return False
+        return True
+
+    def paratrooper_mission_penalty(
+        self,
+        before: engine.BaseBoard,
+        after: engine.BaseBoard,
+        moves: Sequence[engine.Move],
+        mover: bool,
+    ) -> float:
+        """Flag any paradrop that did not arrive with a legal capture mission."""
+        working = before.copy()
+        penalty = 0.0
+        for move in moves:
+            if self.is_paradrop(working, move) and not self.paradrop_allowed(working, move):
+                penalty += MISSIONLESS_PARATROOPER_PENALTY
+            working.push(move)
+        return penalty
+
+    @staticmethod
+    def formation_quality(board: engine.BaseBoard, color: bool) -> float:
+        """Broad formation quality used for explainable early-game plans."""
+        return (
+            artillery_formation(board, color)
+            + infantry_shape_score(board, color)
+            - 0.35 * support_penalty(board, color)
+            - 0.35 * infantry_isolation_penalty(board, color)
+            - 0.75 * dispersion_penalty(board, color)
+            + 0.45 * optionality_score(board, color)
+            - artillery_exposure_penalty(board, color)
+        )
+
+    def action_purpose_labels(
+        self,
+        before: engine.BaseBoard,
+        moves: Sequence[engine.Move],
+        mover: bool,
+    ) -> List[Dict[str, Any]]:
+        """Explain the concrete job performed by every action in a turn."""
+        working = before.copy()
+        result: List[Dict[str, Any]] = []
+        for move in moves:
+            piece_type = self.move_piece_type(working, move)
+            roles: List[str] = []
+            if move.capture_preference is not None or move.name == "AutoCapture":
+                roles.append("capture")
+            if move.name == "Reinforce":
+                roles.append("develop")
+            if self.unlocks_airborne_extraction(working, move):
+                roles.append("unlock")
+            if move.from_square is not None and move.to_square is not None:
+                if (
+                    piece_type in ARTILLERY_TYPES
+                    and engine.BB_SQUARES[move.from_square]
+                    & working.get_bombarded_squares(not mover)
+                    and not engine.BB_SQUARES[move.to_square]
+                    & working.get_bombarded_squares(not mover)
+                ):
+                    roles.append("save")
+                if (
+                    piece_type == engine.AIRBORNE_INFANTRY
+                    and self.home_distance(move.to_square, mover)
+                    < self.home_distance(move.from_square, mover)
+                ):
+                    roles.append("extract")
+
+            child = working.copy()
+            child.push(move)
+            pressure_gain = (
+                artillery_pressure(child, mover)
+                + self.infantry_pressure(child, mover)
+                - artillery_pressure(working, mover)
+                - self.infantry_pressure(working, mover)
+            )
+            protection_gain = self.positional_risk(working, mover) - self.positional_risk(child, mover)
+            formation_gain = self.formation_quality(child, mover) - self.formation_quality(working, mover)
+            optionality_gain = optionality_score(child, mover) - optionality_score(
+                working, mover
+            )
+            if pressure_gain > 0.05:
+                roles.append("threat")
+            if protection_gain > 0.25:
+                roles.append("protect")
+            if formation_gain > 0.10:
+                roles.append("form")
+            if optionality_gain > 0.15:
+                roles.append("mobilize")
+            if move.name == "Skip":
+                roles.append("end_turn")
+            if not roles:
+                roles.append("no_new_effect")
+            result.append({"move": move.uci(), "roles": list(dict.fromkeys(roles))})
+            working = child
+        return result
+
+    def early_plan_score(self, action_purposes: Sequence[Dict[str, Any]]) -> float:
+        """Prefer development and formation while the board is still building."""
+        role_values = {
+            "capture": 4.0,
+            "save": 3.0,
+            "develop": 2.5 if self.turn_number <= EARLY_GAME_LAST_TURN else 1.0,
+            "form": 2.0 if self.turn_number <= EARLY_GAME_LAST_TURN else 0.8,
+            "threat": 2.0,
+            "protect": 1.5,
+            "extract": 2.5,
+            "unlock": 1.5,
+            "mobilize": 1.8,
+        }
+        return sum(
+            max((role_values.get(role, 0.0) for role in item["roles"]), default=0.0)
+            for item in action_purposes
+        )
+
+    def turn_purpose_breakdown(
+        self,
+        before: engine.BaseBoard,
+        after: engine.BaseBoard,
+        moves: Sequence[engine.Move],
+        mover: bool,
+    ) -> Dict[str, float]:
+        """Measure what a full turn changed, beyond merely spending actions."""
+        action_purposes = self.action_purpose_labels(before, moves, mover)
+        purposeful_actions = sum(
+            1
+            for item in action_purposes
+            if any(role not in ("no_new_effect", "end_turn") for role in item["roles"])
+        )
+        unpurposed_actions = sum(
+            1 for item in action_purposes if item["roles"] == ["no_new_effect"]
+        )
+        development_actions = sum(
+            1 for item in action_purposes if "develop" in item["roles"]
+        )
+        formation_actions = sum(
+            1 for item in action_purposes if "form" in item["roles"]
+        )
+        working = before.copy()
+        vacated: set[int] = set()
+        quiet_actions = 0
+        backfills = 0
+        reversals = 0
+        pure_rotations = 0
+        extractions = 0
+        for move in moves:
+            piece_type = self.move_piece_type(working, move)
+            is_quiet = move.capture_preference is None and move.name not in ("AutoCapture", "Skip")
+            if is_quiet:
+                quiet_actions += 1
+            if move.to_square is not None and move.to_square in vacated and is_quiet:
+                backfills += 1
+            if move.from_square is not None and move.to_square is not None:
+                if move.from_square == move.to_square:
+                    pure_rotations += 1
+                else:
+                    if (
+                        piece_type == engine.AIRBORNE_INFANTRY
+                        and self.home_distance(move.to_square, mover)
+                        < self.home_distance(move.from_square, mover)
+                    ):
+                        extractions += 1
+                    elif (
+                        piece_type != engine.AIRBORNE_INFANTRY
+                        and self.home_distance(move.to_square, mover)
+                        < self.home_distance(move.from_square, mover)
+                        and move.capture_preference is None
+                    ):
+                        reversals += 1
+                    vacated.add(move.from_square)
+            working.push(move)
+
+        opponent = not mover
+        capture_gain = max(
+            0.0,
+            board_material_for(before, opponent) - board_material_for(after, opponent),
+        )
+        deployment_gain = max(
+            0.0,
+            board_material_for(after, mover) - board_material_for(before, mover),
+        )
+        pressure_before = artillery_pressure(before, mover) + self.infantry_pressure(before, mover)
+        pressure_after = artillery_pressure(after, mover) + self.infantry_pressure(after, mover)
+        threat_gain = max(0.0, pressure_after - pressure_before)
+        protection_gain = max(
+            0.0, self.positional_risk(before, mover) - self.positional_risk(after, mover)
+        )
+        development_gain = max(
+            0.0,
+            development_for(after, mover, self.turn_number)
+            - development_for(before, mover, self.turn_number),
+        )
+        shape_gain = max(
+            0.0,
+            infantry_shape_score(after, mover) - infantry_shape_score(before, mover),
+        )
+        formation_gain = max(
+            0.0,
+            self.formation_quality(after, mover)
+            - self.formation_quality(before, mover),
+        )
+        dispersion_gain = max(
+            0.0,
+            dispersion_penalty(after, mover) - dispersion_penalty(before, mover),
+        )
+        optionality_gain = max(
+            0.0,
+            optionality_score(after, mover) - optionality_score(before, mover),
+        )
+        congestion_increase = max(
+            0.0,
+            congestion_penalty(after, mover) - congestion_penalty(before, mover),
+        )
+        uncompensated_dispersion = max(
+            0.0, dispersion_gain - 0.75 * optionality_gain
+        )
+        extension_gain = max(
+            0.0,
+            phase_extension_penalty(after, mover, self.turn_number)
+            - phase_extension_penalty(before, mover, self.turn_number),
+        )
+        forward_infantry_actions = self.forward_infantry_actions(
+            before, moves, mover
+        )
+        coordinated_overpush = max(0, forward_infantry_actions - 1)
+        forcing_gain = (
+            2.0 * capture_gain
+            + 0.65 * deployment_gain
+            + 1.5 * threat_gain
+            + 1.2 * protection_gain
+            + 0.5 * development_gain
+            + 0.5 * shape_gain
+            + 0.6 * formation_gain
+            + 0.75 * optionality_gain
+        )
+        waste = (
+            1.4 * unpurposed_actions
+            + 1.6 * backfills
+            + 1.0 * reversals
+            + 0.9 * pure_rotations
+            + 1.35 * coordinated_overpush
+            + 2.0 * uncompensated_dispersion
+            + 1.5 * congestion_increase
+            + 2.5 * extension_gain
+        )
+        # Benefits offset wasted motion continuously. This matters for turns
+        # containing one mildly useful action and two swaps/reversals: the
+        # useful action does not absolve the rest of the turn.
+        net_purpose_penalty = max(0.0, waste - 0.70 * forcing_gain)
+        mission_penalty = self.paratrooper_mission_penalty(before, after, moves, mover)
+        return {
+            "capture_gain": capture_gain,
+            "deployment_gain": deployment_gain,
+            "threat_gain": threat_gain,
+            "protection_gain": protection_gain,
+            "development_gain": development_gain,
+            "formation_gain": formation_gain,
+            "dispersion_increase": dispersion_gain,
+            "uncompensated_dispersion": uncompensated_dispersion,
+            "optionality_gain": optionality_gain,
+            "congestion_increase": congestion_increase,
+            "immobile_units": optionality_metrics(after, mover)["immobile_units"],
+            "relocation_options": optionality_metrics(after, mover)["relocation_options"],
+            "extension_increase": extension_gain,
+            "frontier_rank": structure_metrics(after, mover)["frontier_rank"],
+            "frontier_limit": float(early_frontier_rank(self.turn_number)),
+            "forward_infantry_actions": float(forward_infantry_actions),
+            "coordinated_overpush": float(coordinated_overpush),
+            "escape_actions": float(extractions),
+            "purposeful_actions": float(purposeful_actions),
+            "unpurposed_actions": float(unpurposed_actions),
+            "development_actions": float(development_actions),
+            "formation_actions": float(formation_actions),
+            "quiet_actions": float(quiet_actions),
+            "backfills": float(backfills),
+            "reversals": float(reversals),
+            "pure_rotations": float(pure_rotations),
+            "forcing_gain": forcing_gain,
+            "net_purpose_penalty": net_purpose_penalty,
+            "paratrooper_mission_penalty": mission_penalty,
+            "total_penalty": net_purpose_penalty + mission_penalty,
+        }
 
     def static_score(self, board: engine.BaseBoard) -> float:
         """Blend human heuristics with the trained red win-probability model."""
@@ -898,7 +1613,13 @@ class Searcher:
             # Quiet blocker-vacating moves such as g3-f4 must survive long
             # enough for the next action, h2-g3, to be considered.
             priority += 4800.0
-        priority += self.artillery_target_bonus(board, move)
+        artillery_bonus = self.artillery_target_bonus(board, move)
+        if self.turn_number <= EARLY_GAME_LAST_TURN:
+            # Early play should build the army, not let one speculative gun
+            # threat crowd every reinforcement/formation branch out of the
+            # partial-turn beam.
+            artillery_bonus *= 0.25
+        priority += artillery_bonus
         if piece_type in ARTILLERY_TYPES and move.name == "MoveAndOrient":
             _, friendly_blocks = self.artillery_lane_masks(board, move)
             priority -= 150.0 * engine.popcount(friendly_blocks)
@@ -908,6 +1629,39 @@ class Searcher:
             priority += 10.0
         if move.name == "MoveAndOrient":
             priority += 5.0
+        if self.turn_number <= EARLY_GAME_LAST_TURN and move.capture_preference is None:
+            if move.name == "Reinforce":
+                priority += 900.0
+            child = board.copy()
+            child.push(move)
+            formation_gain = self.formation_quality(child, board.turn) - self.formation_quality(board, board.turn)
+            priority += 250.0 * max(0.0, formation_gain)
+            cohesion_gain = dispersion_penalty(board, board.turn) - dispersion_penalty(
+                child, board.turn
+            )
+            priority += 300.0 * cohesion_gain
+            if (
+                piece_type in (engine.INFANTRY, engine.ARMORED_INFANTRY)
+                and move.name != "Reinforce"
+                and move.from_square is not None
+                and move.to_square is not None
+                and relative_rank(move.to_square, board.turn)
+                > relative_rank(move.from_square, board.turn)
+            ):
+                # Advancing is not development by itself. Prefer deployment
+                # and connective moves unless the advance creates a concrete
+                # threat or protection that later scoring can verify.
+                priority -= 140.0 * relative_rank(move.to_square, board.turn)
+                priority -= 120.0 * board.turn_moves
+            if (
+                piece_type in ARTILLERY_TYPES
+                and move.from_square is not None
+                and move.to_square is not None
+                and self.home_distance(move.to_square, board.turn)
+                - self.home_distance(move.from_square, board.turn)
+                >= 2
+            ):
+                priority -= 650.0
         return priority
 
     def diverse_moves(self, board: engine.BaseBoard) -> List[Tuple[float, engine.Move]]:
@@ -916,7 +1670,13 @@ class Searcher:
         if legal and all(move.name == "AutoCapture" for move in legal):
             return [(self.move_priority(board, move), move) for move in legal]
 
-        moves = [move for move in legal if self.artillery_move_allowed(board, move)]
+        moves = [
+            move
+            for move in legal
+            if self.artillery_move_allowed(board, move)
+            and self.paradrop_allowed(board, move)
+            and self.early_extension_allowed(board, move)
+        ]
         if len(moves) != len(legal):
             self.exhaustive_within_horizon = False
             self.rule_filtered_actions += len(legal) - len(moves)
@@ -1070,12 +1830,18 @@ class Searcher:
                 else:
                     classes.add("artillery_relocation")
             working.push(move)
+        purposes = self.action_purpose_labels(board, moves, board.turn)
+        if any("develop" in item["roles"] for item in purposes):
+            classes.add("development")
+        if any("form" in item["roles"] for item in purposes):
+            classes.add("formation")
         return classes, wasteful_rotation
 
-    @staticmethod
-    def candidate_sort_key(candidate: TurnCandidate, color: bool) -> Tuple[Any, ...]:
+    def candidate_sort_key(self, candidate: TurnCandidate, color: bool) -> Tuple[Any, ...]:
         return (
             candidate.safety_penalty,
+            candidate.purpose_penalty + candidate.paratrooper_mission_penalty,
+            -candidate.early_plan_score,
             -(candidate.static_score if color == engine.RED else -candidate.static_score),
             len(candidate.moves) if candidate.board.is_game_over() else 99,
             -candidate.priority,
@@ -1110,15 +1876,17 @@ class Searcher:
         # Guarantee useful alternatives before filling by score. A beam is a
         # count of complete turns retained, not permission for one action type
         # to consume every slot.
-        for action_class in (
-            "reinforcement",
-            "infantry",
-            "artillery_relocation",
-            "paratrooper",
-        ):
-            quota = 2
+        action_classes = (
+            ("development", "formation", "reinforcement", "infantry", "artillery_relocation", "paratrooper")
+            if self.turn_number <= EARLY_GAME_LAST_TURN
+            else ("reinforcement", "infantry", "artillery_relocation", "paratrooper")
+        )
+        for action_class in action_classes:
+            quota = 3 if action_class == "development" else 2
             for candidate in eligible:
                 classes, wasteful = self.turn_action_classes(board, candidate.moves)
+                if action_class == "paratrooper" and candidate.paratrooper_mission_penalty > 0.0:
+                    continue
                 if action_class in classes and not wasteful and add(candidate):
                     quota -= 1
                     if quota == 0 or len(selected) >= turn_width:
@@ -1165,6 +1933,19 @@ class Searcher:
         except SearchTimeout:
             return
         if safety.tactically_safe:
+            purpose = self.turn_purpose_breakdown(root, partial.board, partial.moves, mover)
+            action_purposes = self.action_purpose_labels(root, partial.moves, mover)
+            if any("no_new_effect" in item["roles"] for item in action_purposes):
+                return
+            if self.turn_number <= EARLY_GAME_LAST_TURN:
+                if not self.early_structure_allowed(
+                    root,
+                    partial.board,
+                    partial.moves,
+                    mover,
+                    action_purposes,
+                ):
+                    return
             self.root_fallback = TurnCandidate(
                 partial.moves,
                 partial.board,
@@ -1172,6 +1953,10 @@ class Searcher:
                 self.quick_score(partial.board),
                 0.0,
                 True,
+                purpose["net_purpose_penalty"],
+                purpose["paratrooper_mission_penalty"],
+                action_purposes,
+                self.early_plan_score(action_purposes),
             )
 
     def generate_turn_candidates(self, board: engine.BaseBoard) -> List[TurnCandidate]:
@@ -1277,6 +2062,25 @@ class Searcher:
                 self.check_time(False)
                 safety = self.assess_turn_safety(board, partial.board, original_turn)
                 if safety.tactically_safe:
+                    purpose = self.turn_purpose_breakdown(
+                        board, partial.board, partial.moves, original_turn
+                    )
+                    action_purposes = self.action_purpose_labels(
+                        board, partial.moves, original_turn
+                    )
+                    if any(
+                        "no_new_effect" in item["roles"] for item in action_purposes
+                    ):
+                        continue
+                    if self.turn_number <= EARLY_GAME_LAST_TURN:
+                        if not self.early_structure_allowed(
+                            board,
+                            partial.board,
+                            partial.moves,
+                            original_turn,
+                            action_purposes,
+                        ):
+                            continue
                     self.root_fallback = TurnCandidate(
                         partial.moves,
                         partial.board,
@@ -1284,6 +2088,10 @@ class Searcher:
                         self.quick_score(partial.board),
                         0.0,
                         True,
+                        purpose["net_purpose_penalty"],
+                        purpose["paratrooper_mission_penalty"],
+                        action_purposes,
+                        self.early_plan_score(action_purposes),
                     )
                     break
 
@@ -1292,6 +2100,12 @@ class Searcher:
             self.check_time(False)
             terminal = self.terminal_score(partial.board, 0)
             safety = self.assess_turn_safety(board, partial.board, original_turn)
+            purpose = self.turn_purpose_breakdown(
+                board, partial.board, partial.moves, original_turn
+            )
+            action_purposes = self.action_purpose_labels(
+                board, partial.moves, original_turn
+            )
             candidates.append(
                 TurnCandidate(
                     partial.moves,
@@ -1300,11 +2114,56 @@ class Searcher:
                     self.heuristic_score(partial.board) if terminal is None else terminal,
                     max(0.0, safety.new_risk_value - safety.compensation_value),
                     safety.tactically_safe,
+                    purpose["net_purpose_penalty"],
+                    purpose["paratrooper_mission_penalty"],
+                    action_purposes,
+                    self.early_plan_score(action_purposes),
                 )
             )
             if not safety.tactically_safe:
                 self.tactically_unsafe_turns += 1
         candidates.sort(key=lambda item: self.candidate_sort_key(item, original_turn))
+
+        if self.turn_number <= EARLY_GAME_LAST_TURN:
+            structured = [
+                candidate
+                for candidate in candidates
+                if self.early_structure_allowed(
+                    board,
+                    candidate.board,
+                    candidate.moves,
+                    original_turn,
+                    candidate.action_purposes,
+                )
+            ]
+            if structured:
+                self.purpose_filtered_turns += len(candidates) - len(structured)
+                if len(structured) != len(candidates):
+                    self.exhaustive_within_horizon = False
+                candidates = structured
+
+        # Purpose is a lexicographic constraint at every phase, not merely a
+        # small evaluation term. If a fully purposeful legal turn exists, a
+        # square swap/rotation/filler action cannot crowd it out. If every turn
+        # has filler, retain only those with the fewest such actions.
+        if candidates:
+            no_effect_counts = [
+                sum(
+                    "no_new_effect" in item["roles"]
+                    for item in candidate.action_purposes
+                )
+                for candidate in candidates
+            ]
+            minimum_no_effect = min(no_effect_counts)
+            focused = [
+                candidate
+                for candidate, count in zip(candidates, no_effect_counts)
+                if count == minimum_no_effect
+            ]
+            self.purpose_filtered_turns += len(candidates) - len(focused)
+            if len(focused) != len(candidates):
+                self.exhaustive_within_horizon = False
+            candidates = focused
 
         # Static quality selects most branches; high-priority tactical turns
         # get a separate quota so setup/capture/extraction sequences survive a
@@ -1396,9 +2255,24 @@ class Searcher:
         maximizing = board.turn == engine.RED
         best = SearchResult(-math.inf if maximizing else math.inf, [])
         complete = True
+        is_root = board.serialize() == self.root_key
+        root_scores: List[Tuple[float, TurnCandidate]] = []
         for turn in turns:
             result = self.alphabeta(turn.board, turns_left - 1, alpha, beta)
-            candidate = result.score
+            transition_penalty = turn.purpose_penalty + turn.paratrooper_mission_penalty
+            early_bonus = (
+                0.40 * turn.early_plan_score
+                if self.turn_number <= EARLY_GAME_LAST_TURN
+                else 0.0
+            )
+            turn_quality = early_bonus - transition_penalty
+            candidate = (
+                result.score + turn_quality
+                if maximizing
+                else result.score - turn_quality
+            )
+            if is_root:
+                root_scores.append((candidate, turn))
             if (maximizing and candidate > best.score) or (not maximizing and candidate < best.score):
                 best = SearchResult(candidate, list(turn.moves) + result.pv)
             if maximizing:
@@ -1410,6 +2284,14 @@ class Searcher:
                 break
         if complete:
             self.table[key] = SearchResult(best.score, list(best.pv))
+            if is_root:
+                self.root_ranked_turns = sorted(
+                    root_scores,
+                    key=lambda item: (
+                        -item[0] if maximizing else item[0],
+                        tuple(move.uci() for move in item[1].moves),
+                    ),
+                )
         return best
 
 
@@ -1420,6 +2302,7 @@ def greedy_complete_turn(
     working = board.copy()
     original_turn = working.turn
     moves: List[engine.Move] = []
+    vacated: set[int] = set()
     fallback_rules = Searcher(
         personality,
         time_ms=60_000,
@@ -1447,6 +2330,8 @@ def greedy_complete_turn(
                 working, move
             ):
                 continue
+            if not fallback_rules.early_extension_allowed(working, move):
+                continue
             if (
                 piece_type == engine.AIRBORNE_INFANTRY
                 and move.name != "Reinforce"
@@ -1460,6 +2345,56 @@ def greedy_complete_turn(
 
             child = working.copy()
             child.push(move)
+            candidate_moves = moves + [move]
+            candidate_purposes = fallback_rules.action_purpose_labels(
+                board, candidate_moves, original_turn
+            )
+            if candidate_purposes and "no_new_effect" in candidate_purposes[-1]["roles"]:
+                continue
+            if not fallback_rules.early_structure_allowed(
+                board,
+                child,
+                candidate_moves,
+                original_turn,
+                candidate_purposes,
+            ):
+                continue
+            if (
+                move.capture_preference is None
+                and move.from_square is not None
+                and move.to_square is not None
+                and move.from_square != move.to_square
+            ):
+                pressure_gain = (
+                    artillery_pressure(child, original_turn)
+                    + fallback_rules.infantry_pressure(child, original_turn)
+                    - artillery_pressure(working, original_turn)
+                    - fallback_rules.infantry_pressure(working, original_turn)
+                )
+                protection_gain = (
+                    fallback_rules.positional_risk(working, original_turn)
+                    - fallback_rules.positional_risk(child, original_turn)
+                )
+                shape_gain = (
+                    infantry_shape_score(child, original_turn)
+                    - infantry_shape_score(working, original_turn)
+                )
+                concrete_purpose = (
+                    pressure_gain > 0.05
+                    or protection_gain > 0.10
+                    or shape_gain > 0.10
+                    or fallback_rules.unlocks_airborne_extraction(working, move)
+                )
+                lateral_or_backward = (
+                    fallback_rules.home_distance(move.to_square, original_turn)
+                    <= fallback_rules.home_distance(move.from_square, original_turn)
+                )
+                if (
+                    (move.to_square in vacated or lateral_or_backward)
+                    and piece_type != engine.AIRBORNE_INFANTRY
+                    and not concrete_purpose
+                ):
+                    continue
             red_score = quick_evaluation(child, turn_number)
             utility = red_score if original_turn == engine.RED else -red_score
             candidates.append((utility, move.uci(), move))
@@ -1475,6 +2410,12 @@ def greedy_complete_turn(
                 skip,
             ))
         chosen = max(candidates, key=lambda item: (item[0], item[1]))[2]
+        if (
+            chosen.from_square is not None
+            and chosen.to_square is not None
+            and chosen.from_square != chosen.to_square
+        ):
+            vacated.add(chosen.from_square)
         moves.append(chosen)
         working.push(chosen)
     return SearchResult(quick_evaluation(working, turn_number), moves)
@@ -1492,6 +2433,124 @@ def first_turn_from_pv(board: engine.BaseBoard, pv: Sequence[engine.Move]) -> Tu
     return selected, working
 
 
+def rotate_opening_uci(uci: str) -> str:
+    move = engine.Move.from_uci(uci)
+    rotated = engine.Move(
+        name=move.name,
+        from_square=None if move.from_square is None else 63 - move.from_square,
+        to_square=None if move.to_square is None else 63 - move.to_square,
+        unit_type=move.unit_type,
+        orientation=None if move.orientation is None else (move.orientation + 4) % 8,
+        capture_preference=(
+            None if move.capture_preference is None else 63 - move.capture_preference
+        ),
+        auto_capture_type=move.auto_capture_type,
+    )
+    return rotated.uci()
+
+
+def normalized_opening_signature(
+    board: engine.BaseBoard, color: bool
+) -> Tuple[Tuple[Any, ...], Tuple[int, ...]]:
+    pieces: List[Tuple[Any, ...]] = []
+    for square in engine.scan_forward(board.occupied_co[color]):
+        piece = board.piece_at(square)
+        if piece is None:
+            continue
+        normalized_square = square if color == engine.RED else 63 - square
+        orientation = piece.orientation
+        if orientation is not None and color == engine.BLUE:
+            orientation = (orientation + 4) % 8
+        pieces.append((piece.piece_type, normalized_square, orientation))
+    return tuple(sorted(pieces)), tuple(count for _, count in board.reserves[color])
+
+
+def weighted_opening_choice(
+    choices: Sequence[Tuple[TurnCandidate, int]], seed: int, position_key: str
+) -> Optional[TurnCandidate]:
+    if not choices:
+        return None
+    picker = random.Random(f"ghq-opening-v1:{seed}:{position_key}")
+    weights = [math.sqrt(count) for _, count in choices]
+    return picker.choices([candidate for candidate, _ in choices], weights=weights, k=1)[0]
+
+
+def opening_book_turn(
+    board: engine.BaseBoard,
+    turn_number: int,
+    searcher: Searcher,
+    opening_seed: int = 0,
+) -> Optional[TurnCandidate]:
+    """Sample a recent human opening only when it remains legal and safe."""
+    key = (board.turn, turn_number)
+    if turn_number not in (1, 2, 3, 4):
+        return None
+    anchors = OPENING_BOOK_ANCHORS.get(key)
+    if anchors is not None:
+        for square_name, piece_type in anchors:
+            square = engine.parse_square(square_name)
+            if (
+                board.piece_type_at(square) != piece_type
+                or not (engine.BB_SQUARES[square] & board.occupied_co[board.turn])
+            ):
+                return None
+
+    if turn_number in (1, 2):
+        raw_choices = OPENING_FIRST_TURNS
+    else:
+        signature = normalized_opening_signature(board, board.turn)
+        signature_key = next(
+            (name for name, expected in OPENING_SIGNATURE_KEYS.items() if signature == expected),
+            None,
+        )
+        if signature_key is None:
+            return None
+        raw_choices = OPENING_CONTINUATIONS[signature_key]
+
+    valid: List[Tuple[TurnCandidate, int]] = []
+    mover = board.turn
+    for normalized_ucis, count in raw_choices:
+        ucis = (
+            normalized_ucis
+            if mover == engine.RED
+            else tuple(rotate_opening_uci(uci) for uci in normalized_ucis)
+        )
+        working = board.copy()
+        moves: List[engine.Move] = []
+        for uci in ucis:
+            legal = {move.uci(): move for move in working.generate_legal_moves()}
+            move = legal.get(uci)
+            if move is None:
+                break
+            moves.append(move)
+            working.push(move)
+        if len(moves) != len(ucis):
+            continue
+        if not working.is_game_over() and working.turn == mover:
+            continue
+        try:
+            safety = searcher.assess_turn_safety(board, working, mover)
+        except SearchTimeout:
+            continue
+        if not safety.tactically_safe:
+            continue
+        purpose = searcher.turn_purpose_breakdown(board, working, moves, mover)
+        action_purposes = searcher.action_purpose_labels(board, moves, mover)
+        valid.append((TurnCandidate(
+            moves=moves,
+            board=working,
+            priority=0.0,
+            static_score=searcher.quick_score(working),
+            safety_penalty=0.0,
+            tactically_safe=True,
+            purpose_penalty=purpose["net_purpose_penalty"],
+            paratrooper_mission_penalty=purpose["paratrooper_mission_penalty"],
+            action_purposes=action_purposes,
+            early_plan_score=searcher.early_plan_score(action_purposes),
+        ), count))
+    return weighted_opening_choice(valid, opening_seed, board.serialize())
+
+
 def search(
     board: engine.BaseBoard,
     personality: str,
@@ -1500,6 +2559,7 @@ def search(
     beam_width: int,
     turn_number: int = 1,
     value_function: Optional[Any] = None,
+    opening_seed: int = 0,
 ) -> Dict[str, Any]:
     started = time.monotonic()
     searcher = Searcher(
@@ -1514,32 +2574,74 @@ def search(
     completed_depth = 0
     timed_out = False
     fallback_kind = "none"
-    for depth in range(1, max(1, max_depth) + 1):
-        try:
-            iteration = searcher.alphabeta(board, depth, -math.inf, math.inf)
-        except SearchTimeout:
-            timed_out = True
-            break
-        best = iteration
-        completed_depth = depth
-        if abs(iteration.score) >= MATE_SCORE:
-            break
+    book_turn = opening_book_turn(board, turn_number, searcher, opening_seed)
+    opening_book_used = book_turn is not None
+    if book_turn is not None:
+        transition_penalty = book_turn.purpose_penalty + book_turn.paratrooper_mission_penalty
+        early_bonus = (
+            0.40 * book_turn.early_plan_score
+            if turn_number <= EARLY_GAME_LAST_TURN
+            else 0.0
+        )
+        turn_quality = early_bonus - transition_penalty
+        score = (
+            book_turn.static_score + turn_quality
+            if board.turn == engine.RED
+            else book_turn.static_score - turn_quality
+        )
+        best = SearchResult(score, list(book_turn.moves))
+    else:
+        for depth in range(1, max(1, max_depth) + 1):
+            try:
+                iteration = searcher.alphabeta(board, depth, -math.inf, math.inf)
+            except SearchTimeout:
+                timed_out = True
+                break
+            best = iteration
+            completed_depth = depth
+            if abs(iteration.score) >= MATE_SCORE:
+                break
 
     if best is None:
         if searcher.root_fallback is not None:
+            fallback_penalty = (
+                searcher.root_fallback.purpose_penalty
+                + searcher.root_fallback.paratrooper_mission_penalty
+            )
+            fallback_bonus = (
+                0.40 * searcher.root_fallback.early_plan_score
+                if turn_number <= EARLY_GAME_LAST_TURN
+                else 0.0
+            )
+            fallback_quality = fallback_bonus - fallback_penalty
+            fallback_score = searcher.root_fallback.static_score
+            fallback_score += (
+                fallback_quality if board.turn == engine.RED else -fallback_quality
+            )
             best = SearchResult(
-                searcher.root_fallback.static_score,
+                fallback_score,
                 list(searcher.root_fallback.moves),
             )
             fallback_kind = "safe"
         else:
             best = greedy_complete_turn(board, personality, turn_number)
+            greedy_moves, greedy_board = first_turn_from_pv(board, best.pv)
+            greedy_purpose = searcher.turn_purpose_breakdown(
+                board, greedy_board, greedy_moves, board.turn
+            )
+            greedy_penalty = greedy_purpose["total_penalty"]
+            best.score += -greedy_penalty if board.turn == engine.RED else greedy_penalty
             fallback_kind = "greedy"
     first_turn, resulting_board = first_turn_from_pv(board, best.pv)
     if not first_turn and not board.is_game_over():
         fallback = greedy_complete_turn(board, personality, turn_number)
         first_turn, resulting_board = first_turn_from_pv(board, fallback.pv)
         best = fallback
+        greedy_purpose = searcher.turn_purpose_breakdown(
+            board, resulting_board, first_turn, board.turn
+        )
+        greedy_penalty = greedy_purpose["total_penalty"]
+        best.score += -greedy_penalty if board.turn == engine.RED else greedy_penalty
         fallback_kind = "greedy"
 
     elapsed_ms = (time.monotonic() - started) * 1000.0
@@ -1548,13 +2650,78 @@ def search(
     root_eval = evaluation_breakdown(board, personality, turn_number)
     resulting_eval = evaluation_breakdown(resulting_board, personality, turn_number + 1)
     current_player_score = best.score if board.turn == engine.RED else -best.score
+    ranked_root_turns = list(searcher.root_ranked_turns)
+    if not ranked_root_turns:
+        shallow_turns = searcher.turn_cache.get(searcher.root_key or "", [])
+        for turn in shallow_turns:
+            transition_penalty = (
+                turn.purpose_penalty + turn.paratrooper_mission_penalty
+            )
+            early_bonus = (
+                0.40 * turn.early_plan_score
+                if turn_number <= EARLY_GAME_LAST_TURN
+                else 0.0
+            )
+            quality = early_bonus - transition_penalty
+            red_score = (
+                turn.static_score + quality
+                if board.turn == engine.RED
+                else turn.static_score - quality
+            )
+            ranked_root_turns.append((red_score, turn))
+        ranked_root_turns.sort(
+            key=lambda item: (
+                -item[0] if board.turn == engine.RED else item[0],
+                tuple(move.uci() for move in item[1].moves),
+            )
+        )
+
+    candidate_turns = []
+    seen_candidate_moves = set()
+    for red_score, candidate_turn in ranked_root_turns[:8]:
+        all_moves = tuple(move.uci() for move in candidate_turn.moves)
+        if all_moves in seen_candidate_moves:
+            continue
+        seen_candidate_moves.add(all_moves)
+        candidate_turns.append(
+            {
+                "rank": len(candidate_turns) + 1,
+                "automatic_captures": [
+                    move.uci()
+                    for move in candidate_turn.moves
+                    if move.name == "AutoCapture"
+                ],
+                "actions": [
+                    move.uci()
+                    for move in candidate_turn.moves
+                    if move.name != "AutoCapture"
+                ],
+                "all_moves": list(all_moves),
+                "resulting_fen": candidate_turn.board.board_fen(),
+                "score": round(
+                    red_score if board.turn == engine.RED else -red_score, 4
+                ),
+                "action_purposes": candidate_turn.action_purposes,
+                "purpose": {
+                    key: round(value, 4)
+                    for key, value in searcher.turn_purpose_breakdown(
+                        board,
+                        candidate_turn.board,
+                        candidate_turn.moves,
+                        board.turn,
+                    ).items()
+                },
+            }
+        )
     exhaustive = (
         searcher.exhaustive_within_horizon
         and not timed_out
         and completed_depth == max(1, max_depth)
     )
     recommendation_label = (
-        "best move"
+        "opening book"
+        if opening_book_used
+        else "best move"
         if exhaustive
         else "safe fallback"
         if fallback_kind == "safe"
@@ -1571,8 +2738,18 @@ def search(
             "actions": actions,
             "all_moves": [move.uci() for move in first_turn],
             "resulting_fen": resulting_board.board_fen(),
+            "action_purposes": searcher.action_purpose_labels(
+                board, first_turn, board.turn
+            ),
+            "purpose": {
+                key: round(value, 4)
+                for key, value in searcher.turn_purpose_breakdown(
+                    board, resulting_board, first_turn, board.turn
+                ).items()
+            },
         },
         "principal_variation": [move.uci() for move in best.pv],
+        "candidate_turns": candidate_turns,
         "score": {
             "current_player": round(current_player_score, 4),
             "red": round(best.score, 4),
@@ -1585,6 +2762,8 @@ def search(
             "elapsed_ms": round(elapsed_ms, 2),
             "timed_out": timed_out,
             "fallback_used": fallback_kind,
+            "opening_book_used": opening_book_used,
+            "early_game_focus": turn_number <= EARLY_GAME_LAST_TURN,
             "approximate": True,
             "exhaustive_within_requested_horizon": exhaustive,
             "rule_filtered_actions": searcher.rule_filtered_actions,
@@ -1595,6 +2774,7 @@ def search(
             "complete_turns_pruned": searcher.complete_turns_pruned,
             "tactically_unsafe_turns": searcher.tactically_unsafe_turns,
             "rotation_quota_pruned": searcher.rotation_quota_pruned,
+            "purpose_filtered_turns": searcher.purpose_filtered_turns,
             "value_model_evaluations": searcher.value_model_evaluations,
             "turn_cache_hits": searcher.turn_cache_hits,
             "transposition_hits": searcher.transposition_hits,

@@ -59,6 +59,10 @@ export interface PlayOneGameConfig {
   maxTurns?: number;
   /** Safety valve for malformed agents or engines that never finish a turn. */
   maxDecisions?: number;
+  /** Exact position occurrence that ends the game as a draw. Defaults to threefold. */
+  repetitionLimit?: number;
+  /** Completed player turns without a capture or deployment. Defaults to 24. */
+  noProgressTurns?: number;
   /** Unsigned 32-bit seed. The generated seed is returned when omitted. */
   seed?: number;
   signal?: AbortSignal;
@@ -80,6 +84,8 @@ export interface SelfPlayGameResult {
 }
 
 const DEFAULT_MAX_TURNS = 400;
+const DEFAULT_REPETITION_LIMIT = 3;
+const DEFAULT_NO_PROGRESS_TURNS = 24;
 
 function playerToMove(board: PythonBoard): Player {
   return board.is_red_turn() ? "RED" : "BLUE";
@@ -177,6 +183,14 @@ export async function playOneGame(
     config.maxDecisions ?? maxTurns * 64,
     "maxDecisions"
   );
+  const repetitionLimit = checkedPositiveInteger(
+    config.repetitionLimit ?? DEFAULT_REPETITION_LIMIT,
+    "repetitionLimit"
+  );
+  const noProgressTurns = checkedPositiveInteger(
+    config.noProgressTurns ?? DEFAULT_NO_PROGRESS_TURNS,
+    "noProgressTurns"
+  );
   const seed = resolveSeed(config.seed);
   const random = createSeededRandom(seed);
   const board = config.engine.BaseBoard(config.fen);
@@ -187,6 +201,8 @@ export async function playOneGame(
   let actionCount = 0;
   let automaticCaptureCount = 0;
   let finalOutcome: SelfPlayOutcome | undefined;
+  let turnsWithoutProgress = 0;
+  const positionOccurrences = new Map<string, number>([[board.serialize(), 1]]);
 
   const finishCurrentTurn = async (completed: boolean) => {
     if (!currentTurn) return;
@@ -194,6 +210,23 @@ export async function playOneGame(
     currentTurn.completed = completed;
     turns.push(currentTurn);
     await notifyTurn(config.onTurn, currentTurn);
+    if (completed && !finalOutcome) {
+      const madeProgress = currentTurn.moves.some(
+        (move) =>
+          move.name === "Reinforce" ||
+          move.automaticCapture ||
+          move.uci.includes("x")
+      );
+      turnsWithoutProgress = madeProgress ? 0 : turnsWithoutProgress + 1;
+      const positionKey = board.serialize();
+      const occurrences = (positionOccurrences.get(positionKey) ?? 0) + 1;
+      positionOccurrences.set(positionKey, occurrences);
+      if (occurrences >= repetitionLimit) {
+        finalOutcome = { termination: "repetition" };
+      } else if (turnsWithoutProgress >= noProgressTurns) {
+        finalOutcome = { termination: "no-progress" };
+      }
+    }
     currentTurn = undefined;
   };
 

@@ -30,6 +30,11 @@ interface SearchModule extends PythonProxy {
     turnNumber: number,
     valueFunction: (fen: string, turnNumber: number) => number
   ) => PythonProxy;
+  evaluation_breakdown: (
+    board: PythonBoard,
+    personality: PersonalityId,
+    turnNumber: number
+  ) => PythonProxy;
 }
 
 interface LoadedAnalysisEngine {
@@ -82,6 +87,88 @@ function integerInRange(
     );
   }
   return resolved;
+}
+
+function numberInRange(
+  value: number | undefined,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+  name: string
+): number {
+  const resolved = value ?? fallback;
+  if (!Number.isFinite(resolved) || resolved < minimum || resolved > maximum) {
+    throw new AnalysisInputError(
+      `${name} must be a number from ${minimum} through ${maximum}`
+    );
+  }
+  return resolved;
+}
+
+function seededRandom(seed: number): () => number {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) | 0;
+    let value = Math.imul(state ^ (state >>> 15), 1 | state);
+    value ^= value + Math.imul(value ^ (value >>> 7), 61 | value);
+    return ((value ^ (value >>> 14)) >>> 0) / 0x1_0000_0000;
+  };
+}
+
+export function applyExploration(
+  result: GhqSearchResult,
+  sideToMove: Player,
+  temperature: number,
+  seed: number
+): GhqSearchResult {
+  const candidates = result.candidate_turns ?? [];
+  let selected = candidates[0];
+  if (
+    temperature > 0 &&
+    candidates.length > 1 &&
+    !result.search.opening_book_used
+  ) {
+    const bestScore = candidates[0].score;
+    const qualityWindow = Math.max(0.35, Math.min(2.5, temperature * 3));
+    const eligible = candidates.filter(
+      (candidate) => candidate.score >= bestScore - qualityWindow
+    );
+    const scale = Math.max(0.05, temperature);
+    const weights = eligible.map((candidate) =>
+      Math.exp((candidate.score - bestScore) / scale)
+    );
+    let draw = seededRandom(seed)() * weights.reduce((sum, value) => sum + value, 0);
+    selected = eligible[eligible.length - 1];
+    for (let index = 0; index < eligible.length; index++) {
+      draw -= weights[index];
+      if (draw <= 0) {
+        selected = eligible[index];
+        break;
+      }
+    }
+  }
+
+  if (selected && selected.rank > 1) {
+    result.best_turn = {
+      automatic_captures: selected.automatic_captures,
+      actions: selected.actions,
+      all_moves: selected.all_moves,
+      resulting_fen: selected.resulting_fen,
+      action_purposes: selected.action_purposes,
+      purpose: selected.purpose,
+    };
+    result.principal_variation = selected.all_moves;
+    result.score.current_player = selected.score;
+    result.score.red = sideToMove === "RED" ? selected.score : -selected.score;
+    result.recommendation_label = "exploratory";
+  }
+  result.exploration = {
+    temperature,
+    seed,
+    selectedRank: selected?.rank ?? 1,
+    candidateCount: candidates.length || 1,
+  };
+  return result;
 }
 
 function playerToMove(board: PythonBoard): Player {
@@ -182,6 +269,20 @@ export async function analyzeFen(
   );
   const maxDepth = integerInRange(request.maxDepth, 3, 1, 3, "maxDepth");
   const beamWidth = integerInRange(request.beamWidth, 8, 2, 16, "beamWidth");
+  const explorationTemperature = numberInRange(
+    request.explorationTemperature,
+    0,
+    0,
+    2,
+    "explorationTemperature"
+  );
+  const explorationSeed = integerInRange(
+    request.explorationSeed,
+    Math.floor(Math.random() * 0x1_0000_0000),
+    0,
+    0xffff_ffff,
+    "explorationSeed"
+  );
   const { engine, search } = await loadAnalysisEngine();
   let board: PythonBoard;
   try {
@@ -204,11 +305,17 @@ export async function analyzeFen(
       maxDepth,
       beamWidth,
       turnNumber,
-      redModelValue
+      redModelValue,
+      explorationSeed
     );
     let searchResult: GhqSearchResult;
     try {
-      searchResult = toSearchResult(resultProxy);
+      searchResult = applyExploration(
+        toSearchResult(resultProxy),
+        sideToMove,
+        explorationTemperature,
+        explorationSeed
+      );
     } finally {
       destroyProxy(resultProxy);
     }
@@ -226,6 +333,20 @@ export async function analyzeFen(
     }
 
     const resultingFen = board.board_fen();
+    const afterEvaluationProxy = search.evaluation_breakdown(
+      board,
+      personality,
+      turnNumber + 1
+    );
+    try {
+      if (typeof afterEvaluationProxy.toJs === "function") {
+        searchResult.evaluation.after_best_turn = afterEvaluationProxy.toJs({
+          dict_converter: Object.fromEntries,
+        }) as GhqSearchResult["evaluation"]["after_best_turn"];
+      }
+    } finally {
+      destroyProxy(afterEvaluationProxy);
+    }
     return {
       fen,
       resultingFen,
@@ -233,7 +354,13 @@ export async function analyzeFen(
       sideToMove,
       turnNumber,
       personality,
-      effectiveConfig: { timeMs, maxDepth, beamWidth },
+      effectiveConfig: {
+        timeMs,
+        maxDepth,
+        beamWidth,
+        explorationTemperature,
+        explorationSeed,
+      },
       outcome: pythonOutcome(board),
       model: {
         before: modelOutput(fen, turnNumber, sideToMove, personality),

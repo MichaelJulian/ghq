@@ -73,6 +73,30 @@ describe("playOneGame", () => {
     ]);
   });
 
+  it("terminates a game after the configured no-progress window", async () => {
+    const firstNonSkip: SelfPlayAgent = {
+      id: "quiet-action",
+      selectMove: ({ legalMoves }) =>
+        legalMoves.find((move) =>
+          (move.name === "Move" || move.name === "MoveAndOrient") &&
+          !move.uci().includes("x")
+        ) ?? legalMoves.find((move) => move.name === "Skip") ?? legalMoves[0],
+    };
+    const result = await playOneGame({
+      engine,
+      red: firstNonSkip,
+      blue: firstNonSkip,
+      maxTurns: 10,
+      repetitionLimit: 10,
+      noProgressTurns: 1,
+      seed: 111,
+    });
+
+    expect(result.completed).toBe(true);
+    expect(result.outcome.termination).toBe("no-progress");
+    expect(result.turns).toHaveLength(1);
+  });
+
   it("resolves production automatic captures without spending an action", async () => {
     const forcedThenSkip: SelfPlayAgent = {
       id: "forced-then-skip",

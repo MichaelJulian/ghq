@@ -48,6 +48,12 @@ const SIDE_FEATURE_NAMES = [
   "infantry_board",
   "artillery_board",
   "home_rank_occupancy",
+  "relocation_options",
+  "mean_relocation_options",
+  "immobile_count",
+  "home_rank_immobile_count",
+  "connected_components",
+  "largest_component_ratio",
   "max_rank_occupancy",
   "advancement_mean",
   "advancement_max",
@@ -86,6 +92,11 @@ const DIFFERENCE_FEATURES = [
   "infantry_board",
   "artillery_board",
   "home_rank_occupancy",
+  "relocation_options",
+  "immobile_count",
+  "home_rank_immobile_count",
+  "connected_components",
+  "largest_component_ratio",
   "unsupported_value",
   "overextended_value",
   "bombarded_enemy_value",
@@ -222,6 +233,86 @@ function pseudoMobility(board: Board, pieces: PlacedPiece[]): number {
   return Math.log1p(moves);
 }
 
+function structureAndOptionMetrics(
+  board: Board,
+  pieces: PlacedPiece[],
+  ownHomeRank: number
+): {
+  relocationOptions: number;
+  meanRelocationOptions: number;
+  immobileCount: number;
+  homeRankImmobileCount: number;
+  connectedComponents: number;
+  largestComponentRatio: number;
+} {
+  const material = pieces.filter(
+    ({ piece }) => piece.type !== "HQ" && piece.type !== "AIRBORNE_INFANTRY"
+  );
+  let relocationOptions = 0;
+  let immobileCount = 0;
+  let homeRankImmobileCount = 0;
+  for (const candidate of material) {
+    const speed = Units[candidate.piece.type].mobility;
+    let options = 0;
+    for (
+      let row = Math.max(0, candidate.at[0] - speed);
+      row <= Math.min(7, candidate.at[0] + speed);
+      row++
+    ) {
+      for (
+        let column = Math.max(0, candidate.at[1] - speed);
+        column <= Math.min(7, candidate.at[1] + speed);
+        column++
+      ) {
+        if (
+          (row !== candidate.at[0] || column !== candidate.at[1]) &&
+          chebyshev(candidate.at, [row, column]) <= speed &&
+          board[row][column] === null
+        ) {
+          options++;
+        }
+      }
+    }
+    relocationOptions += options;
+    if (options === 0) {
+      immobileCount++;
+      if (candidate.at[0] === ownHomeRank) homeRankImmobileCount++;
+    }
+  }
+
+  const remaining = new Set(material.map(({ at }) => at.join(",")));
+  const byKey = new Map(material.map((piece) => [piece.at.join(","), piece]));
+  const componentSizes: number[] = [];
+  while (remaining.size > 0) {
+    const first = remaining.values().next().value as string;
+    remaining.delete(first);
+    const stack = [byKey.get(first)!];
+    let size = 0;
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      size++;
+      for (const key of [...remaining]) {
+        const other = byKey.get(key)!;
+        if (chebyshev(current.at, other.at) <= 1) {
+          remaining.delete(key);
+          stack.push(other);
+        }
+      }
+    }
+    componentSizes.push(size);
+  }
+  return {
+    relocationOptions,
+    meanRelocationOptions:
+      material.length === 0 ? 0 : relocationOptions / material.length,
+    immobileCount,
+    homeRankImmobileCount,
+    connectedComponents: componentSizes.length,
+    largestComponentRatio:
+      material.length === 0 ? 1 : Math.max(...componentSizes) / material.length,
+  };
+}
+
 function extractSideFeatures(
   position: ValuePosition,
   player: Player
@@ -269,6 +360,13 @@ function extractSideFeatures(
   result.infantry_board = infantry.length;
   result.artillery_board = artillery.length;
   result.home_rank_occupancy = friendly.filter(({ at }) => at[0] === ownHomeRank).length;
+  const structure = structureAndOptionMetrics(board, friendly, ownHomeRank);
+  result.relocation_options = structure.relocationOptions;
+  result.mean_relocation_options = structure.meanRelocationOptions;
+  result.immobile_count = structure.immobileCount;
+  result.home_rank_immobile_count = structure.homeRankImmobileCount;
+  result.connected_components = structure.connectedComponents;
+  result.largest_component_ratio = structure.largestComponentRatio;
 
   const rankCounts = Array(8).fill(0) as number[];
   friendly.forEach(({ at }) => rankCounts[at[0]]++);

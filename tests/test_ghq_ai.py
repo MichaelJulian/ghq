@@ -111,8 +111,256 @@ class EvaluationTests(unittest.TestCase):
             ghq_ai.evaluation_breakdown(vertical)["total_red"],
         )
 
+    def test_dispersion_metric_penalizes_disconnected_material(self):
+        connected = engine.BaseBoard("7q/8/8/8/8/8/8/III4Q - - r")
+        dispersed = engine.BaseBoard("7q/8/8/8/8/8/8/I3I2Q - - r")
+        self.assertGreater(
+            ghq_ai.dispersion_penalty(dispersed, engine.RED),
+            ghq_ai.dispersion_penalty(connected, engine.RED),
+        )
+        metrics = ghq_ai.structure_metrics(dispersed, engine.RED)
+        self.assertGreater(metrics["components"], 1.0)
+        self.assertGreater(metrics["isolated_units"], 0.0)
+
+    def test_optionality_penalizes_a_boxed_home_rank(self):
+        boxed = engine.BaseBoard(
+            "7q/8/8/8/8/8/2IIII2/2IIII1Q - - r"
+        )
+        staggered = engine.BaseBoard(
+            "7q/8/8/8/8/8/1I1I1I2/I1I1I2Q - - r"
+        )
+        boxed_metrics = ghq_ai.optionality_metrics(boxed, engine.RED)
+        staggered_metrics = ghq_ai.optionality_metrics(staggered, engine.RED)
+        self.assertGreater(boxed_metrics["immobile_units"], 0.0)
+        self.assertEqual(staggered_metrics["immobile_units"], 0.0)
+        self.assertGreater(
+            ghq_ai.congestion_penalty(boxed, engine.RED),
+            ghq_ai.congestion_penalty(staggered, engine.RED),
+        )
+        self.assertGreater(
+            ghq_ai.optionality_score(staggered, engine.RED),
+            ghq_ai.optionality_score(boxed, engine.RED),
+        )
+
+    def test_frontier_schedule_and_extension_penalty_follow_opening_phase(self):
+        self.assertEqual(
+            [ghq_ai.early_frontier_rank(turn) for turn in (1, 2, 3, 4, 5, 6, 7)],
+            [2, 2, 3, 3, 4, 4, 5],
+        )
+        rank_four = engine.BaseBoard("7q/8/8/8/I7/8/8/7Q - - r")
+        self.assertGreater(
+            ghq_ai.phase_extension_penalty(rank_four, engine.RED, 3), 0.0
+        )
+        self.assertEqual(
+            ghq_ai.phase_extension_penalty(rank_four, engine.RED, 5), 0.0
+        )
+
 
 class SearchTests(unittest.TestCase):
+    def test_data_backed_opening_book_plays_both_sides_first_two_turns(self):
+        board = engine.BaseBoard()
+        for turn_number in range(1, 5):
+            result = ghq_ai.search(
+                board,
+                "balanced",
+                time_ms=500,
+                max_depth=1,
+                beam_width=4,
+                turn_number=turn_number,
+                opening_seed=17,
+            )
+            self.assertEqual(result["recommendation_label"], "opening book")
+            self.assertTrue(result["search"]["opening_book_used"])
+            self.assertEqual(len(result["best_turn"]["actions"]), 3)
+            for uci in result["best_turn"]["all_moves"]:
+                move = next(
+                    candidate
+                    for candidate in board.generate_legal_moves()
+                    if candidate.uci() == uci
+                )
+                board.push(move)
+
+    def test_recent_opening_book_produces_seeded_variety(self):
+        openings = {
+            tuple(
+                ghq_ai.search(
+                    engine.BaseBoard(),
+                    "balanced",
+                    time_ms=500,
+                    max_depth=1,
+                    beam_width=4,
+                    turn_number=1,
+                    opening_seed=seed,
+                )["best_turn"]["actions"]
+            )
+            for seed in range(30)
+        }
+        self.assertGreaterEqual(len(openings), 3)
+        self.assertTrue(openings.issubset({moves for moves, _ in ghq_ai.OPENING_FIRST_TURNS}))
+
+    def test_opening_book_is_bypassed_when_position_does_not_match(self):
+        board = engine.BaseBoard()
+        searcher = ghq_ai.Searcher("balanced", time_ms=1000, beam_width=4)
+        self.assertIsNone(ghq_ai.opening_book_turn(board, 3, searcher))
+
+    def test_missionless_paratrooper_sortie_gets_large_penalty(self):
+        before = engine.BaseBoard("7q/8/8/8/8/8/8/1P5Q - - r")
+        after = before.copy()
+        move = next(
+            candidate
+            for candidate in after.generate_legal_moves()
+            if candidate.uci() == "b1b5"
+        )
+        after.push(move)
+        searcher = ghq_ai.Searcher("balanced", time_ms=2000, beam_width=6)
+        purpose = searcher.turn_purpose_breakdown(
+            before, after, [move], engine.RED
+        )
+        self.assertGreaterEqual(
+            purpose["paratrooper_mission_penalty"],
+            ghq_ai.MISSIONLESS_PARATROOPER_PENALTY,
+        )
+        self.assertNotIn(
+            "b1b5",
+            [
+                candidate.uci()
+                for _, candidate in searcher.diverse_moves(before)
+            ],
+        )
+
+    def test_single_capture_target_is_enough_to_allow_a_paradrop(self):
+        board = engine.BaseBoard("7q/8/8/2h↓5/8/8/8/1P5Q - - r")
+        searcher = ghq_ai.Searcher("balanced", time_ms=2000, beam_width=6)
+        moves = [candidate.uci() for _, candidate in searcher.diverse_moves(board)]
+        self.assertIn("b1b4", moves)
+
+    def test_opponent_home_rank_para_is_trapped_when_infantry_can_deploy(self):
+        no_reserve = engine.BaseBoard("q6P/8/8/8/8/8/8/7Q - - r")
+        infantry_ready = engine.BaseBoard("q6P/8/8/8/8/8/8/7Q - i r")
+        self.assertGreater(
+            ghq_ai.airborne_survival_penalty(infantry_ready, engine.RED),
+            ghq_ai.airborne_survival_penalty(no_reserve, engine.RED) + 8.0,
+        )
+
+    def test_multiple_valuable_para_threats_count_as_a_mission(self):
+        before = engine.BaseBoard("7q/8/8/r↓1h↓5/8/8/8/1P5Q - - r")
+        after = before.copy()
+        move = next(
+            candidate
+            for candidate in after.generate_legal_moves()
+            if candidate.uci() == "b1b4"
+        )
+        after.push(move)
+        searcher = ghq_ai.Searcher("balanced", time_ms=2000, beam_width=6)
+        self.assertEqual(
+            searcher.paratrooper_mission_penalty(
+                before, after, [move], engine.RED
+            ),
+            0.0,
+        )
+
+    def test_square_swapping_turn_has_net_purpose_penalty(self):
+        before = engine.BaseBoard("7q/8/8/8/8/8/1P6/2T↑H↑3Q - - r")
+        after = before.copy()
+        moves = []
+        for uci in ("d1d2↑", "c1b1→", "b2c1"):
+            move = next(
+                candidate
+                for candidate in after.generate_legal_moves()
+                if candidate.uci() == uci
+            )
+            moves.append(move)
+            after.push(move)
+        searcher = ghq_ai.Searcher(
+            "balanced", time_ms=2000, beam_width=6, turn_number=10
+        )
+        purpose = searcher.turn_purpose_breakdown(
+            before, after, moves, engine.RED
+        )
+        self.assertEqual(purpose["backfills"], 1.0)
+        self.assertGreater(purpose["net_purpose_penalty"], 1.5)
+
+    def test_turn_five_filters_idle_paradrop_and_focuses_development(self):
+        board = engine.BaseBoard()
+        for uci in (
+            "rhd1", "rte1", "rpb1",
+            "rhe8", "rtd8", "rpg8",
+            "e1e3↑", "d1d2↑", "rfc1",
+            "d8d6↓", "e8e7↓", "rff8",
+        ):
+            move = next(
+                candidate
+                for candidate in board.generate_legal_moves()
+                if candidate.uci() == uci
+            )
+            board.push(move)
+
+        searcher = ghq_ai.Searcher(
+            "battery_commander", time_ms=3000, beam_width=8, turn_number=5
+        )
+        self.assertNotIn(
+            "b1h8",
+            [candidate.uci() for _, candidate in searcher.diverse_moves(board)],
+        )
+        result = ghq_ai.search(
+            board,
+            "battery_commander",
+            time_ms=3000,
+            max_depth=1,
+            beam_width=8,
+            turn_number=5,
+        )
+        self.assertGreaterEqual(
+            result["best_turn"]["purpose"]["development_actions"], 2.0
+        )
+        self.assertTrue(
+            all(
+                "no_new_effect" not in item["roles"]
+                for item in result["best_turn"]["action_purposes"]
+            )
+        )
+        self.assertNotIn("b1h8", result["best_turn"]["actions"])
+
+    def test_quiet_move_cannot_cross_the_phase_frontier(self):
+        board = engine.BaseBoard("7q/8/8/8/8/I7/8/7Q - - r")
+        early = ghq_ai.Searcher(
+            "balanced", time_ms=2000, beam_width=6, turn_number=3
+        )
+        later = ghq_ai.Searcher(
+            "balanced", time_ms=2000, beam_width=6, turn_number=5
+        )
+        self.assertNotIn(
+            "a3a4", [move.uci() for _, move in early.diverse_moves(board)]
+        )
+        self.assertIn(
+            "a3a4", [move.uci() for _, move in later.diverse_moves(board)]
+        )
+
+    def test_three_purposeless_infantry_pushes_are_not_a_valid_early_plan(self):
+        before = engine.BaseBoard("7q/8/8/8/8/8/I1I1I3/7Q - - r")
+        after = before.copy()
+        moves = []
+        for uci in ("a2a3", "c2c3", "e2e3"):
+            move = next(
+                candidate
+                for candidate in after.generate_legal_moves()
+                if candidate.uci() == uci
+            )
+            moves.append(move)
+            after.push(move)
+        searcher = ghq_ai.Searcher(
+            "balanced", time_ms=2000, beam_width=6, turn_number=5
+        )
+        purposes = searcher.action_purpose_labels(before, moves, engine.RED)
+        self.assertEqual(
+            searcher.forward_infantry_actions(before, moves, engine.RED), 3
+        )
+        self.assertFalse(
+            searcher.early_structure_allowed(
+                before, after, moves, engine.RED, purposes
+            )
+        )
+
     def test_blocked_non_threatening_artillery_rotation_is_discarded(self):
         board = engine.BaseBoard(VERTICAL_INFANTRY_FEN[:-1] + "b")
         searcher = ghq_ai.Searcher("balanced", time_ms=2000, beam_width=8)
@@ -240,7 +488,9 @@ class SearchTests(unittest.TestCase):
 
     def test_quiet_unblock_and_paratrooper_extraction_stay_in_beam(self):
         board = engine.BaseBoard(PARATROOPER_EXTRACTION_FEN)
-        searcher = ghq_ai.Searcher("balanced", time_ms=3000, beam_width=6)
+        searcher = ghq_ai.Searcher(
+            "balanced", time_ms=3000, beam_width=6, turn_number=27
+        )
 
         # Save the bombarded heavy artillery first.
         first = engine.Move.from_uci("d5e6↘")
@@ -255,7 +505,9 @@ class SearchTests(unittest.TestCase):
 
     def test_complete_turn_generation_preserves_paratrooper_extraction(self):
         board = engine.BaseBoard(PARATROOPER_EXTRACTION_FEN)
-        searcher = ghq_ai.Searcher("balanced", time_ms=5000, beam_width=6)
+        searcher = ghq_ai.Searcher(
+            "balanced", time_ms=5000, beam_width=6, turn_number=27
+        )
         turns = searcher.generate_turn_candidates(board)
         sequences = [[move.uci() for move in turn.moves] for turn in turns]
         self.assertTrue(
@@ -275,13 +527,16 @@ class SearchTests(unittest.TestCase):
             time_ms=2500,
             max_depth=1,
             beam_width=6,
+            turn_number=27,
         )
         self.assertEqual(result["recommendation_label"], "best found")
         self.assertFalse(result["search"]["exhaustive_within_requested_horizon"])
 
     def test_forcing_artillery_pressure_displaces_empty_infantry_move(self):
         board = engine.BaseBoard(POST_EXTRACTION_PRESSURE_FEN)
-        searcher = ghq_ai.Searcher("balanced", time_ms=2000, beam_width=6)
+        searcher = ghq_ai.Searcher(
+            "balanced", time_ms=2000, beam_width=6, turn_number=29
+        )
         moves = [move.uci() for move in searcher.ordered_moves(board)]
         self.assertIn("d2e1↗", moves)
         self.assertNotIn("b1b2", moves)
@@ -310,7 +565,14 @@ class SearchTests(unittest.TestCase):
 
     def test_search_finds_two_action_hq_combination(self):
         board = engine.BaseBoard(TURN_28_FORCED_MATE_FEN)
-        result = ghq_ai.search(board, "balanced", time_ms=4000, max_depth=1, beam_width=6)
+        result = ghq_ai.search(
+            board,
+            "balanced",
+            time_ms=4000,
+            max_depth=1,
+            beam_width=6,
+            turn_number=28,
+        )
         self.assertEqual(result["best_turn"]["actions"], ["h2g1xf1", "g3h2xh1"])
         self.assertLessEqual(result["score"]["red"], -ghq_ai.MATE_SCORE)
 

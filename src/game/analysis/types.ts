@@ -16,6 +16,9 @@ export interface FenAnalysisRequest {
   timeMs?: number;
   maxDepth?: number;
   beamWidth?: number;
+  /** Zero is deterministic; larger values sample more broadly among safe near-best turns. */
+  explorationTemperature?: number;
+  explorationSeed?: number;
 }
 
 export interface SearchEvaluationBreakdown {
@@ -27,12 +30,58 @@ export interface SearchEvaluationBreakdown {
   total_red: number;
 }
 
+export interface GhqTurnPurpose {
+  capture_gain: number;
+  deployment_gain: number;
+  threat_gain: number;
+  protection_gain: number;
+  development_gain: number;
+  formation_gain: number;
+  dispersion_increase: number;
+  uncompensated_dispersion: number;
+  optionality_gain: number;
+  congestion_increase: number;
+  immobile_units: number;
+  relocation_options: number;
+  extension_increase: number;
+  frontier_rank: number;
+  frontier_limit: number;
+  forward_infantry_actions: number;
+  coordinated_overpush: number;
+  escape_actions: number;
+  purposeful_actions: number;
+  unpurposed_actions: number;
+  development_actions: number;
+  formation_actions: number;
+  quiet_actions: number;
+  backfills: number;
+  reversals: number;
+  pure_rotations: number;
+  forcing_gain: number;
+  net_purpose_penalty: number;
+  paratrooper_mission_penalty: number;
+  total_penalty: number;
+}
+
+export interface GhqCandidateTurn {
+  rank: number;
+  automatic_captures: string[];
+  actions: string[];
+  all_moves: string[];
+  resulting_fen: string;
+  score: number;
+  action_purposes: Array<{ move: string; roles: string[] }>;
+  purpose: GhqTurnPurpose;
+}
+
 export interface GhqSearchResult {
   recommendation_label:
     | "best move"
     | "best found"
     | "safe fallback"
-    | "greedy fallback";
+    | "greedy fallback"
+    | "opening book"
+    | "exploratory";
   input_fen: string;
   side_to_move: "red" | "blue";
   best_turn: {
@@ -40,8 +89,14 @@ export interface GhqSearchResult {
     actions: string[];
     all_moves: string[];
     resulting_fen: string;
+    action_purposes: Array<{
+      move: string;
+      roles: string[];
+    }>;
+    purpose: GhqTurnPurpose;
   };
   principal_variation: string[];
+  candidate_turns: GhqCandidateTurn[];
   score: {
     current_player: number;
     red: number;
@@ -54,6 +109,8 @@ export interface GhqSearchResult {
     elapsed_ms: number;
     timed_out: boolean;
     fallback_used: "none" | "safe" | "greedy";
+    opening_book_used: boolean;
+    early_game_focus: boolean;
     approximate: boolean;
     exhaustive_within_requested_horizon: boolean;
     rule_filtered_actions: number;
@@ -64,6 +121,7 @@ export interface GhqSearchResult {
     complete_turns_pruned: number;
     tactically_unsafe_turns: number;
     rotation_quota_pruned: number;
+    purpose_filtered_turns: number;
     value_model_evaluations: number;
     turn_cache_hits: number;
     transposition_hits: number;
@@ -71,6 +129,12 @@ export interface GhqSearchResult {
   evaluation: {
     before: SearchEvaluationBreakdown;
     after_best_turn: SearchEvaluationBreakdown;
+  };
+  exploration?: {
+    temperature: number;
+    seed: number;
+    selectedRank: number;
+    candidateCount: number;
   };
 }
 
@@ -91,6 +155,8 @@ export interface FenAnalysisResponse {
     timeMs: number;
     maxDepth: number;
     beamWidth: number;
+    explorationTemperature: number;
+    explorationSeed: number;
   };
   outcome?: {
     winner?: Player;
