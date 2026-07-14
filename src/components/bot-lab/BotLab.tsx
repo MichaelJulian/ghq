@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import Header from "@/components/Header";
 import { PositionBoard } from "@/components/bot-lab/PositionBoard";
+import { SelfPlayRuns } from "@/components/bot-lab/SelfPlayRuns";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -306,6 +307,7 @@ export default function BotLab() {
             )}
           </div>
         </div>
+        <SelfPlayRuns />
       </div>
     </main>
   );
@@ -627,7 +629,7 @@ function AnalysisDetails({ analysis }: { analysis: FenAnalysisResponse }) {
                   .filter((item) => item.roles[0] !== "end_turn")
                   .map((item) => (
                     <span key={item.move}>
-                      <span className="font-mono">{item.move}</span>: {" "}
+                      <span className="font-mono">{item.move}</span>:{" "}
                       {item.roles.join(" + ").replaceAll("_", " ")}
                     </span>
                   ))}
@@ -637,20 +639,32 @@ function AnalysisDetails({ analysis }: { analysis: FenAnalysisResponse }) {
                 {analysis.search.best_turn.purpose.total_penalty.toFixed(2)}
                 {analysis.search.best_turn.purpose.paratrooper_mission_penalty >
                   0 &&
-                  ` (missionless para ${analysis.search.best_turn.purpose.paratrooper_mission_penalty.toFixed(2)})`}
+                  ` (missionless para ${analysis.search.best_turn.purpose.paratrooper_mission_penalty.toFixed(
+                    2
+                  )})`}
               </div>
               <div className="mt-1 text-xs text-slate-400">
-                Frontier {analysis.search.best_turn.purpose.frontier_rank ?? "—"}/
-                {analysis.search.best_turn.purpose.frontier_limit ?? "—"} · forward
-                infantry actions {analysis.search.best_turn.purpose.forward_infantry_actions ?? "—"}
+                Frontier{" "}
+                {analysis.search.best_turn.purpose.frontier_rank ?? "—"}/
+                {analysis.search.best_turn.purpose.frontier_limit ?? "—"} ·
+                forward infantry actions{" "}
+                {analysis.search.best_turn.purpose.forward_infantry_actions ??
+                  "—"}
                 {analysis.search.best_turn.purpose.dispersion_increase > 0 &&
-                  ` · dispersion +${analysis.search.best_turn.purpose.dispersion_increase.toFixed(2)}`}
+                  ` · dispersion +${analysis.search.best_turn.purpose.dispersion_increase.toFixed(
+                    2
+                  )}`}
               </div>
               <div className="mt-1 text-xs text-slate-400">
-                Relocation options {analysis.search.best_turn.purpose.relocation_options ?? "—"}
-                {` · immobile units ${analysis.search.best_turn.purpose.immobile_units ?? "—"}`}
+                Relocation options{" "}
+                {analysis.search.best_turn.purpose.relocation_options ?? "—"}
+                {` · immobile units ${
+                  analysis.search.best_turn.purpose.immobile_units ?? "—"
+                }`}
                 {analysis.search.best_turn.purpose.optionality_gain > 0 &&
-                  ` · optionality +${analysis.search.best_turn.purpose.optionality_gain.toFixed(2)}`}
+                  ` · optionality +${analysis.search.best_turn.purpose.optionality_gain.toFixed(
+                    2
+                  )}`}
               </div>
             </div>
             <div className="grid grid-cols-3 gap-4 text-center text-xs">
@@ -676,26 +690,27 @@ function AnalysisDetails({ analysis }: { analysis: FenAnalysisResponse }) {
           )}
           {analysis.search.recommendation_label === "exploratory" && (
             <div className="mt-4 rounded border border-violet-400/30 bg-violet-300/10 px-3 py-2 text-xs text-violet-100">
-              Seeded exploration selected safe candidate rank {analysis.search.exploration?.selectedRank}
-              {` of ${analysis.search.exploration?.candidateCount}`}. Reusing the
-              same seed reproduces this choice.
+              Seeded exploration selected safe candidate rank{" "}
+              {analysis.search.exploration?.selectedRank}
+              {` of ${analysis.search.exploration?.candidateCount}`}. Reusing
+              the same seed reproduces this choice.
             </div>
           )}
           {!analysis.search.search.opening_book_used &&
             analysis.search.recommendation_label !== "exploratory" &&
             !analysis.search.search.exhaustive_within_requested_horizon && (
-            <div className="mt-4 rounded border border-amber-400/30 bg-amber-300/10 px-3 py-2 text-xs text-amber-100">
-              This is the strongest line found inside the time and beam budget,
-              not a proof of the globally optimal turn.
-            </div>
-          )}
+              <div className="mt-4 rounded border border-amber-400/30 bg-amber-300/10 px-3 py-2 text-xs text-amber-100">
+                This is the strongest line found inside the time and beam
+                budget, not a proof of the globally optimal turn.
+              </div>
+            )}
           {!analysis.search.search.opening_book_used &&
             analysis.search.search.completed_depth_in_turns < 2 && (
-            <div className="mt-2 rounded border border-red-400/30 bg-red-300/10 px-3 py-2 text-xs text-red-100">
-              No full opponent reply was completed. Treat this turn as
-              tactically unverified; increase time or reduce the beam.
-            </div>
-          )}
+              <div className="mt-2 rounded border border-red-400/30 bg-red-300/10 px-3 py-2 text-xs text-red-100">
+                No full opponent reply was completed. Treat this turn as
+                tactically unverified; increase time or reduce the beam.
+              </div>
+            )}
           {analysis.search.search.fallback_used !== "none" && (
             <div className="mt-2 text-xs text-slate-300">
               {analysis.search.search.fallback_used === "safe"

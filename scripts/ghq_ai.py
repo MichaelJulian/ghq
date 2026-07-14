@@ -131,14 +131,16 @@ EARLY_FRONTIER_RANKS: Tuple[Tuple[int, int], ...] = (
     (12, 7),
 )
 
-# Human opening book mined from completed games created 2025-10-14 or later.
-# Only formations seen at least ten times are admitted on the first turn. The
-# continuation book keeps repeated plans (and excludes the observed 0-2 line).
-# Counts become sampling weights, tempered with sqrt so variety survives.
+# Human opening book mined from completed games created 2025-10-14 or later,
+# plus one explicitly coached infantry-screen plan. Only empirical formations
+# seen at least ten times are admitted. Counts become sampling weights,
+# tempered with sqrt so variety survives; the coached plan's value is a
+# sampling weight rather than a claim about observed frequency.
 OPENING_FIRST_TURNS: Tuple[Tuple[Tuple[str, ...], int], ...] = (
     (("rhd1", "rte1", "rpb1"), 76),
     (("rhe1", "rtd1", "rpa1"), 15),
     (("rhe1", "rtd1", "rpb1"), 10),
+    (("ric1", "rid1", "rie1"), 25),
 )
 
 OPENING_CONTINUATIONS: Dict[str, Tuple[Tuple[Tuple[str, ...], int], ...]] = {
@@ -149,6 +151,10 @@ OPENING_CONTINUATIONS: Dict[str, Tuple[Tuple[Tuple[str, ...], int], ...]] = {
         (("d1f3↑", "e1e2↑", "rfd1"), 2),
         (("e1e2↑", "d1d3↑", "rfd1"), 2),
     ),
+    # Infantry Screen: build a broad ordinary-infantry front, then step the
+    # center forward and put regular artillery behind it. Armored infantry
+    # stays in reserve as a rapid answer to an enemy paradrop.
+    "D": ((("d1d2", "e1e2", "rre1"), 25),),
 }
 
 OPENING_SIGNATURE_KEYS: Dict[str, Tuple[Tuple[Any, ...], Tuple[int, ...]]] = {
@@ -166,6 +172,11 @@ OPENING_SIGNATURE_KEYS: Dict[str, Tuple[Tuple[Any, ...], Tuple[int, ...]]] = {
         ((1, 7, None), (2, 13, None), (2, 14, None), (2, 15, None),
          (4, 1, None), (5, 6, 0), (6, 3, 0), (7, 4, 0)),
         (5, 3, 2),
+    ),
+    "D": (
+        ((1, 7, None), (2, 2, None), (2, 3, None), (2, 4, None),
+         (2, 13, None), (2, 14, None), (2, 15, None), (5, 6, 0)),
+        (2, 3, 1, 2, 1, 1),
     ),
 }
 

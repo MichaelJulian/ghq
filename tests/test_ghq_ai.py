@@ -195,8 +195,31 @@ class SearchTests(unittest.TestCase):
             )
             for seed in range(30)
         }
-        self.assertGreaterEqual(len(openings), 3)
+        self.assertGreaterEqual(len(openings), 4)
         self.assertTrue(openings.issubset({moves for moves, _ in ghq_ai.OPENING_FIRST_TURNS}))
+
+    def test_infantry_screen_keeps_armored_infantry_in_reserve(self):
+        board = engine.BaseBoard()
+        for uci in ("ric1", "rid1", "rie1"):
+            board.push(next(move for move in board.generate_legal_moves() if move.uci() == uci))
+        self.assertEqual(
+            ghq_ai.normalized_opening_signature(board, engine.RED),
+            ghq_ai.OPENING_SIGNATURE_KEYS["D"],
+        )
+        self.assertEqual(board.get_reserve_count(engine.ARMORED_INFANTRY, engine.RED), 3)
+        for uci in ("rhe8", "rtd8", "rpg8"):
+            board.push(next(move for move in board.generate_legal_moves() if move.uci() == uci))
+        searcher = ghq_ai.Searcher(
+            "balanced", time_ms=2_000, beam_width=4, turn_number=3
+        )
+        continuation = ghq_ai.opening_book_turn(
+            board, 3, searcher, opening_seed=1
+        )
+        self.assertIsNotNone(continuation)
+        self.assertEqual(
+            [move.uci() for move in continuation.moves],
+            ["d1d2", "e1e2", "rre1"],
+        )
 
     def test_opening_book_is_bypassed_when_position_does_not_match(self):
         board = engine.BaseBoard()
