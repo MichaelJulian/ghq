@@ -28,7 +28,8 @@ interface SearchModule extends PythonProxy {
     maxDepth: number,
     beamWidth: number,
     turnNumber: number,
-    valueFunction: (fen: string, turnNumber: number) => number
+    valueFunction: (fen: string, turnNumber: number) => number,
+    openingSeed: number
   ) => PythonProxy;
   evaluation_breakdown: (
     board: PythonBoard,
@@ -137,7 +138,8 @@ export function applyExploration(
     const weights = eligible.map((candidate) =>
       Math.exp((candidate.score - bestScore) / scale)
     );
-    let draw = seededRandom(seed)() * weights.reduce((sum, value) => sum + value, 0);
+    let draw =
+      seededRandom(seed)() * weights.reduce((sum, value) => sum + value, 0);
     selected = eligible[eligible.length - 1];
     for (let index = 0; index < eligible.length; index++) {
       draw -= weights[index];
@@ -260,13 +262,7 @@ export async function analyzeFen(
     2_000,
     "turnNumber"
   );
-  const timeMs = integerInRange(
-    request.timeMs,
-    30_000,
-    50,
-    30_000,
-    "timeMs"
-  );
+  const timeMs = integerInRange(request.timeMs, 30_000, 50, 30_000, "timeMs");
   const maxDepth = integerInRange(request.maxDepth, 3, 1, 3, "maxDepth");
   const beamWidth = integerInRange(request.beamWidth, 8, 2, 16, "beamWidth");
   const explorationTemperature = numberInRange(
