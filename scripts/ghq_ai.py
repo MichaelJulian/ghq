@@ -2069,6 +2069,7 @@ class Searcher:
                     tuple(move.uci() for move in partial.moves),
                 ),
             )
+            fallback_options: List[TurnCandidate] = []
             for partial in fallback_pool[:12]:
                 self.check_time(False)
                 safety = self.assess_turn_safety(board, partial.board, original_turn)
@@ -2079,10 +2080,6 @@ class Searcher:
                     action_purposes = self.action_purpose_labels(
                         board, partial.moves, original_turn
                     )
-                    if any(
-                        "no_new_effect" in item["roles"] for item in action_purposes
-                    ):
-                        continue
                     if self.turn_number <= EARLY_GAME_LAST_TURN:
                         if not self.early_structure_allowed(
                             board,
@@ -2092,19 +2089,39 @@ class Searcher:
                             action_purposes,
                         ):
                             continue
-                    self.root_fallback = TurnCandidate(
-                        partial.moves,
-                        partial.board,
-                        partial.priority,
-                        self.quick_score(partial.board),
-                        0.0,
-                        True,
-                        purpose["net_purpose_penalty"],
-                        purpose["paratrooper_mission_penalty"],
-                        action_purposes,
-                        self.early_plan_score(action_purposes),
+                    fallback_options.append(
+                        TurnCandidate(
+                            partial.moves,
+                            partial.board,
+                            partial.priority,
+                            self.quick_score(partial.board),
+                            0.0,
+                            True,
+                            purpose["net_purpose_penalty"],
+                            purpose["paratrooper_mission_penalty"],
+                            action_purposes,
+                            self.early_plan_score(action_purposes),
+                        )
                     )
-                    break
+            if fallback_options:
+                # Judge the emergency line as a complete turn. A quiet setup
+                # action may survive when the resulting turn has a lower net
+                # waste cost than its alternatives; it is no longer rejected
+                # merely because that one action lacked an immediate label.
+                fallback_options.sort(
+                    key=lambda candidate: (
+                        candidate.purpose_penalty
+                        + candidate.paratrooper_mission_penalty,
+                        sum(
+                            "no_new_effect" in item["roles"]
+                            for item in candidate.action_purposes
+                        ),
+                        -candidate.early_plan_score,
+                        -candidate.priority,
+                        tuple(move.uci() for move in candidate.moves),
+                    )
+                )
+                self.root_fallback = fallback_options[0]
 
         candidates = []
         for partial in pool:
@@ -2309,7 +2326,13 @@ class Searcher:
 def greedy_complete_turn(
     board: engine.BaseBoard, personality: str, turn_number: int = 1
 ) -> SearchResult:
-    """Fast positional completion used only when no search depth finishes."""
+    """Fast positional completion used only when no search depth finishes.
+
+    This fallback must remain able to assemble a useful multi-action turn.
+    A quiet first action can unlock pressure, protection, or mobility on the
+    second action, so ``no_new_effect`` is a cost rather than an atomic-action
+    veto. Hard tactical rules still apply.
+    """
     working = board.copy()
     original_turn = working.turn
     moves: List[engine.Move] = []
@@ -2324,7 +2347,7 @@ def greedy_complete_turn(
         legal = list(working.generate_legal_moves())
         if not legal:
             break
-        candidates: List[Tuple[float, str, engine.Move]] = []
+        candidates: List[Tuple[float, float, str, engine.Move]] = []
         for move in legal:
             piece_type = Searcher.move_piece_type(working, move)
             if move.name == "Skip" and working.turn_moves < 2:
@@ -2360,8 +2383,6 @@ def greedy_complete_turn(
             candidate_purposes = fallback_rules.action_purpose_labels(
                 board, candidate_moves, original_turn
             )
-            if candidate_purposes and "no_new_effect" in candidate_purposes[-1]["roles"]:
-                continue
             if not fallback_rules.early_structure_allowed(
                 board,
                 child,
@@ -2370,6 +2391,12 @@ def greedy_complete_turn(
                 candidate_purposes,
             ):
                 continue
+            purpose_penalty = (
+                1.4
+                if candidate_purposes
+                and "no_new_effect" in candidate_purposes[-1]["roles"]
+                else 0.0
+            )
             if (
                 move.capture_preference is None
                 and move.from_square is not None
@@ -2405,22 +2432,30 @@ def greedy_complete_turn(
                     and piece_type != engine.AIRBORNE_INFANTRY
                     and not concrete_purpose
                 ):
-                    continue
+                    # Backfills, reversals, and quiet lateral actions are bad
+                    # when they accomplish nothing, but making them illegal
+                    # here caused the deadline fallback to reject every legal
+                    # move and double-skip live self-play games. Preserve them
+                    # as costly setup actions so a later action can supply the
+                    # turn's net purpose.
+                    purpose_penalty += 1.6 if move.to_square in vacated else 1.0
             red_score = quick_evaluation(child, turn_number)
             utility = red_score if original_turn == engine.RED else -red_score
-            candidates.append((utility, move.uci(), move))
+            utility -= purpose_penalty
+            candidates.append((utility, -purpose_penalty, move.uci(), move))
         if not candidates:
             skip = next((move for move in legal if move.name == "Skip"), None)
-            if skip is None:
+            if skip is None or working.turn_moves < 2:
                 break
             candidates.append((
                 quick_evaluation(working, turn_number)
                 if original_turn == engine.RED
                 else -quick_evaluation(working, turn_number),
+                0.0,
                 skip.uci(),
                 skip,
             ))
-        chosen = max(candidates, key=lambda item: (item[0], item[1]))[2]
+        chosen = max(candidates, key=lambda item: (item[0], item[1], item[2]))[3]
         if (
             chosen.from_square is not None
             and chosen.to_square is not None

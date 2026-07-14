@@ -419,6 +419,27 @@ class SearchTests(unittest.TestCase):
             )
         )
 
+    def test_greedy_fallback_does_not_double_skip_when_quiet_moves_exist(self):
+        # Batch vercel-6101331c-mrkqp2q4 reached this position with 28 legal
+        # non-skip actions. The old per-action purpose veto rejected all 28,
+        # selected skip, and the opponent repeated it for a false draw.
+        board = engine.BaseBoard(
+            "1i6/2i5/1i6/q4i2/5Ii1/4I1I1/7I/5Q2 - - b"
+        )
+        self.assertGreater(
+            sum(move.name != "Skip" for move in board.generate_legal_moves()),
+            0,
+        )
+        result = ghq_ai.greedy_complete_turn(
+            board, "fortress", turn_number=70
+        )
+        self.assertGreaterEqual(len(result.pv), 2)
+        self.assertNotEqual(result.pv[0].name, "Skip")
+        after = board.copy()
+        for move in result.pv:
+            after.push(move)
+        self.assertNotEqual(after.turn, board.turn)
+
     def test_diagonal_infantry_cover_removes_clean_para_capture(self):
         exposed = engine.BaseBoard(
             "2p4q/8/8/8/8/2R↑5/8/7Q - - b"

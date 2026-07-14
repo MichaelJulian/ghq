@@ -53,9 +53,9 @@ function loadBatches(): StoredBatch[] {
 export function SelfPlayRuns() {
   const [secret, setSecret] = useState("");
   const [games, setGames] = useState(24);
-  const [timeMs, setTimeMs] = useState(5_000);
+  const [timeMs, setTimeMs] = useState(20_000);
   const [depth, setDepth] = useState(2);
-  const [beam, setBeam] = useState(10);
+  const [beam, setBeam] = useState(6);
   const [batches, setBatches] = useState<StoredBatch[]>([]);
   const [statuses, setStatuses] = useState<Record<string, RunStatus>>({});
   const [busy, setBusy] = useState(false);

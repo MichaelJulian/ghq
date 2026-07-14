@@ -55,9 +55,9 @@ export async function POST(request: Request) {
     const input = (await request.json()) as StartBatchRequest;
     const games = integer(input.games, 12, 1, 100, "games");
     const seed = integer(input.seed, 20260714, 0, 0xffff_ffff, "seed") >>> 0;
-    const timeMs = integer(input.timeMs, 5_000, 50, 30_000, "timeMs");
+    const timeMs = integer(input.timeMs, 20_000, 50, 30_000, "timeMs");
     const maxDepth = integer(input.maxDepth, 2, 1, 3, "maxDepth");
-    const beamWidth = integer(input.beamWidth, 10, 2, 16, "beamWidth");
+    const beamWidth = integer(input.beamWidth, 6, 2, 16, "beamWidth");
     const maxTurns = integer(input.maxTurns, 160, 4, 400, "maxTurns");
     const repetitionLimit = integer(
       input.repetitionLimit,
