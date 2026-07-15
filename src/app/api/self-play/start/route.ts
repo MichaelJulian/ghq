@@ -118,7 +118,8 @@ export async function POST(request: Request) {
           competitors[
             (pairIndex +
               1 +
-              Math.floor(pairIndex / competitors.length)) %
+              (Math.floor(pairIndex / competitors.length) %
+                (competitors.length - 1))) %
               competitors.length
           ];
         const [redBase, blueBase] =
