@@ -51,7 +51,6 @@ function loadBatches(): StoredBatch[] {
 }
 
 export function SelfPlayRuns() {
-  const [secret, setSecret] = useState("");
   const [games, setGames] = useState(24);
   const [timeMs, setTimeMs] = useState(20_000);
   const [depth, setDepth] = useState(2);
@@ -78,21 +77,13 @@ export function SelfPlayRuns() {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(retained));
   };
 
-  const authorization = () => ({ Authorization: `Bearer ${secret.trim()}` });
-
   const startBatch = async () => {
-    if (!secret.trim()) {
-      setMessage(
-        "Enter SELF_PLAY_SECRET to launch a protected production batch."
-      );
-      return;
-    }
     setBusy(true);
     setMessage(undefined);
     try {
       const response = await fetch("/api/self-play/start", {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...authorization() },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           games,
           timeMs,
@@ -125,18 +116,13 @@ export function SelfPlayRuns() {
   };
 
   const refreshBatch = async () => {
-    if (!latest || !secret.trim()) {
-      setMessage("Enter SELF_PLAY_SECRET to read protected run results.");
-      return;
-    }
+    if (!latest) return;
     setBusy(true);
     setMessage(undefined);
     try {
       const responses = await Promise.all(
         latest.runs.map(async (run) => {
-          const response = await fetch(`/api/self-play/runs/${run.runId}`, {
-            headers: authorization(),
-          });
+          const response = await fetch(`/api/self-play/runs/${run.runId}`);
           const body = (await response.json()) as RunStatus & {
             error?: string;
           };
@@ -188,22 +174,12 @@ export function SelfPlayRuns() {
         </CardTitle>
         <p className="text-xs leading-5 text-slate-600">
           Launch independent durable games, then return here to refresh or
-          export their results. Run IDs persist in this browser; the secret
-          stays only in memory and is never saved.
+          export their results. Run IDs persist in this browser. Access to the
+          deployed lab is controlled by Vercel Authentication.
         </p>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="grid gap-2 md:grid-cols-5">
-          <label className="text-xs font-semibold text-slate-600 md:col-span-2">
-            SELF_PLAY_SECRET
-            <Input
-              type="password"
-              autoComplete="off"
-              value={secret}
-              onChange={(event) => setSecret(event.target.value)}
-              className="mt-1"
-            />
-          </label>
+        <div className="grid gap-2 md:grid-cols-4">
           <BatchNumber
             label="Games"
             value={games}

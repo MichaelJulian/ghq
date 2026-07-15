@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { start } from "workflow/api";
 import { PERSONALITIES } from "@/game/value-model/personalities";
 import type { PersonalityId } from "@/game/analysis/types";
-import { selfPlayAuthorized } from "@/server/self-play-auth";
 import {
   playDurableSelfPlayGame,
   type DurableSelfPlayCompetitor,
@@ -45,12 +44,6 @@ function integer(
 }
 
 export async function POST(request: Request) {
-  if (!selfPlayAuthorized(request)) {
-    return NextResponse.json(
-      { error: "Self-play authorization is not configured or is invalid" },
-      { status: process.env.SELF_PLAY_SECRET ? 401 : 503 }
-    );
-  }
   try {
     const input = (await request.json()) as StartBatchRequest;
     const games = integer(input.games, 12, 1, 100, "games");
