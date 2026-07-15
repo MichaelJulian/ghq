@@ -16,6 +16,8 @@ export interface FenAnalysisRequest {
   timeMs?: number;
   maxDepth?: number;
   beamWidth?: number;
+  /** Experimental policy cap; production GHQ permits three voluntary actions. */
+  maxActions?: 2 | 3;
   /** Zero is deterministic; larger values sample more broadly among safe near-best turns. */
   explorationTemperature?: number;
   explorationSeed?: number;
@@ -105,6 +107,7 @@ export interface GhqSearchResult {
     completed_depth_in_turns: number;
     requested_depth_in_turns: number;
     base_complete_turn_width: number;
+    max_actions: number;
     nodes: number;
     elapsed_ms: number;
     timed_out: boolean;

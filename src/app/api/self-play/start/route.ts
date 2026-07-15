@@ -20,6 +20,8 @@ interface StartBatchRequest {
   maxTurns?: number;
   repetitionLimit?: number;
   noProgressTurns?: number;
+  redMaxActions?: number;
+  blueMaxActions?: number;
   personalities?: PersonalityId[];
 }
 
@@ -66,6 +68,20 @@ export async function POST(request: Request) {
       100,
       "noProgressTurns"
     );
+    const redMaxActions = integer(
+      input.redMaxActions,
+      3,
+      2,
+      3,
+      "redMaxActions"
+    ) as 2 | 3;
+    const blueMaxActions = integer(
+      input.blueMaxActions,
+      3,
+      2,
+      3,
+      "blueMaxActions"
+    ) as 2 | 3;
     const personalityIds =
       input.personalities ?? (Object.keys(PERSONALITIES) as PersonalityId[]);
     if (
@@ -89,20 +105,36 @@ export async function POST(request: Request) {
         ),
       })
     );
-    const generationId = `vercel-${seed.toString(16)}-${Date.now().toString(
-      36
-    )}`;
+    const generationId = `vercel-r${redMaxActions}b${blueMaxActions}-${seed.toString(
+      16
+    )}-${Date.now().toString(36)}`;
     const runs = await Promise.all(
       Array.from({ length: games }, async (_, index) => {
-        const first = competitors[index % competitors.length];
+        // Adjacent games form a controlled color-swapped pair: same matchup and
+        // random seed, with only the personalities' colors reversed.
+        const pairIndex = Math.floor(index / 2);
+        const first = competitors[pairIndex % competitors.length];
         const second =
           competitors[
-            (index + 1 + Math.floor(index / competitors.length)) %
+            (pairIndex +
+              1 +
+              Math.floor(pairIndex / competitors.length)) %
               competitors.length
           ];
-        const [red, blue] = index % 2 ? [second, first] : [first, second];
+        const [redBase, blueBase] =
+          index % 2 ? [second, first] : [first, second];
+        const red: DurableSelfPlayCompetitor = {
+          ...redBase,
+          id: `${redBase.personality}-workflow-g0-a${redMaxActions}`,
+          maxActions: redMaxActions,
+        };
+        const blue: DurableSelfPlayCompetitor = {
+          ...blueBase,
+          id: `${blueBase.personality}-workflow-g0-a${blueMaxActions}`,
+          maxActions: blueMaxActions,
+        };
         const gameId = `${generationId}-${String(index + 1).padStart(4, "0")}`;
-        const gameSeed = (seed + Math.imul(index + 1, 0x85ebca6b)) >>> 0;
+        const gameSeed = (seed + Math.imul(pairIndex + 1, 0x85ebca6b)) >>> 0;
         const run = await start(playDurableSelfPlayGame, [
           {
             generationId,
@@ -118,7 +150,17 @@ export async function POST(request: Request) {
         return { gameId, runId: run.runId, red: red.id, blue: blue.id };
       })
     );
-    return NextResponse.json({ generationId, games, runs }, { status: 202 });
+    return NextResponse.json(
+      {
+        generationId,
+        games,
+        redMaxActions,
+        blueMaxActions,
+        pairedColorSwap: true,
+        runs,
+      },
+      { status: 202 }
+    );
   } catch (error) {
     return NextResponse.json(
       {

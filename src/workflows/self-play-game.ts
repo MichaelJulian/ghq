@@ -16,6 +16,7 @@ export interface DurableSelfPlayCompetitor {
   maxDepth: number;
   beamWidth: number;
   explorationTemperature: number;
+  maxActions?: 2 | 3;
 }
 
 export interface DurableSelfPlayGameConfig {
@@ -50,6 +51,10 @@ export interface DurableSelfPlayDecision {
   explorationTemperature: number;
   features: number[];
   completedTurn: boolean;
+  /** Missing on historical records, which used the standard three-action turn. */
+  selfActionLimit?: number;
+  /** Missing on historical records, which used the standard three-action turn. */
+  opponentActionLimit?: number;
 }
 
 interface DurableTurnStepInput {
@@ -59,6 +64,7 @@ interface DurableTurnStepInput {
   player: Player;
   competitor: DurableSelfPlayCompetitor;
   opponentId: string;
+  opponentMaxActions: number;
   explorationSeed: number;
 }
 
@@ -74,6 +80,8 @@ export interface DurableSelfPlayGameResult {
   seed: number;
   redAgentId: string;
   blueAgentId: string;
+  redMaxActions: number;
+  blueMaxActions: number;
   initialFen: string;
   finalFen: string;
   decisions: DurableSelfPlayDecision[];
@@ -122,6 +130,7 @@ async function playDurableTurn(
     timeMs: input.competitor.timeMs,
     maxDepth: input.competitor.maxDepth,
     beamWidth: input.competitor.beamWidth,
+    maxActions: input.competitor.maxActions ?? 3,
     explorationTemperature: input.competitor.explorationTemperature,
     explorationSeed: input.explorationSeed,
   });
@@ -161,6 +170,8 @@ async function playDurableTurn(
     completedTurn: Boolean(
       analysis.outcome || resultingState.currentPlayerTurn !== input.player
     ),
+    selfActionLimit: input.competitor.maxActions ?? 3,
+    opponentActionLimit: input.opponentMaxActions,
   };
   return {
     decision,
@@ -186,6 +197,8 @@ export function isDurableTrainingDecisionEligible(
       outcome.termination === "hq-capture" &&
       decision.selectedMoves.length > 0 &&
       decision.completedTurn &&
+      (decision.selfActionLimit ?? 3) === 3 &&
+      (decision.opponentActionLimit ?? 3) === 3 &&
       decision.fallback === "none" &&
       decision.completedDepth >= 1
   );
@@ -235,6 +248,7 @@ export async function playDurableSelfPlayGame(
       player,
       competitor,
       opponentId: opponent.id,
+      opponentMaxActions: opponent.maxActions ?? 3,
       explorationSeed: turnSeed(config.seed, turnNumber),
     });
     decisions.push(step.decision);
@@ -296,6 +310,8 @@ export async function playDurableSelfPlayGame(
     seed: config.seed >>> 0,
     redAgentId: config.red.id,
     blueAgentId: config.blue.id,
+    redMaxActions: config.red.maxActions ?? 3,
+    blueMaxActions: config.blue.maxActions ?? 3,
     initialFen,
     finalFen: fen ?? initialFen,
     decisions,

@@ -29,7 +29,8 @@ interface SearchModule extends PythonProxy {
     beamWidth: number,
     turnNumber: number,
     valueFunction: (fen: string, turnNumber: number) => number,
-    openingSeed: number
+    openingSeed: number,
+    maxActions: number
   ) => PythonProxy;
   evaluation_breakdown: (
     board: PythonBoard,
@@ -265,6 +266,13 @@ export async function analyzeFen(
   const timeMs = integerInRange(request.timeMs, 30_000, 50, 30_000, "timeMs");
   const maxDepth = integerInRange(request.maxDepth, 3, 1, 3, "maxDepth");
   const beamWidth = integerInRange(request.beamWidth, 8, 2, 16, "beamWidth");
+  const maxActions = integerInRange(
+    request.maxActions,
+    3,
+    2,
+    3,
+    "maxActions"
+  );
   const explorationTemperature = numberInRange(
     request.explorationTemperature,
     0,
@@ -302,7 +310,8 @@ export async function analyzeFen(
       beamWidth,
       turnNumber,
       redModelValue,
-      explorationSeed
+      explorationSeed,
+      maxActions
     );
     let searchResult: GhqSearchResult;
     try {

@@ -784,11 +784,13 @@ class Searcher:
         beam_width: int,
         turn_number: int = 1,
         value_function: Optional[Any] = None,
+        max_actions: int = 3,
     ) -> None:
         self.personality = personality
         self.time_ms = max(1, time_ms)
         self.turn_number = max(1, turn_number)
         self.value_function = value_function
+        self.max_actions = max(2, min(3, max_actions))
         self.deadline = time.monotonic() + max(1, time_ms) / 1000.0
         self.beam_width = max(1, beam_width)
         self.nodes = 0
@@ -1739,7 +1741,11 @@ class Searcher:
         # prevents a permanently retained Skip from beating quiet two-action
         # setup/extraction combinations after just one move.
         skip = next((move for move in diverse if move.name == "Skip"), None)
-        if board.turn_moves >= 2 and skip is not None and skip not in selected:
+        if (
+            board.turn_moves >= min(2, self.max_actions)
+            and skip is not None
+            and skip not in selected
+        ):
             selected.append(skip)
         return selected
 
@@ -2009,7 +2015,16 @@ class Searcher:
                 forced = all(move.name == "AutoCapture" for _, move in actions)
                 for priority, move in actions:
                     self.check_time(False)
-                    if move.name == "Skip" and partial.board.turn_moves < 2 and not forced:
+                    if (
+                        move.name == "Skip"
+                        and partial.board.turn_moves < min(2, self.max_actions)
+                        and not forced
+                    ):
+                        continue
+                    if (
+                        partial.board.turn_moves >= self.max_actions
+                        and move.name not in ("Skip", "AutoCapture")
+                    ):
                         continue
                     child = partial.board.copy()
                     child.push(move)
@@ -2324,7 +2339,10 @@ class Searcher:
 
 
 def greedy_complete_turn(
-    board: engine.BaseBoard, personality: str, turn_number: int = 1
+    board: engine.BaseBoard,
+    personality: str,
+    turn_number: int = 1,
+    max_actions: int = 3,
 ) -> SearchResult:
     """Fast positional completion used only when no search depth finishes.
 
@@ -2342,6 +2360,7 @@ def greedy_complete_turn(
         time_ms=60_000,
         beam_width=4,
         turn_number=turn_number,
+        max_actions=max_actions,
     )
     while working.turn == original_turn and not working.is_game_over():
         legal = list(working.generate_legal_moves())
@@ -2350,7 +2369,12 @@ def greedy_complete_turn(
         candidates: List[Tuple[float, float, str, engine.Move]] = []
         for move in legal:
             piece_type = Searcher.move_piece_type(working, move)
-            if move.name == "Skip" and working.turn_moves < 2:
+            if move.name == "Skip" and working.turn_moves < min(2, max_actions):
+                continue
+            if (
+                working.turn_moves >= max_actions
+                and move.name not in ("Skip", "AutoCapture")
+            ):
                 continue
             if (
                 move.name == "Reinforce"
@@ -2598,17 +2622,27 @@ def opening_book_turn(
             if mover == engine.RED
             else tuple(rotate_opening_uci(uci) for uci in normalized_ucis)
         )
+        planned_ucis = ucis[: searcher.max_actions]
         working = board.copy()
         moves: List[engine.Move] = []
-        for uci in ucis:
+        for uci in planned_ucis:
             legal = {move.uci(): move for move in working.generate_legal_moves()}
             move = legal.get(uci)
             if move is None:
                 break
             moves.append(move)
             working.push(move)
-        if len(moves) != len(ucis):
+        if len(moves) != len(planned_ucis):
             continue
+        if not working.is_game_over() and working.turn == mover:
+            skip = next(
+                (move for move in working.generate_legal_moves() if move.name == "Skip"),
+                None,
+            )
+            if skip is None:
+                continue
+            moves.append(skip)
+            working.push(skip)
         if not working.is_game_over() and working.turn == mover:
             continue
         try:
@@ -2643,6 +2677,7 @@ def search(
     turn_number: int = 1,
     value_function: Optional[Any] = None,
     opening_seed: int = 0,
+    max_actions: int = 3,
 ) -> Dict[str, Any]:
     started = time.monotonic()
     searcher = Searcher(
@@ -2651,6 +2686,7 @@ def search(
         beam_width,
         turn_number=turn_number,
         value_function=value_function,
+        max_actions=max_actions,
     )
     searcher.root_key = board.serialize()
     best: Optional[SearchResult] = None
@@ -2707,7 +2743,9 @@ def search(
             )
             fallback_kind = "safe"
         else:
-            best = greedy_complete_turn(board, personality, turn_number)
+            best = greedy_complete_turn(
+                board, personality, turn_number, max_actions=max_actions
+            )
             greedy_moves, greedy_board = first_turn_from_pv(board, best.pv)
             greedy_purpose = searcher.turn_purpose_breakdown(
                 board, greedy_board, greedy_moves, board.turn
@@ -2717,7 +2755,9 @@ def search(
             fallback_kind = "greedy"
     first_turn, resulting_board = first_turn_from_pv(board, best.pv)
     if not first_turn and not board.is_game_over():
-        fallback = greedy_complete_turn(board, personality, turn_number)
+        fallback = greedy_complete_turn(
+            board, personality, turn_number, max_actions=max_actions
+        )
         first_turn, resulting_board = first_turn_from_pv(board, fallback.pv)
         best = fallback
         greedy_purpose = searcher.turn_purpose_breakdown(
@@ -2841,6 +2881,7 @@ def search(
             "completed_depth_in_turns": completed_depth,
             "requested_depth_in_turns": max_depth,
             "base_complete_turn_width": beam_width,
+            "max_actions": searcher.max_actions,
             "nodes": searcher.nodes,
             "elapsed_ms": round(elapsed_ms, 2),
             "timed_out": timed_out,
@@ -2880,6 +2921,13 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         default=12,
         help="base width used for complete-turn candidate generation",
     )
+    parser.add_argument(
+        "--max-actions",
+        type=int,
+        choices=(2, 3),
+        default=3,
+        help="maximum voluntary actions before ending the turn",
+    )
     parser.add_argument("--personality", choices=sorted(PERSONALITIES), default="balanced")
     parser.add_argument("--compact", action="store_true", help="emit compact JSON")
     return parser.parse_args(argv)
@@ -2889,7 +2937,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     try:
         board = engine.BaseBoard(args.fen)
-        result = search(board, args.personality, args.time_ms, args.max_depth, args.beam_width)
+        result = search(
+            board,
+            args.personality,
+            args.time_ms,
+            args.max_depth,
+            args.beam_width,
+            max_actions=args.max_actions,
+        )
     except (ValueError, AssertionError) as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
         return 2
