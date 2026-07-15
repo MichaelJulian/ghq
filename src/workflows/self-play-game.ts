@@ -49,6 +49,7 @@ export interface DurableSelfPlayDecision {
   explorationSeed: number;
   explorationTemperature: number;
   features: number[];
+  completedTurn: boolean;
 }
 
 interface DurableTurnStepInput {
@@ -125,6 +126,7 @@ async function playDurableTurn(
     explorationSeed: input.explorationSeed,
   });
   const state = FENtoBoardState(analysis.fen);
+  const resultingState = FENtoBoardState(analysis.resultingFen);
   const decision: DurableSelfPlayDecision = {
     turnNumber: input.turnNumber,
     player: input.player,
@@ -156,6 +158,9 @@ async function playDurableTurn(
       },
       input.player
     ),
+    completedTurn: Boolean(
+      analysis.outcome || resultingState.currentPlayerTurn !== input.player
+    ),
   };
   return {
     decision,
@@ -180,6 +185,7 @@ export function isDurableTrainingDecisionEligible(
     outcome.winner &&
       outcome.termination === "hq-capture" &&
       decision.selectedMoves.length > 0 &&
+      decision.completedTurn &&
       decision.fallback === "none" &&
       decision.completedDepth >= 1
   );
@@ -214,9 +220,12 @@ export async function playDurableSelfPlayGame(
   let serializedState: string | undefined;
   let player: Player = "RED";
   let turnsWithoutProgress = 0;
+  let partialTurnAttempts = 0;
+  let pendingTurnMoves: string[] = [];
   let outcome: DurableSelfPlayGameResult["outcome"] | undefined;
 
-  for (let turnNumber = 1; turnNumber <= maxTurns && !outcome; turnNumber++) {
+  let turnNumber = 1;
+  while (turnNumber <= maxTurns && !outcome) {
     const competitor = player === "RED" ? config.red : config.blue;
     const opponent = player === "RED" ? config.blue : config.red;
     const step = await playDurableTurn({
@@ -232,8 +241,20 @@ export async function playDurableSelfPlayGame(
     fen = step.decision.resultingFen;
     serializedState = step.serializedState;
     outcome = step.outcome;
+    pendingTurnMoves.push(...step.decision.selectedMoves);
 
-    const madeProgress = step.decision.selectedMoves.some(actionMadeProgress);
+    const resultingPlayer = FENtoBoardState(fen).currentPlayerTurn;
+    const nextPlayer = resultingPlayer ?? (player === "RED" ? "BLUE" : "RED");
+    if (!outcome && !step.decision.completedTurn) {
+      partialTurnAttempts++;
+      player = nextPlayer;
+      if (partialTurnAttempts >= 3) {
+        outcome = { termination: "incomplete-turn" };
+      }
+      continue;
+    }
+
+    const madeProgress = pendingTurnMoves.some(actionMadeProgress);
     turnsWithoutProgress = madeProgress ? 0 : turnsWithoutProgress + 1;
     const occurrences = (positionOccurrences[fen] ?? 0) + 1;
     positionOccurrences[fen] = occurrences;
@@ -242,7 +263,10 @@ export async function playDurableSelfPlayGame(
     } else if (!outcome && turnsWithoutProgress >= noProgressTurns) {
       outcome = { termination: "no-progress" };
     }
-    player = player === "RED" ? "BLUE" : "RED";
+    player = nextPlayer;
+    pendingTurnMoves = [];
+    partialTurnAttempts = 0;
+    turnNumber++;
   }
 
   if (!outcome) outcome = { termination: "max-turns" };
