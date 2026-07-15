@@ -23,6 +23,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--report", required=True, type=Path)
+    parser.add_argument("--baseline", type=Path)
+    parser.add_argument("--self-play-train-share", type=float, default=0.5)
     parser.add_argument("--random-state", type=int, default=42)
     return parser.parse_args()
 
@@ -51,29 +53,73 @@ def load_dataset(path: Path) -> Tuple[List[str], List[Dict[str, Any]], np.ndarra
     return feature_names, rows, np.asarray(vectors, dtype=np.float64), np.asarray(labels, dtype=np.int8)
 
 
+def data_source(row: Dict[str, Any]) -> str:
+    return str(row.get("source") or ("vercel_self_play" if row.get("generation_id") else "human"))
+
+
 def chronological_split(rows: List[Dict[str, Any]]) -> Dict[str, np.ndarray]:
-    game_dates: Dict[str, str] = {}
+    game_dates: Dict[Tuple[str, str], str] = {}
     for row in rows:
-        game_dates[row["game_id"]] = row["created_at"]
-    games = sorted(game_dates, key=lambda game_id: (game_dates[game_id], game_id))
-    if len(games) < 30:
-        raise ValueError("at least 30 games are required for train/validation/test splits")
-    train_end = max(1, int(len(games) * 0.70))
-    validation_end = max(train_end + 1, int(len(games) * 0.85))
-    sets = {
-        "train": set(games[:train_end]),
-        "validation": set(games[train_end:validation_end]),
-        "test": set(games[validation_end:]),
+        key = (data_source(row), row["game_id"])
+        game_dates[key] = row["created_at"]
+    sets: Dict[str, set[Tuple[str, str]]] = {
+        "train": set(),
+        "validation": set(),
+        "test": set(),
     }
+    sources = sorted({source for source, _ in game_dates})
+    for source in sources:
+        games = sorted(
+            (key for key in game_dates if key[0] == source),
+            key=lambda key: (game_dates[key], key[1]),
+        )
+        if len(games) < 30:
+            raise ValueError(f"source {source} requires at least 30 games for splits")
+        train_end = max(1, int(len(games) * 0.70))
+        validation_end = max(train_end + 1, int(len(games) * 0.85))
+        sets["train"].update(games[:train_end])
+        sets["validation"].update(games[train_end:validation_end])
+        sets["test"].update(games[validation_end:])
     return {
-        name: np.asarray([index for index, row in enumerate(rows) if row["game_id"] in game_ids])
+        name: np.asarray(
+            [
+                index
+                for index, row in enumerate(rows)
+                if (data_source(row), row["game_id"]) in game_ids
+            ]
+        )
         for name, game_ids in sets.items()
     }
 
 
-def game_balanced_weights(rows: List[Dict[str, Any]], indices: np.ndarray) -> np.ndarray:
-    counts = Counter(rows[index]["game_id"] for index in indices)
-    weights = np.asarray([1.0 / counts[rows[index]["game_id"]] for index in indices])
+def game_balanced_weights(
+    rows: List[Dict[str, Any]],
+    indices: np.ndarray,
+    self_play_share: float = 0.5,
+) -> np.ndarray:
+    counts = Counter(
+        (data_source(rows[index]), rows[index]["game_id"]) for index in indices
+    )
+    source_games: Dict[str, set[str]] = {}
+    for index in indices:
+        source_games.setdefault(data_source(rows[index]), set()).add(rows[index]["game_id"])
+    if len(source_games) == 1:
+        source_weight = {next(iter(source_games)): 1.0}
+    elif set(source_games) == {"human", "vercel_self_play"}:
+        source_weight = {
+            "human": 1.0 - self_play_share,
+            "vercel_self_play": self_play_share,
+        }
+    else:
+        source_weight = {source: 1.0 / len(source_games) for source in source_games}
+    weights = np.asarray(
+        [
+            source_weight[data_source(rows[index])]
+            / counts[(data_source(rows[index]), rows[index]["game_id"])]
+            / len(source_games[data_source(rows[index])])
+            for index in indices
+        ]
+    )
     return weights / weights.mean()
 
 
@@ -103,14 +149,42 @@ def metrics(labels: np.ndarray, probabilities: np.ndarray, weights: np.ndarray) 
 
 
 def latest_position_indices(rows: List[Dict[str, Any]], indices: np.ndarray) -> np.ndarray:
-    latest: Dict[Tuple[str, str], Tuple[int, int]] = {}
+    latest: Dict[Tuple[str, str, str], Tuple[int, int]] = {}
     for index in indices:
         row = rows[index]
-        key = (row["game_id"], row["perspective"])
+        key = (data_source(row), row["game_id"], row["perspective"])
         candidate = (int(row["turn"]), int(index))
         if key not in latest or candidate[0] > latest[key][0]:
             latest[key] = candidate
     return np.asarray([item[1] for item in latest.values()])
+
+
+def metrics_by_source(
+    rows: List[Dict[str, Any]],
+    indices: np.ndarray,
+    labels: np.ndarray,
+    probabilities: np.ndarray,
+) -> Dict[str, Any]:
+    probability_by_index = {
+        int(index): probabilities[offset] for offset, index in enumerate(indices)
+    }
+    result: Dict[str, Any] = {}
+    for source in sorted({data_source(rows[index]) for index in indices}):
+        source_indices = np.asarray(
+            [index for index in indices if data_source(rows[index]) == source]
+        )
+        source_probabilities = np.asarray(
+            [probability_by_index[int(index)] for index in source_indices]
+        )
+        source_weights = game_balanced_weights(rows, source_indices)
+        result[source] = metrics(
+            labels[source_indices], source_probabilities, source_weights
+        )
+        result[source]["games"] = len(
+            {rows[index]["game_id"] for index in source_indices}
+        )
+        result[source]["samples"] = len(source_indices)
+    return result
 
 
 def export_tree(tree: Any) -> Dict[str, Any]:
@@ -145,9 +219,15 @@ def exported_probabilities(artifact: Dict[str, Any], vectors: np.ndarray) -> np.
 
 def main() -> None:
     args = parse_args()
+    if not 0.0 < args.self_play_train_share < 1.0:
+        raise ValueError("self-play-train-share must be between zero and one")
     feature_names, rows, vectors, labels = load_dataset(args.dataset)
     splits = chronological_split(rows)
     weights = {name: game_balanced_weights(rows, indices) for name, indices in splits.items()}
+    fit_weights = {
+        name: game_balanced_weights(rows, indices, args.self_play_train_share)
+        for name, indices in splits.items()
+    }
 
     candidates = [
         {"n_estimators": 120, "max_depth": 2, "learning_rate": 0.05, "min_samples_leaf": 30},
@@ -168,14 +248,14 @@ def main() -> None:
         model.fit(
             vectors[train_indices],
             labels[train_indices],
-            sample_weight=weights["train"],
+            sample_weight=fit_weights["train"],
         )
         validation_probability = model.predict_proba(vectors[validation_indices])[:, 1]
         score = float(
             log_loss(
                 labels[validation_indices],
                 validation_probability,
-                sample_weight=weights["validation"],
+                sample_weight=fit_weights["validation"],
             )
         )
         print(json.dumps({"candidate": parameters, "validation_log_loss": round(score, 6)}))
@@ -187,7 +267,7 @@ def main() -> None:
     calibrator.fit(
         safe_logit(validation_raw_probability).reshape(-1, 1),
         labels[validation_indices],
-        sample_weight=weights["validation"],
+        sample_weight=fit_weights["validation"],
     )
     calibration_scale = float(calibrator.coef_[0, 0])
     calibration_intercept = float(calibrator.intercept_[0])
@@ -208,6 +288,26 @@ def main() -> None:
         )
         split_metrics[name]["games"] = len({rows[index]["game_id"] for index in indices})
         split_metrics[name]["samples"] = len(indices)
+        split_metrics[name]["by_source"] = metrics_by_source(
+            rows, indices, labels, probability
+        )
+
+    baseline_metrics: Dict[str, Any] | None = None
+    if args.baseline:
+        baseline_artifact = json.loads(args.baseline.read_text(encoding="utf-8"))
+        if baseline_artifact.get("feature_names") != feature_names:
+            raise ValueError("baseline feature schema does not match dataset")
+        baseline_metrics = {}
+        for name, indices in splits.items():
+            probability = exported_probabilities(baseline_artifact, vectors[indices])
+            baseline_metrics[name] = metrics(labels[indices], probability, weights[name])
+            baseline_metrics[name]["games"] = len(
+                {rows[index]["game_id"] for index in indices}
+            )
+            baseline_metrics[name]["samples"] = len(indices)
+            baseline_metrics[name]["by_source"] = metrics_by_source(
+                rows, indices, labels, probability
+            )
 
     priors = model.init_.class_prior_
     base_raw_score = math.log(float(priors[1]) / float(priors[0]))
@@ -229,8 +329,9 @@ def main() -> None:
         "metadata": {
             "target": "probability that the perspective player eventually wins",
             "eligible_outcomes": sorted({row["outcome_reason"] for row in rows}),
-            "split": "chronological 70/15/15 by whole game",
+            "split": "source-stratified chronological 70/15/15 by whole game",
             "hyperparameters": best_parameters,
+            "self_play_train_share": args.self_play_train_share,
             "metrics": split_metrics,
             "feature_importance": [
                 {"feature": name, "importance": round(float(importance), 8)}
@@ -253,13 +354,18 @@ def main() -> None:
         "format": artifact["format"],
         "best_hyperparameters": best_parameters,
         "metrics": split_metrics,
+        "baseline_metrics": baseline_metrics,
         "feature_importance": artifact["metadata"]["feature_importance"],
         "export_parity_max_absolute_error": max_export_error,
         "feature_count": len(feature_names),
         "tree_count": len(artifact["trees"]),
-        "games": len({row["game_id"] for row in rows}),
-        "positions": len(rows) // 2,
+        "games": len({(data_source(row), row["game_id"]) for row in rows}),
+        "positions": len(
+            {(data_source(row), row["game_id"], row["turn"]) for row in rows}
+        ),
         "samples": len(rows),
+        "self_play_train_share": args.self_play_train_share,
+        "sources": dict(Counter(data_source(row) for row in rows)),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.report.parent.mkdir(parents=True, exist_ok=True)
