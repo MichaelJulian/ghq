@@ -18,6 +18,8 @@ interface RunReference {
 interface StoredBatch {
   generationId: string;
   createdAt: string;
+  redMaxActions?: number;
+  blueMaxActions?: number;
   runs: RunReference[];
 }
 
@@ -46,6 +48,8 @@ interface RunStatus {
 
 interface StartResponse {
   generationId: string;
+  redMaxActions: number;
+  blueMaxActions: number;
   runs: RunReference[];
   error?: string;
 }
@@ -124,6 +128,8 @@ export function SelfPlayRuns() {
           maxTurns: 160,
           repetitionLimit: 3,
           noProgressTurns: 24,
+          redMaxActions: 2,
+          blueMaxActions: 2,
           seed: Date.now() >>> 0,
         }),
       });
@@ -133,11 +139,15 @@ export function SelfPlayRuns() {
         {
           generationId: body.generationId,
           createdAt: new Date().toISOString(),
+          redMaxActions: body.redMaxActions,
+          blueMaxActions: body.blueMaxActions,
           runs: body.runs,
         },
         ...batches,
       ]);
-      setMessage(`${body.runs.length} durable games launched on Vercel.`);
+      setMessage(
+        `${body.runs.length} durable 2-action games launched on Vercel.`
+      );
     } catch (error) {
       setMessage(
         error instanceof Error ? error.message : "Batch launch failed"
@@ -209,7 +219,7 @@ export function SelfPlayRuns() {
           Launch independent durable games. Completed games and quality-gated
           training samples are saved to private Vercel Blob storage; run IDs
           also persist in this browser. Access is controlled by Vercel
-          Authentication.
+          Authentication. Self-play currently uses two actions per side.
         </p>
       </CardHeader>
       <CardContent className="space-y-4">
