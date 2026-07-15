@@ -34,6 +34,7 @@
     "@supabase/supabase-js": "^2.46.1",
     "@types/koa-bodyparser": "^4.3.12",
     "@uidotdev/usehooks": "^2.4.1",
+    "@vercel/blob": "^2.6.1",
     "@xstate/react": "^4.1.3",
     "bgio-postgres": "^1.0.15",
     "boardgame.io": "^0.50.2",

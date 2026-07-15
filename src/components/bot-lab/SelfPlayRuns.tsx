@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Activity, Download, RefreshCw, Rocket } from "lucide-react";
+import { Activity, Database, Download, RefreshCw, Rocket } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -26,6 +26,15 @@ interface GameResult {
   decisions: unknown[];
   outcome: { winner?: "RED" | "BLUE"; termination: string };
   trainingPositions: number;
+  storage?: { status: "saved" | "not-configured" };
+}
+
+interface PersistedGeneration {
+  generationId: string;
+  gameArtifacts: number;
+  trainingArtifacts: number;
+  bytes: number;
+  updatedAt: string;
 }
 
 interface RunStatus {
@@ -59,8 +68,15 @@ export function SelfPlayRuns() {
   const [statuses, setStatuses] = useState<Record<string, RunStatus>>({});
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string>();
+  const [savedGenerations, setSavedGenerations] = useState<
+    PersistedGeneration[]
+  >([]);
+  const [storageConfigured, setStorageConfigured] = useState<boolean>();
 
-  useEffect(() => setBatches(loadBatches()), []);
+  useEffect(() => {
+    setBatches(loadBatches());
+    void refreshSavedGenerations();
+  }, []);
 
   const latest = batches[0];
   const latestStatuses = useMemo(
@@ -75,6 +91,22 @@ export function SelfPlayRuns() {
     const retained = next.slice(0, 12);
     setBatches(retained);
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(retained));
+  };
+
+  const refreshSavedGenerations = async () => {
+    try {
+      const response = await fetch("/api/self-play/generations");
+      const body = (await response.json()) as {
+        configured?: boolean;
+        generations?: PersistedGeneration[];
+        error?: string;
+      };
+      if (!response.ok) throw new Error(body.error ?? "Storage lookup failed");
+      setStorageConfigured(Boolean(body.configured));
+      setSavedGenerations(body.generations ?? []);
+    } catch {
+      setStorageConfigured(false);
+    }
   };
 
   const startBatch = async () => {
@@ -135,6 +167,7 @@ export function SelfPlayRuns() {
         ...current,
         ...Object.fromEntries(responses.map((run) => [run.runId, run])),
       }));
+      await refreshSavedGenerations();
       setMessage(
         `${responses.filter((run) => run.status === "completed").length}/${
           responses.length
@@ -173,9 +206,10 @@ export function SelfPlayRuns() {
           <Rocket className="text-indigo-700" /> Vercel self-play batches
         </CardTitle>
         <p className="text-xs leading-5 text-slate-600">
-          Launch independent durable games, then return here to refresh or
-          export their results. Run IDs persist in this browser. Access to the
-          deployed lab is controlled by Vercel Authentication.
+          Launch independent durable games. Completed games and quality-gated
+          training samples are saved to private Vercel Blob storage; run IDs
+          also persist in this browser. Access is controlled by Vercel
+          Authentication.
         </p>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -229,6 +263,13 @@ export function SelfPlayRuns() {
           >
             <Download /> Export results
           </Button>
+          <Button
+            variant="outline"
+            onClick={() => void refreshSavedGenerations()}
+            disabled={busy}
+          >
+            <Database /> Refresh saved
+          </Button>
         </div>
         {message && (
           <div className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
@@ -280,6 +321,43 @@ export function SelfPlayRuns() {
             </div>
           </div>
         )}
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <div className="flex items-center gap-2 text-sm font-bold text-slate-800">
+            <Database className="h-4 w-4 text-indigo-700" /> Persistent training
+            store
+          </div>
+          {storageConfigured === false ? (
+            <p className="mt-2 text-xs text-amber-800">
+              No private Vercel Blob store is connected yet. Games still run,
+              but permanent storage is disabled until the project has a Blob
+              store.
+            </p>
+          ) : savedGenerations.length ? (
+            <div className="mt-2 max-h-40 space-y-1 overflow-y-auto">
+              {savedGenerations.slice(0, 12).map((generation) => (
+                <div
+                  key={generation.generationId}
+                  className="grid gap-1 rounded bg-white px-2 py-2 text-xs md:grid-cols-[1fr_auto]"
+                >
+                  <span className="font-mono text-slate-600">
+                    {generation.generationId}
+                  </span>
+                  <span className="font-semibold text-slate-700">
+                    {generation.gameArtifacts} games ·{" "}
+                    {generation.trainingArtifacts} training files ·{" "}
+                    {(generation.bytes / 1_000_000).toFixed(1)} MB
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 text-xs text-slate-500">
+              {storageConfigured
+                ? "No completed Vercel games have been saved yet."
+                : "Checking storage…"}
+            </p>
+          )}
+        </div>
       </CardContent>
     </Card>
   );

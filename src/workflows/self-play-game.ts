@@ -4,6 +4,10 @@ import type { Player } from "@/game/engine-v2";
 import { FENtoBoardState } from "@/game/notation";
 import { extractValueFeatures } from "@/game/value-model/features";
 import { analyzeFen } from "@/server/fen-analysis";
+import {
+  persistSelfPlayArtifacts,
+  type PersistedSelfPlayArtifacts,
+} from "@/server/self-play-storage";
 
 export interface DurableSelfPlayCompetitor {
   id: string;
@@ -75,6 +79,33 @@ export interface DurableSelfPlayGameResult {
   outcome: { winner?: Player; termination: string };
   completed: boolean;
   trainingPositions: number;
+  quality: DurableSelfPlayQuality;
+  storage: PersistedSelfPlayArtifacts;
+}
+
+export interface DurableSelfPlayQuality {
+  decisions: number;
+  eligibleDecisions: number;
+  completedSearches: number;
+  fallbackDecisions: number;
+  timedOutDecisions: number;
+  decisive: boolean;
+}
+
+interface DurableTrainingSample {
+  generationId: string;
+  gameId: string;
+  turnNumber: number;
+  player: Player;
+  agentId: string;
+  opponentId: string;
+  personality: PersonalityId;
+  fen: string;
+  features: number[];
+  outcomeValue: number;
+  winner: Player;
+  selectedMoves: string[];
+  completedDepth: number;
 }
 
 async function playDurableTurn(
@@ -141,6 +172,33 @@ function turnSeed(seed: number, turnNumber: number): number {
   return (seed + Math.imul(turnNumber, 0x9e3779b1)) >>> 0;
 }
 
+export function isDurableTrainingDecisionEligible(
+  decision: DurableSelfPlayDecision,
+  outcome: DurableSelfPlayGameResult["outcome"]
+): outcome is { winner: Player; termination: string } {
+  return Boolean(
+    outcome.winner &&
+      outcome.termination === "hq-capture" &&
+      decision.selectedMoves.length > 0 &&
+      decision.fallback === "none" &&
+      decision.completedDepth >= 1
+  );
+}
+
+async function persistDurableGame(input: {
+  result: Omit<DurableSelfPlayGameResult, "storage">;
+  trainingSamples: DurableTrainingSample[];
+}): Promise<PersistedSelfPlayArtifacts> {
+  "use step";
+
+  return persistSelfPlayArtifacts({
+    generationId: input.result.generationId,
+    gameId: input.result.gameId,
+    game: input.result,
+    trainingSamples: input.trainingSamples,
+  });
+}
+
 export async function playDurableSelfPlayGame(
   config: DurableSelfPlayGameConfig
 ): Promise<DurableSelfPlayGameResult> {
@@ -188,7 +246,27 @@ export async function playDurableSelfPlayGame(
   }
 
   if (!outcome) outcome = { termination: "max-turns" };
-  return {
+  const eligibleDecisions = decisions.filter((decision) =>
+    isDurableTrainingDecisionEligible(decision, outcome)
+  );
+  const trainingSamples: DurableTrainingSample[] = outcome.winner
+    ? eligibleDecisions.map((decision) => ({
+        generationId: config.generationId,
+        gameId: config.gameId,
+        turnNumber: decision.turnNumber,
+        player: decision.player,
+        agentId: decision.agentId,
+        opponentId: decision.opponentId,
+        personality: decision.personality,
+        fen: decision.fen,
+        features: decision.features,
+        outcomeValue: decision.player === outcome.winner ? 1 : 0,
+        winner: outcome.winner!,
+        selectedMoves: decision.selectedMoves,
+        completedDepth: decision.completedDepth,
+      }))
+    : [];
+  const result: Omit<DurableSelfPlayGameResult, "storage"> = {
     generationId: config.generationId,
     gameId: config.gameId,
     seed: config.seed >>> 0,
@@ -199,6 +277,22 @@ export async function playDurableSelfPlayGame(
     decisions,
     outcome,
     completed: outcome.termination !== "max-turns",
-    trainingPositions: outcome.winner ? decisions.length : 0,
+    trainingPositions: trainingSamples.length,
+    quality: {
+      decisions: decisions.length,
+      eligibleDecisions: trainingSamples.length,
+      completedSearches: decisions.filter(
+        (decision) =>
+          decision.completedDepth >= 1 && decision.fallback === "none"
+      ).length,
+      fallbackDecisions: decisions.filter(
+        (decision) => decision.fallback !== "none"
+      ).length,
+      timedOutDecisions: decisions.filter((decision) => decision.timedOut)
+        .length,
+      decisive: outcome.winner !== undefined,
+    },
   };
+  const storage = await persistDurableGame({ result, trainingSamples });
+  return { ...result, storage };
 }
