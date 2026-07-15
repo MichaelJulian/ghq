@@ -45,23 +45,23 @@ export async function persistSelfPlayArtifacts(input: {
     .map((sample) => JSON.stringify(sample))
     .join("\n");
 
-  const [gameBlob, trainingBlob] = await Promise.all([
-    put(gamePathname, JSON.stringify(input.game), {
-      access: "private",
-      addRandomSuffix: false,
-      contentType: "application/json",
-    }),
-    put(trainingPathname, trainingBody, {
-      access: "private",
-      addRandomSuffix: false,
-      contentType: "application/x-ndjson",
-    }),
-  ]);
+  const gameBlob = await put(gamePathname, JSON.stringify(input.game), {
+    access: "private",
+    addRandomSuffix: false,
+    contentType: "application/json",
+  });
+  const trainingBlob = trainingBody
+    ? await put(trainingPathname, trainingBody, {
+        access: "private",
+        addRandomSuffix: false,
+        contentType: "application/x-ndjson",
+      })
+    : undefined;
 
   return {
     status: "saved",
     gamePathname: gameBlob.pathname,
-    trainingPathname: trainingBlob.pathname,
+    trainingPathname: trainingBlob?.pathname,
     trainingSamples: input.trainingSamples.length,
   };
 }

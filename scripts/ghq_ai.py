@@ -2444,14 +2444,51 @@ def greedy_complete_turn(
             utility -= purpose_penalty
             candidates.append((utility, -purpose_penalty, move.uci(), move))
         if not candidates:
+            # Positional rules are preferences, not permission to return a
+            # corrupt half-turn.  If the strict fallback filters every action,
+            # retry ordinary moves with a large penalty while retaining the
+            # hard paratrooper and opening-frontier prohibitions.  This is
+            # especially important when search times out after one action:
+            # the serialized position is mid-turn and must still be completed.
+            for move in legal:
+                piece_type = Searcher.move_piece_type(working, move)
+                if move.name in ("Skip", "AutoCapture"):
+                    continue
+                if (
+                    move.name == "Reinforce"
+                    and piece_type == engine.AIRBORNE_INFANTRY
+                    and move.capture_preference is None
+                ):
+                    continue
+                if not fallback_rules.early_extension_allowed(working, move):
+                    continue
+                if (
+                    piece_type == engine.AIRBORNE_INFANTRY
+                    and move.name != "Reinforce"
+                    and move.capture_preference is None
+                    and move.from_square is not None
+                    and move.to_square is not None
+                    and fallback_rules.home_distance(move.to_square, working.turn)
+                    >= fallback_rules.home_distance(move.from_square, working.turn)
+                ):
+                    continue
+                child = working.copy()
+                child.push(move)
+                red_score = quick_evaluation(child, turn_number)
+                utility = red_score if original_turn == engine.RED else -red_score
+                candidates.append((utility - 8.0, -8.0, move.uci(), move))
+
+        if not candidates:
+            # Ending early is preferable to emitting an invalid partial turn.
+            # The production engine decides whether Skip is legal here.
             skip = next((move for move in legal if move.name == "Skip"), None)
-            if skip is None or working.turn_moves < 2:
+            if skip is None:
                 break
             candidates.append((
                 quick_evaluation(working, turn_number)
                 if original_turn == engine.RED
                 else -quick_evaluation(working, turn_number),
-                0.0,
+                -12.0,
                 skip.uci(),
                 skip,
             ))

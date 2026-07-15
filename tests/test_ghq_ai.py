@@ -601,6 +601,29 @@ class SearchTests(unittest.TestCase):
         self.assertNotEqual(replay.turn, board.turn)
         self.assertEqual(replay.board_fen(), result["best_turn"]["resulting_fen"])
 
+    def test_greedy_fallback_completes_a_one_action_hq_only_turn(self):
+        board = engine.BaseBoard(
+            "q6i/8/8/2ii1i2/1i4i1/r→7/8/5Q2 - - r"
+        )
+        board.push(
+            next(
+                move
+                for move in board.generate_legal_moves()
+                if move.uci() == "f1g2"
+            )
+        )
+        self.assertEqual(
+            [move.uci() for move in board.generate_legal_moves()], ["skip"]
+        )
+
+        result = ghq_ai.greedy_complete_turn(
+            board, "balanced", turn_number=61
+        )
+        self.assertEqual([move.uci() for move in result.pv], ["skip"])
+        for move in result.pv:
+            board.push(move)
+        self.assertEqual(board.turn, engine.BLUE)
+
     def test_search_takes_an_immediate_hq_capture(self):
         board = engine.BaseBoard("qI6/8/1I6/8/8/8/8/7Q - - r")
         result = ghq_ai.search(board, "balanced", time_ms=1000, max_depth=1, beam_width=8)
