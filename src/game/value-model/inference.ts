@@ -113,5 +113,23 @@ export function predictWinProbability(
   );
 }
 
+/**
+ * Convert the independently calibrated perspective predictions into the
+ * zero-sum probability required by minimax. Without this normalization both
+ * sides can be above 50%, which injects a fixed Red offset when Python search
+ * consumes only the Red prediction.
+ */
+export function predictZeroSumWinProbability(
+  position: ValuePosition,
+  perspective: Player,
+  ruleset: ValueModelRuleset = "three-actions"
+): number {
+  const opponent = perspective === "RED" ? "BLUE" : "RED";
+  const own = predictWinProbability(position, perspective, ruleset);
+  const other = predictWinProbability(position, opponent, ruleset);
+  const total = own + other;
+  return total > 0 ? own / total : 0.5;
+}
+
 export const VALUE_MODEL_METADATA = model.metadata;
 export const TWO_ACTION_VALUE_MODEL_METADATA = twoActionModel.metadata;

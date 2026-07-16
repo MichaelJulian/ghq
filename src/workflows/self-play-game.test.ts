@@ -3,6 +3,7 @@
 import { describe, expect, it } from "@jest/globals";
 import {
   durableGameTrainingRejectionReasons,
+  isDurableTrainingDecisionEligible,
   type DurableSelfPlayDecision,
 } from "./self-play-game";
 
@@ -22,7 +23,7 @@ function decision(
     candidateTurns: [],
     currentPlayerScore: 0,
     winProbability: 0.5,
-    completedDepth: 1,
+    completedDepth: 2,
     timedOut: false,
     fallback: "none",
     explorationSeed: 1,
@@ -36,6 +37,17 @@ function decision(
 }
 
 describe("durable self-play training quality", () => {
+  it("requires a complete opponent reply for an individual training label", () => {
+    const outcome = { winner: "RED" as const, termination: "hq-capture" };
+    expect(isDurableTrainingDecisionEligible(decision(), outcome)).toBe(true);
+    expect(
+      isDurableTrainingDecisionEligible(
+        decision({ completedDepth: 1 }),
+        outcome
+      )
+    ).toBe(false);
+  });
+
   it("accepts a clean three-action HQ-capture game", () => {
     expect(
       durableGameTrainingRejectionReasons(

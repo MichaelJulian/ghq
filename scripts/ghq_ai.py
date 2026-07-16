@@ -210,6 +210,28 @@ def color_name(color: bool) -> str:
     return "blue" if color == engine.BLUE else "red"
 
 
+def normalized_move_uci(move: engine.Move, color: bool) -> str:
+    """Use the same lexical tie-break from either color's perspective."""
+    if color == engine.RED:
+        return move.uci()
+    rotated = engine.Move(
+        name=move.name,
+        from_square=None if move.from_square is None else 63 - move.from_square,
+        to_square=None if move.to_square is None else 63 - move.to_square,
+        unit_type=move.unit_type,
+        orientation=None if move.orientation is None else (move.orientation + 4) % 8,
+        capture_preference=(
+            None if move.capture_preference is None else 63 - move.capture_preference
+        ),
+        auto_capture_type=move.auto_capture_type,
+    )
+    return rotated.uci()
+
+
+def normalized_turn_key(moves: Sequence[engine.Move], color: bool) -> Tuple[str, ...]:
+    return tuple(normalized_move_uci(move, color) for move in moves)
+
+
 def material_for(board: engine.BaseBoard, color: bool) -> float:
     total = 0.0
     for piece_type, value in PIECE_VALUES.items():
@@ -391,7 +413,17 @@ def overextension_penalty(board: engine.BaseBoard, color: bool) -> float:
         piece_type = board.piece_type_at(square)
         if piece_type is not None:
             rank_power[engine.square_rank(square)] += PIECE_VALUES[piece_type]
-    anchor = max(range(8), key=lambda rank: rank_power[rank])
+    # Ties must be resolved from the moving side's perspective. The old
+    # physical-rank tie-break always selected the lowest board rank, which
+    # made otherwise mirrored positions evaluate differently and materially
+    # favored Red in self-play. Prefer the rearmost equally powerful rank.
+    anchor = max(
+        range(8),
+        key=lambda rank: (
+            rank_power[rank],
+            -(rank if color == engine.RED else 7 - rank),
+        ),
+    )
     penalty = 0.0
     for square in units:
         advance = engine.square_rank(square) - anchor if color == engine.RED else anchor - engine.square_rank(square)
@@ -814,6 +846,10 @@ class Searcher:
         self.root_key: Optional[str] = None
         self.root_fallback: Optional[TurnCandidate] = None
         self.root_ranked_turns: List[Tuple[float, TurnCandidate]] = []
+        # Search begins with a deliberately narrow depth-two pass. Only after
+        # every retained root has a complete opponent reply may the broader
+        # user-requested beam consume the remaining budget.
+        self.verification_mode = False
 
     def check_time(self, count_node: bool = True) -> None:
         if count_node:
@@ -1703,7 +1739,10 @@ class Searcher:
             self.exhaustive_within_horizon = False
             self.rule_filtered_actions += len(legal) - len(moves)
 
-        scored = [(self.move_priority(board, move), move.uci(), move) for move in moves]
+        scored = [
+            (self.move_priority(board, move), normalized_move_uci(move, board.turn), move)
+            for move in moves
+        ]
         scored.sort(key=lambda item: (-item[0], item[1]))
 
         # Collapse orientation clones before applying the beam. The strongest
@@ -1759,24 +1798,61 @@ class Searcher:
         return selected
 
     @staticmethod
-    def _prefer_partial(candidate: PartialTurn, incumbent: PartialTurn) -> bool:
+    def _prefer_partial(
+        candidate: PartialTurn, incumbent: PartialTurn, color: bool
+    ) -> bool:
         if candidate.priority != incumbent.priority:
             return candidate.priority > incumbent.priority
-        return tuple(move.uci() for move in candidate.moves) < tuple(move.uci() for move in incumbent.moves)
+        return normalized_turn_key(candidate.moves, color) < normalized_turn_key(
+            incumbent.moves, color
+        )
 
-    @staticmethod
-    def _round_robin_partials(partials: Sequence[PartialTurn], limit: int) -> List[PartialTurn]:
+    def _round_robin_partials(
+        self,
+        partials: Sequence[PartialTurn],
+        limit: int,
+        color: bool,
+        root: engine.BaseBoard,
+    ) -> List[PartialTurn]:
         """Preserve multiple first actions instead of one prolific branch."""
+        def plan_rank(partial: PartialTurn) -> int:
+            keys = self.turn_plan_keys(root, partial.moves)
+            return (
+                0
+                if any(
+                    key[0]
+                    in (
+                        "airborne_extraction",
+                        "unlock_and_extract",
+                        "escape_and_extract",
+                    )
+                    for key in keys
+                )
+                else 1
+            )
+
         groups: Dict[str, List[PartialTurn]] = {}
         for partial in partials:
-            first = partial.moves[0].uci() if partial.moves else ""
+            first = normalized_move_uci(partial.moves[0], color) if partial.moves else ""
             groups.setdefault(first, []).append(partial)
         for values in groups.values():
-            values.sort(key=lambda item: (-item.priority, tuple(move.uci() for move in item.moves)))
+            values.sort(
+                key=lambda item: (
+                    plan_rank(item),
+                    -item.priority,
+                    normalized_turn_key(item.moves, color),
+                )
+            )
 
         ordered_groups = sorted(
             groups.values(),
-            key=lambda values: (-values[0].priority, values[0].moves[0].uci() if values[0].moves else ""),
+            key=lambda values: (
+                plan_rank(values[0]),
+                -values[0].priority,
+                normalized_move_uci(values[0].moves[0], color)
+                if values[0].moves
+                else "",
+            ),
         )
         selected: List[PartialTurn] = []
         round_index = 0
@@ -1871,7 +1947,7 @@ class Searcher:
             -(candidate.static_score if color == engine.RED else -candidate.static_score),
             len(candidate.moves) if candidate.board.is_game_over() else 99,
             -candidate.priority,
-            tuple(move.uci() for move in candidate.moves),
+            normalized_turn_key(candidate.moves, color),
         )
 
     def select_diverse_turns(
@@ -1898,6 +1974,19 @@ class Searcher:
             if wasteful:
                 rotation_count += 1
             return True
+
+        # Forced wins are not merely another action class. Keep the shortest
+        # terminal turn first so an irrelevant setup action cannot precede an
+        # already available HQ combination.
+        terminal = sorted(
+            (candidate for candidate in eligible if candidate.board.is_game_over()),
+            key=lambda candidate: (
+                len(candidate.moves),
+                normalized_turn_key(candidate.moves, board.turn),
+            ),
+        )
+        if terminal:
+            add(terminal[0])
 
         # Guarantee useful alternatives before filling by score. A beam is a
         # count of complete turns retained, not permission for one action type
@@ -2005,7 +2094,13 @@ class Searcher:
 
         original_turn = board.turn
         is_root_generation = self.root_key is None or cache_key == self.root_key
-        if self.time_ms < 1000:
+        if self.verification_mode and is_root_generation:
+            partial_width = max(18, self.beam_width * 3)
+            evaluation_pool_width = max(14, self.beam_width * 2)
+        elif self.verification_mode:
+            partial_width = max(8, self.beam_width)
+            evaluation_pool_width = max(10, self.beam_width + 2)
+        elif self.time_ms < 1000:
             partial_width = max(12, self.beam_width * 2)
             evaluation_pool_width = max(16, self.beam_width * 3)
         elif is_root_generation:
@@ -2020,12 +2115,20 @@ class Searcher:
             # spending the whole turn enumerating root alternatives.
             partial_width = max(16, self.beam_width * 2)
             evaluation_pool_width = max(24, self.beam_width * 3)
-        turn_width = (
-            max(4, self.beam_width)
-            if is_root_generation
-            else max(3, (self.beam_width + 1) // 2)
-        )
-        turn_capacity = turn_width + max(1, self.beam_width // 3)
+        if self.verification_mode:
+            turn_width = (
+                max(3, min(4, self.beam_width))
+                if is_root_generation
+                else max(2, min(3, (self.beam_width + 1) // 2))
+            )
+            turn_capacity = turn_width + 1
+        else:
+            turn_width = (
+                max(4, self.beam_width)
+                if is_root_generation
+                else max(3, (self.beam_width + 1) // 2)
+            )
+            turn_capacity = turn_width + max(1, self.beam_width // 3)
         frontier = [PartialTurn([], board.copy(), 0.0)]
         completed: List[PartialTurn] = []
 
@@ -2070,7 +2173,9 @@ class Searcher:
                     incumbent = expanded.get(key)
                     if incumbent is not None:
                         self.complete_turns_deduplicated += 1
-                    if incumbent is None or self._prefer_partial(candidate, incumbent):
+                    if incumbent is None or self._prefer_partial(
+                        candidate, incumbent, original_turn
+                    ):
                         expanded[key] = candidate
 
             next_frontier: List[PartialTurn] = []
@@ -2086,7 +2191,9 @@ class Searcher:
             if len(next_frontier) > partial_width:
                 self.exhaustive_within_horizon = False
                 self.partial_turns_pruned += len(next_frontier) - partial_width
-                next_frontier = self._round_robin_partials(next_frontier, partial_width)
+                next_frontier = self._round_robin_partials(
+                    next_frontier, partial_width, original_turn, board
+                )
             frontier = next_frontier
 
         self.complete_turns_generated += len(completed)
@@ -2094,7 +2201,9 @@ class Searcher:
         for partial in completed:
             key = partial.board.serialize()
             incumbent = unique.get(key)
-            if incumbent is None or self._prefer_partial(partial, incumbent):
+            if incumbent is None or self._prefer_partial(
+                partial, incumbent, original_turn
+            ):
                 unique[key] = partial
         self.complete_turns_deduplicated += len(completed) - len(unique)
 
@@ -2102,7 +2211,9 @@ class Searcher:
         if len(pool) > evaluation_pool_width:
             self.exhaustive_within_horizon = False
             self.partial_turns_pruned += len(pool) - evaluation_pool_width
-            pool = self._round_robin_partials(pool, evaluation_pool_width)
+            pool = self._round_robin_partials(
+                pool, evaluation_pool_width, original_turn, board
+            )
 
         if self.root_key == cache_key and self.root_fallback is None:
             fallback_pool = sorted(
@@ -2110,7 +2221,7 @@ class Searcher:
                 key=lambda partial: (
                     self.turn_action_classes(board, partial.moves)[1],
                     -partial.priority,
-                    tuple(move.uci() for move in partial.moves),
+                    normalized_turn_key(partial.moves, original_turn),
                 ),
             )
             fallback_options: List[TurnCandidate] = []
@@ -2162,7 +2273,7 @@ class Searcher:
                         ),
                         -candidate.early_plan_score,
                         -candidate.priority,
-                        tuple(move.uci() for move in candidate.moves),
+                        normalized_turn_key(candidate.moves, original_turn),
                     )
                 )
                 self.root_fallback = fallback_options[0]
@@ -2247,7 +2358,7 @@ class Searcher:
                 not item.tactically_safe,
                 item.safety_penalty,
                 -item.priority,
-                tuple(move.uci() for move in item.moves),
+                normalized_turn_key(item.moves, original_turn),
             ),
         )
         for candidate in tactical:
@@ -2394,7 +2505,7 @@ class Searcher:
                     root_scores,
                     key=lambda item: (
                         -item[0] if maximizing else item[0],
-                        tuple(move.uci() for move in item[1].moves),
+                        normalized_turn_key(item[1].moves, board.turn),
                     ),
                 )
         return best
@@ -2528,7 +2639,14 @@ def purposeful_complete_turn_seed(
             red_score = quick_evaluation(child, turn_number)
             utility = red_score if original_turn == engine.RED else -red_score
             utility -= purpose_penalty
-            candidates.append((utility, -purpose_penalty, move.uci(), move))
+            candidates.append(
+                (
+                    utility,
+                    -purpose_penalty,
+                    normalized_move_uci(move, original_turn),
+                    move,
+                )
+            )
         if not candidates:
             # Positional rules are preferences, not permission to return a
             # corrupt half-turn.  If the strict fallback filters every action,
@@ -2562,7 +2680,14 @@ def purposeful_complete_turn_seed(
                 child.push(move)
                 red_score = quick_evaluation(child, turn_number)
                 utility = red_score if original_turn == engine.RED else -red_score
-                candidates.append((utility - 8.0, -8.0, move.uci(), move))
+                candidates.append(
+                    (
+                        utility - 8.0,
+                        -8.0,
+                        normalized_move_uci(move, original_turn),
+                        move,
+                    )
+                )
 
         if not candidates:
             # Ending early is preferable to emitting an invalid partial turn.
@@ -2818,16 +2943,60 @@ def search(
                     seed_action_purposes,
                     searcher.early_plan_score(seed_action_purposes),
                 )
-        for depth in range(1, max(1, max_depth) + 1):
+        requested_depth = max(1, max_depth)
+        final_deadline = searcher.deadline
+        if requested_depth >= 2:
+            # Reserve the first 65% of the budget for a narrow but complete
+            # depth-two pass. Depth two means our complete turn plus one full
+            # opponent reply. A later broad pass may improve it, but may never
+            # erase this tactically verified result merely by timing out.
+            searcher.verification_mode = True
+            searcher.deadline = min(
+                final_deadline,
+                started + max(0.05, time_ms / 1000.0 * 0.65),
+            )
             try:
-                iteration = searcher.alphabeta(board, depth, -math.inf, math.inf)
+                best = searcher.alphabeta(board, 2, -math.inf, math.inf)
+                completed_depth = 2
             except SearchTimeout:
                 timed_out = True
-                break
-            best = iteration
-            completed_depth = depth
-            if abs(iteration.score) >= MATE_SCORE:
-                break
+            finally:
+                searcher.deadline = final_deadline
+
+            if completed_depth >= 2 and abs(best.score if best else 0.0) < MATE_SCORE:
+                # Widen only after reply verification. Keep the verified PV and
+                # ranked candidates if this improvement pass expires.
+                searcher.verification_mode = False
+                searcher.table.clear()
+                searcher.turn_cache.clear()
+                for depth in range(2, requested_depth + 1):
+                    try:
+                        iteration = searcher.alphabeta(
+                            board, depth, -math.inf, math.inf
+                        )
+                    except SearchTimeout:
+                        timed_out = True
+                        break
+                    best = iteration
+                    completed_depth = depth
+                    if abs(iteration.score) >= MATE_SCORE:
+                        break
+            elif completed_depth < 2:
+                # Root generation often completed even when a reply did not.
+                # Use the remaining budget to finish a stable depth-one result
+                # instead of immediately dropping to an unverified seed.
+                searcher.verification_mode = False
+                try:
+                    best = searcher.alphabeta(board, 1, -math.inf, math.inf)
+                    completed_depth = 1
+                except SearchTimeout:
+                    timed_out = True
+        else:
+            try:
+                best = searcher.alphabeta(board, 1, -math.inf, math.inf)
+                completed_depth = 1
+            except SearchTimeout:
+                timed_out = True
 
     if best is None:
         if searcher.root_fallback is not None:
@@ -2897,7 +3066,7 @@ def search(
         ranked_root_turns.sort(
             key=lambda item: (
                 -item[0] if board.turn == engine.RED else item[0],
-                tuple(move.uci() for move in item[1].moves),
+                normalized_turn_key(item[1].moves, board.turn),
             )
         )
 

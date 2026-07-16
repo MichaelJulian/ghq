@@ -4,6 +4,7 @@ import {
   assertValueModelCompatible,
   predictFromFeatures,
   predictWinProbability,
+  predictZeroSumWinProbability,
   TWO_ACTION_VALUE_MODEL_METADATA,
 } from "./inference";
 
@@ -30,6 +31,12 @@ describe("gradient-boosted value model", () => {
     expect(red).toBeLessThan(1);
     expect(blue).toBeGreaterThan(0);
     expect(blue).toBeLessThan(1);
+  });
+
+  it("normalizes independent side predictions for zero-sum search", () => {
+    const red = predictZeroSumWinProbability(position, "RED");
+    const blue = predictZeroSumWinProbability(position, "BLUE");
+    expect(red + blue).toBeCloseTo(1, 12);
   });
 
   it("selects the dedicated two-action checkpoint", () => {

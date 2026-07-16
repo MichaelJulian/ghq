@@ -47,6 +47,42 @@ class EvaluationTests(unittest.TestCase):
             places=3,
         )
 
+    def test_every_evaluation_component_is_color_antisymmetric(self):
+        positions = (
+            engine.BaseBoard(PARATROOPER_EXTRACTION_FEN),
+            engine.BaseBoard(
+                "q2pi3/1ii1f1f1/ir↓3r↓2/2f5/t↓r↓6/5R↑1I/"
+                "FIR↑T↑H↑1I1/2F1P1Q1 IIIII iiii r"
+            ),
+            engine.BaseBoard(
+                "1i6/2i5/1i6/q4i2/5Ii1/4I1I1/7I/5Q2 - - b"
+            ),
+        )
+        for board in positions:
+            mirrored = board.mirror()
+            for personality in ghq_ai.PERSONALITIES:
+                original = ghq_ai.evaluation_breakdown(
+                    board, personality, turn_number=27
+                )
+                inverse = ghq_ai.evaluation_breakdown(
+                    mirrored, personality, turn_number=27
+                )
+                for component, value in original["components"].items():
+                    self.assertAlmostEqual(
+                        value,
+                        -inverse["components"][component],
+                        places=4,
+                        msg=f"{personality} {component}",
+                    )
+                self.assertAlmostEqual(
+                    original["total_red"], -inverse["total_red"], places=4
+                )
+            self.assertAlmostEqual(
+                ghq_ai.quick_evaluation(board, 27),
+                -ghq_ai.quick_evaluation(mirrored, 27),
+                places=8,
+            )
+
     def test_personalities_change_weights_not_features(self):
         board = engine.BaseBoard()
         balanced = ghq_ai.evaluation_breakdown(board, "balanced")
@@ -577,6 +613,50 @@ class SearchTests(unittest.TestCase):
         )
         self.assertEqual(result["recommendation_label"], "best found")
         self.assertFalse(result["search"]["exhaustive_within_requested_horizon"])
+
+    def test_search_choice_is_equivalent_after_color_mirror(self):
+        board = engine.BaseBoard(PARATROOPER_EXTRACTION_FEN)
+        mirrored = board.mirror()
+        original = ghq_ai.search(
+            board,
+            "balanced",
+            time_ms=3000,
+            max_depth=1,
+            beam_width=6,
+            turn_number=27,
+        )
+        inverse = ghq_ai.search(
+            mirrored,
+            "balanced",
+            time_ms=3000,
+            max_depth=1,
+            beam_width=6,
+            turn_number=27,
+        )
+        original_key = tuple(
+            ghq_ai.normalized_move_uci(engine.Move.from_uci(uci), board.turn)
+            for uci in original["best_turn"]["all_moves"]
+        )
+        inverse_key = tuple(
+            ghq_ai.normalized_move_uci(engine.Move.from_uci(uci), mirrored.turn)
+            for uci in inverse["best_turn"]["all_moves"]
+        )
+        self.assertEqual(original_key, inverse_key)
+        self.assertAlmostEqual(
+            original["score"]["red"], -inverse["score"]["red"], places=4
+        )
+
+    def test_reply_first_search_completes_depth_two_before_widening(self):
+        result = ghq_ai.search(
+            engine.BaseBoard(PARATROOPER_EXTRACTION_FEN),
+            "balanced",
+            time_ms=4000,
+            max_depth=2,
+            beam_width=6,
+            turn_number=27,
+        )
+        self.assertEqual(result["search"]["completed_depth_in_turns"], 2)
+        self.assertEqual(result["search"]["fallback_used"], "none")
 
     def test_forcing_artillery_pressure_displaces_empty_infantry_move(self):
         board = engine.BaseBoard(POST_EXTRACTION_PRESSURE_FEN)

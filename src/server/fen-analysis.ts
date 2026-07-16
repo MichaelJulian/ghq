@@ -10,7 +10,7 @@ import type {
 } from "@/game/analysis/types";
 import { FENtoBoardState } from "@/game/notation";
 import type { Player } from "@/game/engine";
-import { predictWinProbability } from "@/game/value-model/inference";
+import { predictZeroSumWinProbability } from "@/game/value-model/inference";
 import { evaluatePersonalityPosition } from "@/game/value-model/styled-evaluation";
 import { PERSONALITIES } from "@/game/value-model/personalities";
 import { loadServerPyodide } from "@/server/pyodide";
@@ -194,12 +194,12 @@ function modelOutput(
     turnNumber,
   };
   return {
-    redWinProbability: predictWinProbability(
+    redWinProbability: predictZeroSumWinProbability(
       position,
       "RED",
       maxActions === 2 ? "two-actions" : "three-actions"
     ),
-    blueWinProbability: predictWinProbability(
+    blueWinProbability: predictZeroSumWinProbability(
       position,
       "BLUE",
       maxActions === 2 ? "two-actions" : "three-actions"
@@ -218,7 +218,7 @@ function redModelValue(
   maxActions: number
 ): number {
   const state = FENtoBoardState(fen);
-  return predictWinProbability(
+  return predictZeroSumWinProbability(
     {
       board: state.board,
       redReserve: state.redReserve,

@@ -78,6 +78,9 @@ async function main() {
   const countedActionCounts: Record<string, number> = {};
   const depths: Record<string, number> = {};
   const fallbackTypes: Record<string, number> = {};
+  const fallbackByColor: Record<string, number> = {};
+  const fallbackByPhase: Record<string, number> = {};
+  const depthByColor: Record<string, number> = {};
   const trainingRejectionReasons: Record<string, number> = {};
   const personalities: Record<
     string,
@@ -129,7 +132,21 @@ async function main() {
         )
       );
       increment(depths, String(decision.completedDepth));
+      increment(
+        depthByColor,
+        `${decision.player}:depth-${decision.completedDepth}`
+      );
       increment(fallbackTypes, decision.fallback);
+      if (decision.fallback !== "none") {
+        increment(fallbackByColor, decision.player);
+        const phase =
+          decision.turnNumber <= 12
+            ? "early"
+            : decision.turnNumber <= 60
+            ? "mid"
+            : "late";
+        increment(fallbackByPhase, phase);
+      }
       if (!decision.completedTurn) incompleteTurnDecisions++;
       if (
         decision.selectedMoves.filter((move) => !move.startsWith("s")).length >
@@ -174,6 +191,16 @@ async function main() {
     }
   }
 
+  const pairedOutcomes: Record<string, number> = {};
+  const sortedGames = [...games].sort((left, right) =>
+    left.gameId.localeCompare(right.gameId)
+  );
+  for (let index = 0; index + 1 < sortedGames.length; index += 2) {
+    const first = sortedGames[index].outcome.winner ?? "DRAW";
+    const second = sortedGames[index + 1].outcome.winner ?? "DRAW";
+    increment(pairedOutcomes, `${first}/${second}`);
+  }
+
   console.log(
     JSON.stringify(
       {
@@ -199,7 +226,10 @@ async function main() {
         actionCounts,
         countedActionCounts,
         completedDepths: depths,
+        depthByColor,
         fallbackTypes,
+        fallbackByColor,
+        fallbackByPhase,
         fallbackDecisions,
         fallbackRate: Number((fallbackDecisions / decisions).toFixed(4)),
         timedOutDecisions,
@@ -211,6 +241,7 @@ async function main() {
         trainingRejectionReasons,
         trainingPositions,
         personalities,
+        pairedOutcomes,
         rejected,
         overLimitExamples,
       },

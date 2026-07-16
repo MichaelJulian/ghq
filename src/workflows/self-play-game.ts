@@ -202,7 +202,10 @@ export function isDurableTrainingDecisionEligible(
       (decision.selfActionLimit ?? 3) === 3 &&
       (decision.opponentActionLimit ?? 3) === 3 &&
       decision.fallback === "none" &&
-      decision.completedDepth >= 1
+      // Depth one evaluates only our resulting position. Depth two includes a
+      // complete opponent reply and is the minimum tactically verified label
+      // admitted to the value-model dataset.
+      decision.completedDepth >= 2
   );
 }
 
