@@ -16,7 +16,8 @@
     "value:features": "tsx scripts/build_value_dataset.ts",
     "value:train": ".venv/bin/python scripts/train_value_model.py",
     "value:download:2a": "tsx scripts/download_vercel_two_action_dataset.ts",
-    "self-play:generation": "tsx scripts/run_self_play_generation.ts"
+    "self-play:generation": "tsx scripts/run_self_play_generation.ts",
+    "self-play:analyze": "tsx scripts/analyze_vercel_self_play.ts"
   },
   "dependencies": {
     "@clerk/backend": "^1.15.7",
