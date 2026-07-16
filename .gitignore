@@ -45,6 +45,7 @@ next-env.d.ts
 
 # local data
 .data
+/artifacts
 
 # clerk configuration (can include secrets)
 /.clerk/

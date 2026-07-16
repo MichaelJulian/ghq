@@ -1,18 +1,20 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   Activity,
   Beaker,
   Bot,
   ChevronLeft,
   ChevronRight,
+  Gamepad2,
   Pause,
   Play,
   RotateCcw,
   Search,
 } from "lucide-react";
 import Header from "@/components/Header";
+import { GHQBoardV3 } from "@/components/board-v3/boardv3";
 import { PositionBoard } from "@/components/bot-lab/PositionBoard";
 import { SelfPlayRuns } from "@/components/bot-lab/SelfPlayRuns";
 import { Button } from "@/components/ui/button";
@@ -29,7 +31,7 @@ import { FENtoBoardState } from "@/game/notation";
 import { PERSONALITIES } from "@/game/value-model/personalities";
 import { cn } from "@/lib/utils";
 
-type LabMode = "arena" | "fen";
+type LabMode = "play" | "arena" | "fen";
 
 interface ArenaSnapshot {
   fen: string;
@@ -42,7 +44,7 @@ interface ArenaSnapshot {
 const PERSONALITY_IDS = Object.keys(PERSONALITIES) as PersonalityId[];
 
 export default function BotLab() {
-  const [mode, setMode] = useState<LabMode>("arena");
+  const [mode, setMode] = useState<LabMode>("play");
   const [fenInput, setFenInput] = useState(GHQ_STARTING_FEN);
   const [redPersonality, setRedPersonality] =
     useState<PersonalityId>("battery_commander");
@@ -60,6 +62,8 @@ export default function BotLab() {
   const [fenAnalysis, setFenAnalysis] = useState<FenAnalysisResponse>();
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string>();
+  const [humanColor, setHumanColor] = useState<"RED" | "BLUE">("RED");
+  const [playKey, setPlayKey] = useState(1);
   const stopRequested = useRef(false);
 
   const snapshot = snapshots[snapshotIndex];
@@ -157,7 +161,7 @@ export default function BotLab() {
               <Beaker className="h-4 w-4" /> GHQ Bot Lab
             </div>
             <h1 className="text-3xl font-black tracking-tight md:text-4xl">
-              Watch the characters think.
+              Play, test, and watch the characters think.
             </h1>
             <p className="mt-2 max-w-2xl text-sm text-slate-600">
               Run production-rules matchups, inspect model probabilities, and
@@ -165,6 +169,12 @@ export default function BotLab() {
             </p>
           </div>
           <div className="flex rounded-lg border bg-white p-1 shadow-sm">
+            <ModeButton
+              active={mode === "play"}
+              onClick={() => setMode("play")}
+            >
+              <Gamepad2 /> Play the bot
+            </ModeButton>
             <ModeButton
               active={mode === "arena"}
               onClick={() => setMode("arena")}
@@ -177,139 +187,299 @@ export default function BotLab() {
           </div>
         </div>
 
-        <div className="grid gap-5 xl:grid-cols-[390px_minmax(0,1fr)]">
-          <div className="flex flex-col items-center gap-3 xl:items-start">
-            <PositionBoard fen={displayedFen} />
-            {mode === "arena" && (
-              <ReplayControls
-                index={snapshotIndex}
-                count={snapshots.length}
-                running={running}
-                onPrevious={() =>
-                  setSnapshotIndex((value) => Math.max(0, value - 1))
-                }
-                onNext={() =>
-                  setSnapshotIndex((value) =>
-                    Math.min(snapshots.length - 1, value + 1)
-                  )
-                }
-              />
-            )}
-          </div>
+        {mode === "play" ? (
+          <PlayBotMatch
+            key={playKey}
+            humanColor={humanColor}
+            setHumanColor={setHumanColor}
+            personality={
+              humanColor === "RED" ? bluePersonality : redPersonality
+            }
+            setPersonality={
+              humanColor === "RED" ? setBluePersonality : setRedPersonality
+            }
+            timeMs={timeMs}
+            maxDepth={maxDepth}
+            beamWidth={beamWidth}
+            setTimeMs={setTimeMs}
+            setMaxDepth={setMaxDepth}
+            setBeamWidth={setBeamWidth}
+            explorationTemperature={explorationTemperature}
+            setExplorationTemperature={setExplorationTemperature}
+            matchSeed={matchSeed}
+            setMatchSeed={setMatchSeed}
+            onNewGame={() => setPlayKey((value) => value + 1)}
+          />
+        ) : (
+          <div className="grid gap-5 xl:grid-cols-[390px_minmax(0,1fr)]">
+            <div className="flex flex-col items-center gap-3 xl:items-start">
+              <PositionBoard fen={displayedFen} />
+              {mode === "arena" && (
+                <ReplayControls
+                  index={snapshotIndex}
+                  count={snapshots.length}
+                  running={running}
+                  onPrevious={() =>
+                    setSnapshotIndex((value) => Math.max(0, value - 1))
+                  }
+                  onNext={() =>
+                    setSnapshotIndex((value) =>
+                      Math.min(snapshots.length - 1, value + 1)
+                    )
+                  }
+                />
+              )}
+            </div>
 
-          <div className="min-w-0 space-y-4">
-            <Card className="border-slate-300 bg-white/90">
-              <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2">
-                  {mode === "arena" ? <Bot /> : <Search />}
-                  {mode === "arena"
-                    ? "Character matchup"
-                    : "Analyze a position"}
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid gap-3 md:grid-cols-2">
-                  <PersonalitySelect
-                    label="Red character"
-                    value={redPersonality}
-                    onChange={setRedPersonality}
-                    accent="red"
-                  />
-                  <PersonalitySelect
-                    label="Blue character"
-                    value={bluePersonality}
-                    onChange={setBluePersonality}
-                    accent="blue"
-                  />
-                </div>
-                <Textarea
-                  value={fenInput}
-                  onChange={(event) => setFenInput(event.target.value)}
-                  spellCheck={false}
-                  className="min-h-20 resize-y font-mono text-xs"
-                  aria-label="GHQ FEN"
-                />
-                <SearchControls
-                  timeMs={timeMs}
-                  maxDepth={maxDepth}
-                  beamWidth={beamWidth}
-                  setTimeMs={setTimeMs}
-                  setMaxDepth={setMaxDepth}
-                  setBeamWidth={setBeamWidth}
-                  explorationTemperature={explorationTemperature}
-                  setExplorationTemperature={setExplorationTemperature}
-                  matchSeed={matchSeed}
-                  setMatchSeed={setMatchSeed}
-                />
-                {error && (
-                  <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                    {error}
+            <div className="min-w-0 space-y-4">
+              <Card className="border-slate-300 bg-white/90">
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-2">
+                    {mode === "arena" ? <Bot /> : <Search />}
+                    {mode === "arena"
+                      ? "Character matchup"
+                      : "Analyze a position"}
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <PersonalitySelect
+                      label="Red character"
+                      value={redPersonality}
+                      onChange={setRedPersonality}
+                      accent="red"
+                    />
+                    <PersonalitySelect
+                      label="Blue character"
+                      value={bluePersonality}
+                      onChange={setBluePersonality}
+                      accent="blue"
+                    />
                   </div>
-                )}
-                {mode === "arena" ? (
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      variant="outline"
-                      onClick={loadArenaFen}
-                      disabled={running}
-                    >
-                      <RotateCcw /> Load / reset FEN
-                    </Button>
-                    <Button onClick={() => runArenaTurns(1)} disabled={running}>
-                      <Play /> Play one turn
-                    </Button>
-                    <Button onClick={() => runArenaTurns(8)} disabled={running}>
-                      <Activity /> Play 8 turns
-                    </Button>
-                    {running && (
-                      <Button
-                        variant="secondary"
-                        onClick={() => {
-                          stopRequested.current = true;
-                        }}
-                      >
-                        <Pause /> Pause after this turn
-                      </Button>
-                    )}
-                  </div>
-                ) : (
-                  <div className="flex flex-wrap gap-2">
-                    <Button onClick={analyzeInputFen} disabled={running}>
-                      <Search /> {running ? "Searching…" : "Find best turn"}
-                    </Button>
-                    {fenAnalysis && (
+                  <Textarea
+                    value={fenInput}
+                    onChange={(event) => setFenInput(event.target.value)}
+                    spellCheck={false}
+                    className="min-h-20 resize-y font-mono text-xs"
+                    aria-label="GHQ FEN"
+                  />
+                  <SearchControls
+                    timeMs={timeMs}
+                    maxDepth={maxDepth}
+                    beamWidth={beamWidth}
+                    setTimeMs={setTimeMs}
+                    setMaxDepth={setMaxDepth}
+                    setBeamWidth={setBeamWidth}
+                    explorationTemperature={explorationTemperature}
+                    setExplorationTemperature={setExplorationTemperature}
+                    matchSeed={matchSeed}
+                    setMatchSeed={setMatchSeed}
+                  />
+                  {error && (
+                    <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                      {error}
+                    </div>
+                  )}
+                  {mode === "arena" ? (
+                    <div className="flex flex-wrap gap-2">
                       <Button
                         variant="outline"
-                        onClick={() => {
-                          setFenInput(fenAnalysis.resultingFen);
-                          setFenAnalysis(undefined);
-                        }}
+                        onClick={loadArenaFen}
+                        disabled={running}
                       >
-                        Apply best turn
+                        <RotateCcw /> Load / reset FEN
                       </Button>
-                    )}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+                      <Button
+                        onClick={() => runArenaTurns(1)}
+                        disabled={running}
+                      >
+                        <Play /> Play one turn
+                      </Button>
+                      <Button
+                        onClick={() => runArenaTurns(8)}
+                        disabled={running}
+                      >
+                        <Activity /> Play 8 turns
+                      </Button>
+                      {running && (
+                        <Button
+                          variant="secondary"
+                          onClick={() => {
+                            stopRequested.current = true;
+                          }}
+                        >
+                          <Pause /> Pause after this turn
+                        </Button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      <Button onClick={analyzeInputFen} disabled={running}>
+                        <Search /> {running ? "Searching…" : "Find best turn"}
+                      </Button>
+                      {fenAnalysis && (
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            setFenInput(fenAnalysis.resultingFen);
+                            setFenAnalysis(undefined);
+                          }}
+                        >
+                          Apply best turn
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
 
-            {mode === "arena" && (
-              <TurnHistory
-                snapshots={snapshots}
-                selected={snapshotIndex}
-                onSelect={setSnapshotIndex}
-              />
-            )}
-            {activeAnalysis ? (
-              <AnalysisDetails analysis={activeAnalysis} />
-            ) : (
-              <EmptyAnalysis mode={mode} />
-            )}
+              {mode === "arena" && (
+                <TurnHistory
+                  snapshots={snapshots}
+                  selected={snapshotIndex}
+                  onSelect={setSnapshotIndex}
+                />
+              )}
+              {activeAnalysis ? (
+                <AnalysisDetails analysis={activeAnalysis} />
+              ) : (
+                <EmptyAnalysis mode={mode} />
+              )}
+            </div>
           </div>
-        </div>
+        )}
         <SelfPlayRuns />
       </div>
     </main>
+  );
+}
+
+function PlayBotMatch({
+  humanColor,
+  setHumanColor,
+  personality,
+  setPersonality,
+  timeMs,
+  maxDepth,
+  beamWidth,
+  setTimeMs,
+  setMaxDepth,
+  setBeamWidth,
+  explorationTemperature,
+  setExplorationTemperature,
+  matchSeed,
+  setMatchSeed,
+  onNewGame,
+}: {
+  humanColor: "RED" | "BLUE";
+  setHumanColor: (color: "RED" | "BLUE") => void;
+  personality: PersonalityId;
+  setPersonality: (personality: PersonalityId) => void;
+  timeMs: number;
+  maxDepth: number;
+  beamWidth: number;
+  setTimeMs: (value: number) => void;
+  setMaxDepth: (value: number) => void;
+  setBeamWidth: (value: number) => void;
+  explorationTemperature: number;
+  setExplorationTemperature: (value: number) => void;
+  matchSeed: number;
+  setMatchSeed: (value: number) => void;
+  onNewGame: () => void;
+}) {
+  const session = useRef({
+    humanColor,
+    personality,
+    timeMs,
+    maxDepth,
+    beamWidth,
+    explorationTemperature,
+    matchSeed,
+  }).current;
+  const analysisBot = useMemo(
+    () => ({
+      humanColor: session.humanColor,
+      personality: session.personality,
+      timeMs: session.timeMs,
+      maxDepth: session.maxDepth,
+      beamWidth: session.beamWidth,
+      maxActions: 2 as const,
+      explorationTemperature: session.explorationTemperature,
+      explorationSeed: session.matchSeed,
+    }),
+    [session]
+  );
+
+  return (
+    <div className="space-y-4">
+      <Card className="border-slate-300 bg-white/90">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2">
+            <Gamepad2 /> Human vs. search bot
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="block">
+              <span className="mb-1 block text-xs font-bold uppercase tracking-wider text-slate-700">
+                Your color
+              </span>
+              <select
+                className="h-10 w-full rounded-md border bg-white px-3 text-sm font-semibold"
+                value={humanColor}
+                onChange={(event) => {
+                  setHumanColor(event.target.value as "RED" | "BLUE");
+                  onNewGame();
+                }}
+              >
+                <option value="RED">Red · move first</option>
+                <option value="BLUE">Blue · bot moves first</option>
+              </select>
+            </label>
+            <PersonalitySelect
+              label={`${humanColor === "RED" ? "Blue" : "Red"} bot character`}
+              value={personality}
+              onChange={(value) => {
+                setPersonality(value);
+                onNewGame();
+              }}
+              accent={humanColor === "RED" ? "blue" : "red"}
+            />
+          </div>
+          <SearchControls
+            timeMs={timeMs}
+            maxDepth={maxDepth}
+            beamWidth={beamWidth}
+            setTimeMs={setTimeMs}
+            setMaxDepth={setMaxDepth}
+            setBeamWidth={setBeamWidth}
+            explorationTemperature={explorationTemperature}
+            setExplorationTemperature={setExplorationTemperature}
+            matchSeed={matchSeed}
+            setMatchSeed={setMatchSeed}
+          />
+          <div className="flex flex-wrap items-center gap-3">
+            <Button onClick={onNewGame}>
+              <RotateCcw /> New game
+            </Button>
+            <span className="text-xs text-slate-600">
+              Experimental two-action rules apply to both sides. Click End Turn
+              after your second action; the bot then searches its complete
+              reply.
+            </span>
+          </div>
+        </CardContent>
+      </Card>
+      <div className="overflow-hidden rounded-xl border border-slate-300 bg-white shadow-sm">
+        <GHQBoardV3
+          id={`bot-lab-${session.matchSeed}`}
+          bot
+          playerId={session.humanColor === "RED" ? "0" : "1"}
+          analysisBot={analysisBot}
+          maxActionsPerTurn={2}
+        />
+      </div>
+    </div>
   );
 }
 

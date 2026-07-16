@@ -7,9 +7,10 @@ Python or a native machine-learning runtime.
 
 ## Data policy
 
-- Only decisive HQ-capture and resignation games are included. Timeouts and
-  draws are excluded because the target is board strength rather than clock
-  state.
+- Human training uses decisive HQ-capture and resignation games. The
+  experimental two-action self-play pipeline also admits repetition draws with
+  a neutral 0.5 target. Timeouts, no-progress stops, and max-turn games remain
+  excluded.
 - Undo/redo actions are resolved before replay.
 - Start-of-turn captures are restored from `historyLog`.
 - Samples are created only after committed turns.
@@ -44,6 +45,17 @@ pnpm value:train -- \
 The committed `model.generated.json` is the only training artifact needed by
 the deployed app. A future self-play job can write games in the same canonical
 position format and reuse this trainer without changing production inference.
+
+Two-action Vercel games can be extracted directly from private Blob storage:
+
+```bash
+pnpm value:download:2a -- \
+  --generation-prefix vercel-r2b2- \
+  --output .data/value-2a.jsonl
+```
+
+The trainer represents each 0.5 target as half-weight win and loss observations,
+preserving the same exported tree format and TypeScript inference path.
 
 ## Personalities
 
@@ -106,11 +118,14 @@ data. Supplying the same seed and deterministic agents reproduces the game.
 
 ## Bot Lab and FEN API
 
-`/bot-lab` provides two views over the same production engine:
+`/bot-lab` provides three views over the same production engine:
 
 Run `pnpm dev:bot-lab`, then open `http://localhost:3000/bot-lab` to use the
 dashboard locally.
 
+- Play the Bot uses the production interactive board against the same search
+  endpoint used by FEN analysis. The current experiment caps both sides at two
+  voluntary actions per turn.
 - Character Arena plays one or several complete player turns, preserves the
   serialized engine state between requests, and allows every resulting position
   to be replayed.

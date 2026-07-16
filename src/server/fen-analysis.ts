@@ -182,7 +182,8 @@ function modelOutput(
   fen: string,
   turnNumber: number,
   perspective: Player,
-  personality: PersonalityId
+  personality: PersonalityId,
+  maxActions: number
 ): ModelPositionOutput {
   const state = FENtoBoardState(fen);
   const position = {
@@ -193,8 +194,16 @@ function modelOutput(
     turnNumber,
   };
   return {
-    redWinProbability: predictWinProbability(position, "RED"),
-    blueWinProbability: predictWinProbability(position, "BLUE"),
+    redWinProbability: predictWinProbability(
+      position,
+      "RED",
+      maxActions === 2 ? "two-actions" : "three-actions"
+    ),
+    blueWinProbability: predictWinProbability(
+      position,
+      "BLUE",
+      maxActions === 2 ? "two-actions" : "three-actions"
+    ),
     personality: evaluatePersonalityPosition(
       position,
       perspective,
@@ -203,7 +212,11 @@ function modelOutput(
   };
 }
 
-function redModelValue(fen: string, turnNumber: number): number {
+function redModelValue(
+  fen: string,
+  turnNumber: number,
+  maxActions: number
+): number {
   const state = FENtoBoardState(fen);
   return predictWinProbability(
     {
@@ -213,7 +226,8 @@ function redModelValue(fen: string, turnNumber: number): number {
       currentPlayer: state.currentPlayerTurn ?? "RED",
       turnNumber,
     },
-    "RED"
+    "RED",
+    maxActions === 2 ? "two-actions" : "three-actions"
   );
 }
 
@@ -266,13 +280,7 @@ export async function analyzeFen(
   const timeMs = integerInRange(request.timeMs, 30_000, 50, 30_000, "timeMs");
   const maxDepth = integerInRange(request.maxDepth, 3, 1, 3, "maxDepth");
   const beamWidth = integerInRange(request.beamWidth, 8, 2, 16, "beamWidth");
-  const maxActions = integerInRange(
-    request.maxActions,
-    3,
-    2,
-    3,
-    "maxActions"
-  );
+  const maxActions = integerInRange(request.maxActions, 3, 2, 3, "maxActions");
   const explorationTemperature = numberInRange(
     request.explorationTemperature,
     0,
@@ -309,7 +317,8 @@ export async function analyzeFen(
       maxDepth,
       beamWidth,
       turnNumber,
-      redModelValue,
+      (valueFen, valueTurnNumber) =>
+        redModelValue(valueFen, valueTurnNumber, maxActions),
       explorationSeed,
       maxActions
     );
@@ -365,15 +374,23 @@ export async function analyzeFen(
         beamWidth,
         explorationTemperature,
         explorationSeed,
+        maxActions: maxActions as 2 | 3,
       },
       outcome: pythonOutcome(board),
       model: {
-        before: modelOutput(fen, turnNumber, sideToMove, personality),
+        before: modelOutput(
+          fen,
+          turnNumber,
+          sideToMove,
+          personality,
+          maxActions
+        ),
         after: modelOutput(
           resultingFen,
           turnNumber + 1,
           sideToMove,
-          personality
+          personality,
+          maxActions
         ),
       },
       search: searchResult,

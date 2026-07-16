@@ -3,6 +3,11 @@ import { allowedMoveFromUci, allowedMoveToUci } from "./notation-uci";
 import { ghqFetch, SendTurnRequest } from "@/lib/api";
 import { createPGN, pgnToTurns } from "./pgn";
 import { API_URL } from "@/app/live/config";
+import type {
+  FenAnalysisRequest,
+  FenAnalysisResponse,
+  PersonalityId,
+} from "./analysis/types";
 
 export type OnTurnPlayedCallback = (turn: Turn) => void;
 
@@ -49,6 +54,108 @@ export interface Multiplayer {
   initGame(): Promise<void>;
   sendTurn(turn: Turn): Promise<void>;
   onTurnPlayed(callback: OnTurnPlayedCallback): void;
+}
+
+export interface AnalysisBotConfig {
+  humanColor: "RED" | "BLUE";
+  personality: PersonalityId;
+  timeMs: number;
+  maxDepth: number;
+  beamWidth: number;
+  maxActions: 2 | 3;
+  explorationTemperature?: number;
+  explorationSeed?: number;
+}
+
+/**
+ * Local match transport backed by the same production search endpoint used by
+ * Bot Lab's FEN analyzer. The browser owns the authoritative Python board;
+ * the endpoint only chooses the opponent's next complete turn.
+ */
+export class AnalysisBotMultiplayer implements Multiplayer {
+  private board: PythonBoard;
+  private callbacks: OnTurnPlayedCallback[] = [];
+
+  constructor(
+    private engine: GameEngine,
+    private config: AnalysisBotConfig,
+    fen?: string
+  ) {
+    this.board = engine.BaseBoard(fen);
+  }
+
+  async initGame(): Promise<void> {
+    if (this.callbacks.length === 0) {
+      throw new Error("onTurnPlayed callback not set");
+    }
+    if (this.config.humanColor === "BLUE") {
+      await this.queueBotTurn(1);
+    }
+  }
+
+  async sendTurn(turn: Turn): Promise<void> {
+    this.applyMoves(turn.moves);
+    if (this.board.outcome() !== undefined) return;
+    await this.queueBotTurn(turn.turn + 1);
+  }
+
+  onTurnPlayed(callback: OnTurnPlayedCallback): void {
+    this.callbacks.push(callback);
+  }
+
+  private applyMoves(moves: Turn["moves"]): void {
+    for (const move of moves) {
+      const pythonMove = this.engine.Move.from_uci(allowedMoveToUci(move));
+      if (!this.board.is_legal(pythonMove)) {
+        throw new Error(
+          `Bot Lab received an illegal move: ${allowedMoveToUci(move)}`
+        );
+      }
+      this.board.push(pythonMove);
+    }
+  }
+
+  private async queueBotTurn(turnNumber: number): Promise<void> {
+    const request: FenAnalysisRequest = {
+      fen: this.board.board_fen(),
+      personality: this.config.personality,
+      turnNumber,
+      timeMs: this.config.timeMs,
+      maxDepth: this.config.maxDepth,
+      beamWidth: this.config.beamWidth,
+      maxActions: this.config.maxActions,
+      explorationTemperature: this.config.explorationTemperature ?? 0,
+      explorationSeed:
+        ((this.config.explorationSeed ?? 0x9e3779b9) + turnNumber) >>> 0,
+    };
+    const response = await fetch("/api/ai/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    });
+    const body = (await response.json()) as FenAnalysisResponse & {
+      error?: string;
+    };
+    if (!response.ok) {
+      throw new Error(body.error ?? "Bot search failed");
+    }
+
+    const moves = body.search.best_turn.all_moves.map((uci) =>
+      allowedMoveFromUci(uci)
+    );
+    this.applyMoves(moves);
+    const reply: Turn = {
+      turn: turnNumber,
+      moves,
+      elapsedSecs: body.search.search.elapsed_ms / 1000,
+    };
+
+    // GameClient finishes the submitted human turn after sendTurn resolves.
+    // Delivering on the next task prevents the reply being rejected as early.
+    setTimeout(() => {
+      this.callbacks.forEach((callback) => callback(reply));
+    }, 0);
+  }
 }
 
 interface BotGameHistory {

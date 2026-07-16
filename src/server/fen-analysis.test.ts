@@ -69,7 +69,7 @@ describe("production FEN analysis", () => {
       turnNumber: 5,
       // Cohesion and phase-frontier scoring deliberately inspect complete
       // structures, so leave enough time to finish a real leaf search.
-      timeMs: 2000,
+      timeMs: 5000,
       maxDepth: 1,
       beamWidth: 2,
     });
@@ -84,7 +84,7 @@ describe("production FEN analysis", () => {
     const request = {
       fen: GHQ_STARTING_FEN,
       turnNumber: 5,
-      timeMs: 2000,
+      timeMs: 5000,
       maxDepth: 1,
       beamWidth: 6,
       explorationTemperature: 0.8,

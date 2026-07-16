@@ -542,6 +542,8 @@ export interface GameClientOptions {
   gameStartTimeMs?: number;
   bot?: boolean;
   isOnline?: boolean;
+  /** Experimental per-turn action cap used by Bot Lab matches. */
+  maxActionsPerTurn?: 2 | 3;
 }
 
 export class GameClient {
@@ -582,6 +584,7 @@ export class GameClient {
   private multiplayer?: Multiplayer;
   public isSendingTurn: boolean;
   public isOnline: boolean;
+  private maxActionsPerTurn: 2 | 3;
 
   private listeners: Set<() => void> = new Set();
 
@@ -602,6 +605,7 @@ export class GameClient {
     gameStartTimeMs,
     bot,
     isOnline,
+    maxActionsPerTurn,
   }: GameClientOptions) {
     if (!engine) {
       throw new Error("engine is required");
@@ -634,6 +638,7 @@ export class GameClient {
     this.isSendingTurn = false;
     this.shouldCheckGameoverOnEndTurn = bot ?? isPassAndPlayMode ?? false;
     this.isOnline = isOnline ?? false;
+    this.maxActionsPerTurn = maxActionsPerTurn ?? 3;
     this.setupMultiplayer();
   }
 
@@ -714,13 +719,17 @@ export class GameClient {
 
   numMovesThisTurn(): number {
     if (this.needsTurnConfirmation) {
-      return 3;
+      return this.maxActionsPerTurn;
     }
     return this.board().turn_moves;
   }
 
   hasMoveLimitReached(): boolean {
-    return this.numMovesThisTurn() >= 3;
+    return this.numMovesThisTurn() >= this.maxActionsPerTurn;
+  }
+
+  actionLimit(): 2 | 3 {
+    return this.maxActionsPerTurn;
   }
 
   reserves(player: Player): ReserveFleet {

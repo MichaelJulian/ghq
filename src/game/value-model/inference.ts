@@ -5,6 +5,7 @@ import {
   ValuePosition,
 } from "@/game/value-model/features";
 import generatedModel from "@/game/value-model/model.generated.json";
+import twoActionGeneratedModel from "@/game/value-model/model.two-action.generated.json";
 
 interface ExportedTree {
   children_left: number[];
@@ -29,6 +30,13 @@ export interface ValueModelArtifact {
 }
 
 const model = generatedModel as unknown as ValueModelArtifact;
+const twoActionModel = twoActionGeneratedModel as unknown as ValueModelArtifact;
+
+export type ValueModelRuleset = "three-actions" | "two-actions";
+
+function modelForRuleset(ruleset: ValueModelRuleset): ValueModelArtifact {
+  return ruleset === "two-actions" ? twoActionModel : model;
+}
 
 function sigmoid(value: number): number {
   if (value >= 0) return 1 / (1 + Math.exp(-value));
@@ -60,7 +68,9 @@ export function assertValueModelCompatible(
       (feature, index) => feature !== VALUE_FEATURE_NAMES[index]
     )
   ) {
-    throw new Error("GHQ value model feature schema does not match the runtime");
+    throw new Error(
+      "GHQ value model feature schema does not match the runtime"
+    );
   }
 }
 
@@ -85,7 +95,8 @@ export function predictFromFeatures(
 
 export function predictWinProbability(
   position: ValuePosition,
-  perspective: Player
+  perspective: Player,
+  ruleset: ValueModelRuleset = "three-actions"
 ): number {
   const ownHq = position.board
     .flat()
@@ -96,7 +107,11 @@ export function predictWinProbability(
     .some((piece) => piece?.type === "HQ" && piece.player === opponent);
   if (!ownHq) return 0;
   if (!opponentHq) return 1;
-  return predictFromFeatures(extractValueFeatures(position, perspective));
+  return predictFromFeatures(
+    extractValueFeatures(position, perspective),
+    modelForRuleset(ruleset)
+  );
 }
 
 export const VALUE_MODEL_METADATA = model.metadata;
+export const TWO_ACTION_VALUE_MODEL_METADATA = twoActionModel.metadata;

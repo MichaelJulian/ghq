@@ -15,6 +15,7 @@
     "value:positions": "python3 scripts/extract_value_positions.py",
     "value:features": "tsx scripts/build_value_dataset.ts",
     "value:train": ".venv/bin/python scripts/train_value_model.py",
+    "value:download:2a": "tsx scripts/download_vercel_two_action_dataset.ts",
     "self-play:generation": "tsx scripts/run_self_play_generation.ts"
   },
   "dependencies": {

@@ -139,6 +139,7 @@ export default function PlayArea({
               ? game.numMovesThisTurn()
               : 0
           }
+          maxMoves={game.actionLimit()}
         />
       </div>
       <Reserve

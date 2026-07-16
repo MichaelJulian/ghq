@@ -11,6 +11,8 @@ import useSeek from "./useSeek";
 import { useSettings } from "./useSettings";
 import { cn } from "@/lib/utils";
 import {
+  AnalysisBotConfig,
+  AnalysisBotMultiplayer,
   BotMultiplayer,
   Multiplayer,
   OnlineMultiplayer,
@@ -25,6 +27,7 @@ export interface GHQBoardV3Props extends GameClientOptions {
   bot?: boolean;
   credentials?: string;
   match?: MatchV3;
+  analysisBot?: AnalysisBotConfig;
 }
 
 export function GHQBoardV3(opts: GHQBoardV3Props) {
@@ -38,6 +41,16 @@ export function GHQBoardV3(opts: GHQBoardV3Props) {
 
   useEffect(() => {
     if (!engine) {
+      return;
+    }
+
+    if (opts.analysisBot) {
+      const multiplayer = new AnalysisBotMultiplayer(
+        engine,
+        opts.analysisBot,
+        opts.fen
+      );
+      setMultiplayer(multiplayer);
       return;
     }
 
@@ -65,7 +78,15 @@ export function GHQBoardV3(opts: GHQBoardV3Props) {
         multiplayer.disconnect();
       };
     }
-  }, [opts.bot, opts.id, opts.fen, engine, isSignedIn, getToken]);
+  }, [
+    opts.analysisBot,
+    opts.bot,
+    opts.id,
+    opts.fen,
+    engine,
+    isSignedIn,
+    getToken,
+  ]);
 
   const realGame = useGameClient({
     ...opts,

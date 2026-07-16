@@ -160,6 +160,7 @@ export interface FenAnalysisResponse {
     beamWidth: number;
     explorationTemperature: number;
     explorationSeed: number;
+    maxActions: 2 | 3;
   };
   outcome?: {
     winner?: Player;

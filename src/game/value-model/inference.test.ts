@@ -4,6 +4,7 @@ import {
   assertValueModelCompatible,
   predictFromFeatures,
   predictWinProbability,
+  TWO_ACTION_VALUE_MODEL_METADATA,
 } from "./inference";
 
 const position = {
@@ -29,6 +30,14 @@ describe("gradient-boosted value model", () => {
     expect(red).toBeLessThan(1);
     expect(blue).toBeGreaterThan(0);
     expect(blue).toBeLessThan(1);
+  });
+
+  it("selects the dedicated two-action checkpoint", () => {
+    const standard = predictWinProbability(position, "RED", "three-actions");
+    const twoAction = predictWinProbability(position, "RED", "two-actions");
+    expect(Number.isFinite(twoAction)).toBe(true);
+    expect(twoAction).not.toBe(standard);
+    expect(TWO_ACTION_VALUE_MODEL_METADATA).toBeDefined();
   });
 
   it("evaluates an exported tree vector directly", () => {

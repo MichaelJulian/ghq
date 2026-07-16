@@ -4,10 +4,14 @@ import React from "react";
 
 interface MoveProgressBarProps {
   numMoves: number;
+  maxMoves?: number;
 }
 
-export default function MoveProgressBar({ numMoves }: MoveProgressBarProps) {
-  const progress = Math.min((numMoves / 3) * 100, 100);
+export default function MoveProgressBar({
+  numMoves,
+  maxMoves = 3,
+}: MoveProgressBarProps) {
+  const progress = Math.min((numMoves / maxMoves) * 100, 100);
 
   return (
     <div className="w-full h-1 bg-white overflow-hidden">

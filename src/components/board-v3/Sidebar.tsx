@@ -45,7 +45,7 @@ export default function Sidebar({
   );
   const currentPlayer = useMemo(() => game.currentPlayer(), [game.turn]);
   const movesLeft = useMemo(
-    () => 3 - game.numMovesThisTurn(),
+    () => game.actionLimit() - game.numMovesThisTurn(),
     [game.moves, game.turn]
   );
 

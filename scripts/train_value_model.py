@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 from sklearn.ensemble import GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, brier_score_loss, log_loss, roc_auc_score
+from sklearn.metrics import accuracy_score, roc_auc_score
 
 
 def parse_args() -> argparse.Namespace:
@@ -33,7 +33,7 @@ def load_dataset(path: Path) -> Tuple[List[str], List[Dict[str, Any]], np.ndarra
     feature_names: List[str] | None = None
     rows: List[Dict[str, Any]] = []
     vectors: List[List[float]] = []
-    labels: List[int] = []
+    labels: List[float] = []
     with path.open(encoding="utf-8") as handle:
         for line in handle:
             item = json.loads(line)
@@ -47,10 +47,13 @@ def load_dataset(path: Path) -> Tuple[List[str], List[Dict[str, Any]], np.ndarra
                 raise ValueError("feature schema mismatch")
             rows.append(item)
             vectors.append(vector)
-            labels.append(int(item["label"]))
+            label = float(item["label"])
+            if label not in (0.0, 0.5, 1.0):
+                raise ValueError(f"unsupported outcome label {label}")
+            labels.append(label)
     if not feature_names or not rows:
         raise ValueError("empty value-model dataset")
-    return feature_names, rows, np.asarray(vectors, dtype=np.float64), np.asarray(labels, dtype=np.int8)
+    return feature_names, rows, np.asarray(vectors, dtype=np.float64), np.asarray(labels, dtype=np.float64)
 
 
 def data_source(row: Dict[str, Any]) -> str:
@@ -138,14 +141,53 @@ def sigmoid(values: np.ndarray) -> np.ndarray:
 
 
 def metrics(labels: np.ndarray, probabilities: np.ndarray, weights: np.ndarray) -> Dict[str, float]:
-    return {
-        "log_loss": round(float(log_loss(labels, probabilities, sample_weight=weights)), 6),
-        "brier": round(float(brier_score_loss(labels, probabilities, sample_weight=weights)), 6),
-        "accuracy": round(
-            float(accuracy_score(labels, probabilities >= 0.5, sample_weight=weights)), 6
-        ),
-        "roc_auc": round(float(roc_auc_score(labels, probabilities, sample_weight=weights)), 6),
+    clipped = np.clip(probabilities, 1e-7, 1 - 1e-7)
+    log_scores = -(labels * np.log(clipped) + (1 - labels) * np.log(1 - clipped))
+    result = {
+        "log_loss": round(float(np.average(log_scores, weights=weights)), 6),
+        "brier": round(float(np.average((probabilities - labels) ** 2, weights=weights)), 6),
     }
+    decisive = labels != 0.5
+    if np.any(decisive) and len(np.unique(labels[decisive])) == 2:
+        result["decisive_accuracy"] = round(
+            float(
+                accuracy_score(
+                    labels[decisive],
+                    probabilities[decisive] >= 0.5,
+                    sample_weight=weights[decisive],
+                )
+            ),
+            6,
+        )
+        result["decisive_roc_auc"] = round(
+            float(
+                roc_auc_score(
+                    labels[decisive],
+                    probabilities[decisive],
+                    sample_weight=weights[decisive],
+                )
+            ),
+            6,
+        )
+    result["draw_samples"] = int(np.sum(labels == 0.5))
+    return result
+
+
+def expand_soft_labels(
+    vectors: np.ndarray, labels: np.ndarray, weights: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Represent a 0.5 target as half-weight loss and win observations."""
+    draw = labels == 0.5
+    if not np.any(draw):
+        return vectors, labels.astype(np.int8), weights
+    expanded_vectors = np.concatenate([vectors[~draw], vectors[draw], vectors[draw]])
+    expanded_labels = np.concatenate(
+        [labels[~draw], np.zeros(np.sum(draw)), np.ones(np.sum(draw))]
+    ).astype(np.int8)
+    expanded_weights = np.concatenate(
+        [weights[~draw], weights[draw] * 0.5, weights[draw] * 0.5]
+    )
+    return expanded_vectors, expanded_labels, expanded_weights
 
 
 def latest_position_indices(rows: List[Dict[str, Any]], indices: np.ndarray) -> np.ndarray:
@@ -238,6 +280,9 @@ def main() -> None:
     trained: List[Tuple[float, Dict[str, Any], GradientBoostingClassifier]] = []
     train_indices = splits["train"]
     validation_indices = splits["validation"]
+    train_vectors, train_labels, train_weights = expand_soft_labels(
+        vectors[train_indices], labels[train_indices], fit_weights["train"]
+    )
     for parameters in candidates:
         model = GradientBoostingClassifier(
             **parameters,
@@ -246,28 +291,31 @@ def main() -> None:
             random_state=args.random_state,
         )
         model.fit(
-            vectors[train_indices],
-            labels[train_indices],
-            sample_weight=fit_weights["train"],
+            train_vectors,
+            train_labels,
+            sample_weight=train_weights,
         )
         validation_probability = model.predict_proba(vectors[validation_indices])[:, 1]
-        score = float(
-            log_loss(
-                labels[validation_indices],
-                validation_probability,
-                sample_weight=fit_weights["validation"],
-            )
-        )
+        score = metrics(
+            labels[validation_indices],
+            validation_probability,
+            fit_weights["validation"],
+        )["log_loss"]
         print(json.dumps({"candidate": parameters, "validation_log_loss": round(score, 6)}))
         trained.append((score, parameters, model))
     _, best_parameters, model = min(trained, key=lambda item: item[0])
 
     validation_raw_probability = model.predict_proba(vectors[validation_indices])[:, 1]
     calibrator = LogisticRegression(random_state=args.random_state)
-    calibrator.fit(
+    calibration_vectors, calibration_labels, calibration_weights = expand_soft_labels(
         safe_logit(validation_raw_probability).reshape(-1, 1),
         labels[validation_indices],
-        sample_weight=fit_weights["validation"],
+        fit_weights["validation"],
+    )
+    calibrator.fit(
+        calibration_vectors,
+        calibration_labels,
+        sample_weight=calibration_weights,
     )
     calibration_scale = float(calibrator.coef_[0, 0])
     calibration_intercept = float(calibrator.intercept_[0])
@@ -327,7 +375,7 @@ def main() -> None:
         },
         "trees": [export_tree(stage[0]) for stage in model.estimators_],
         "metadata": {
-            "target": "probability that the perspective player eventually wins",
+            "target": "expected eventual score for the perspective player (win=1, draw=0.5, loss=0)",
             "eligible_outcomes": sorted({row["outcome_reason"] for row in rows}),
             "split": "source-stratified chronological 70/15/15 by whole game",
             "hyperparameters": best_parameters,
