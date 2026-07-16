@@ -22,6 +22,7 @@ import GameLoader from "./GameLoader";
 import { MatchV3 } from "@/lib/types";
 import { useUsers } from "./useUsers";
 import { GameoverReason, GameoverState } from "@/game/engine";
+import { config } from "@/lib/config";
 
 export interface GHQBoardV3Props extends GameClientOptions {
   bot?: boolean;
@@ -31,8 +32,27 @@ export interface GHQBoardV3Props extends GameClientOptions {
 }
 
 export function GHQBoardV3(opts: GHQBoardV3Props) {
-  const { engine } = useEngine();
+  if (config.useClerk) {
+    return <AuthenticatedGHQBoardV3 {...opts} />;
+  }
+  return <GHQBoardV3Inner {...opts} />;
+}
+
+function AuthenticatedGHQBoardV3(opts: GHQBoardV3Props) {
   const { isSignedIn, getToken } = useAuth();
+  return (
+    <GHQBoardV3Inner {...opts} isSignedIn={isSignedIn} getToken={getToken} />
+  );
+}
+
+function GHQBoardV3Inner(
+  opts: GHQBoardV3Props & {
+    isSignedIn?: boolean;
+    getToken?: () => Promise<string | null>;
+  }
+) {
+  const { engine } = useEngine();
+  const { isSignedIn, getToken } = opts;
   const [multiplayer, setMultiplayer] = useState<Multiplayer | undefined>(
     undefined
   );
