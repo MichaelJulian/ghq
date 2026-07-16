@@ -6,7 +6,7 @@ interface StoredGame {
   generationId: string;
   decisions: Array<{
     completedDepth: number;
-    fallback: "none" | "safe" | "greedy";
+    fallback: "none" | "safe" | "greedy" | "seeded";
     timedOut: boolean;
     completedTurn?: boolean;
     player?: "RED" | "BLUE";

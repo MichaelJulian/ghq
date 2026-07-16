@@ -46,7 +46,7 @@ export interface DurableSelfPlayDecision {
   winProbability: number;
   completedDepth: number;
   timedOut: boolean;
-  fallback: "none" | "safe" | "greedy";
+  fallback: "none" | "safe" | "seeded";
   explorationSeed: number;
   explorationTemperature: number;
   features: number[];
@@ -99,6 +99,8 @@ export interface DurableSelfPlayQuality {
   fallbackDecisions: number;
   timedOutDecisions: number;
   decisive: boolean;
+  trainingEligible: boolean;
+  trainingRejectionReasons: string[];
 }
 
 interface DurableTrainingSample {
@@ -204,6 +206,39 @@ export function isDurableTrainingDecisionEligible(
   );
 }
 
+export function durableGameTrainingRejectionReasons(
+  decisions: DurableSelfPlayDecision[],
+  outcome: DurableSelfPlayGameResult["outcome"]
+): string[] {
+  const reasons: string[] = [];
+  if (!outcome.winner || outcome.termination !== "hq-capture") {
+    reasons.push("not-hq-capture");
+  }
+  if (!decisions.length) reasons.push("no-decisions");
+  if (decisions.some((decision) => !decision.completedTurn)) {
+    reasons.push("incomplete-turn");
+  }
+  if (
+    decisions.some(
+      (decision) =>
+        (decision.selfActionLimit ?? 3) !== 3 ||
+        (decision.opponentActionLimit ?? 3) !== 3
+    )
+  ) {
+    reasons.push("nonstandard-action-limit");
+  }
+  if (decisions.some((decision) => decision.fallback === "seeded")) {
+    reasons.push("unverified-complete-turn-seed");
+  }
+  const fallbackDecisions = decisions.filter(
+    (decision) => decision.fallback !== "none"
+  ).length;
+  if (decisions.length && fallbackDecisions / decisions.length > 0.05) {
+    reasons.push("excessive-fallback-rate");
+  }
+  return reasons;
+}
+
 async function persistDurableGame(input: {
   result: Omit<DurableSelfPlayGameResult, "storage">;
   trainingSamples: DurableTrainingSample[];
@@ -284,9 +319,16 @@ export async function playDurableSelfPlayGame(
   }
 
   if (!outcome) outcome = { termination: "max-turns" };
-  const eligibleDecisions = decisions.filter((decision) =>
-    isDurableTrainingDecisionEligible(decision, outcome)
+  const trainingRejectionReasons = durableGameTrainingRejectionReasons(
+    decisions,
+    outcome
   );
+  const trainingEligible = trainingRejectionReasons.length === 0;
+  const eligibleDecisions = trainingEligible
+    ? decisions.filter((decision) =>
+        isDurableTrainingDecisionEligible(decision, outcome)
+      )
+    : [];
   const trainingSamples: DurableTrainingSample[] = outcome.winner
     ? eligibleDecisions.map((decision) => ({
         generationId: config.generationId,
@@ -331,6 +373,8 @@ export async function playDurableSelfPlayGame(
       timedOutDecisions: decisions.filter((decision) => decision.timedOut)
         .length,
       decisive: outcome.winner !== undefined,
+      trainingEligible,
+      trainingRejectionReasons,
     },
   };
   const storage = await persistDurableGame({ result, trainingSamples });

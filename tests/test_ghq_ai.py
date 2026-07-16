@@ -393,10 +393,12 @@ class SearchTests(unittest.TestCase):
             )
         )
 
-    def test_greedy_fallback_preserves_idle_paratrooper_and_breaks_column(self):
+    def test_complete_turn_seed_preserves_idle_paratrooper_and_breaks_column(self):
         board = engine.BaseBoard(VERTICAL_INFANTRY_FEN)
         before_shape = ghq_ai.infantry_shape_score(board, engine.RED)
-        result = ghq_ai.greedy_complete_turn(board, "balanced", turn_number=12)
+        result = ghq_ai.purposeful_complete_turn_seed(
+            board, "balanced", turn_number=12
+        )
         ucis = [move.uci() for move in result.pv]
         self.assertNotEqual(ucis, ["h5h6", "h4h5", "h3h4"])
         self.assertFalse(any(uci.startswith("d1") for uci in ucis))
@@ -407,8 +409,8 @@ class SearchTests(unittest.TestCase):
             ghq_ai.infantry_shape_score(after, engine.RED), before_shape
         )
 
-    def test_greedy_fallback_does_not_stage_para_just_to_spend_an_action(self):
-        result = ghq_ai.greedy_complete_turn(
+    def test_complete_turn_seed_does_not_stage_para_just_to_spend_an_action(self):
+        result = ghq_ai.purposeful_complete_turn_seed(
             engine.BaseBoard(), "balanced", turn_number=2
         )
         self.assertFalse(
@@ -419,7 +421,7 @@ class SearchTests(unittest.TestCase):
             )
         )
 
-    def test_greedy_fallback_does_not_double_skip_when_quiet_moves_exist(self):
+    def test_complete_turn_seed_does_not_double_skip_when_quiet_moves_exist(self):
         # Batch vercel-6101331c-mrkqp2q4 reached this position with 28 legal
         # non-skip actions. The old per-action purpose veto rejected all 28,
         # selected skip, and the opponent repeated it for a false draw.
@@ -430,7 +432,7 @@ class SearchTests(unittest.TestCase):
             sum(move.name != "Skip" for move in board.generate_legal_moves()),
             0,
         )
-        result = ghq_ai.greedy_complete_turn(
+        result = ghq_ai.purposeful_complete_turn_seed(
             board, "fortress", turn_number=70
         )
         self.assertGreaterEqual(len(result.pv), 2)
@@ -590,8 +592,7 @@ class SearchTests(unittest.TestCase):
         result = ghq_ai.search(board, "balanced", time_ms=1200, max_depth=1, beam_width=8)
         moves = result["best_turn"]["all_moves"]
         actions = result["best_turn"]["actions"]
-        self.assertLessEqual(len(actions), 3)
-        self.assertGreater(len(actions), 0)
+        self.assertEqual(len([uci for uci in actions if uci != "skip"]), 3)
 
         replay = board.copy()
         for uci in moves:
@@ -623,7 +624,7 @@ class SearchTests(unittest.TestCase):
             replay.push(move)
         self.assertNotEqual(replay.turn, board.turn)
 
-    def test_greedy_fallback_completes_a_one_action_hq_only_turn(self):
+    def test_complete_turn_seed_completes_a_one_action_hq_only_turn(self):
         board = engine.BaseBoard(
             "q6i/8/8/2ii1i2/1i4i1/r→7/8/5Q2 - - r"
         )
@@ -638,7 +639,7 @@ class SearchTests(unittest.TestCase):
             [move.uci() for move in board.generate_legal_moves()], ["skip"]
         )
 
-        result = ghq_ai.greedy_complete_turn(
+        result = ghq_ai.purposeful_complete_turn_seed(
             board, "balanced", turn_number=61
         )
         self.assertEqual([move.uci() for move in result.pv], ["skip"])

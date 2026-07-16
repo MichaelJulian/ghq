@@ -23,7 +23,7 @@ describe("production FEN analysis", () => {
       "best move",
       "best found",
       "safe fallback",
-      "greedy fallback",
+      "complete-turn seed",
       "opening book",
     ]).toContain(result.search.recommendation_label);
     if (

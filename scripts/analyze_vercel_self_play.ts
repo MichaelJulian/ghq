@@ -78,6 +78,7 @@ async function main() {
   const countedActionCounts: Record<string, number> = {};
   const depths: Record<string, number> = {};
   const fallbackTypes: Record<string, number> = {};
+  const trainingRejectionReasons: Record<string, number> = {};
   const personalities: Record<
     string,
     { games: number; wins: number; losses: number; draws: number }
@@ -103,6 +104,7 @@ async function main() {
   let fallbackDecisions = 0;
   let timedOutDecisions = 0;
   let incompleteTurnDecisions = 0;
+  let qualityEligibleGames = 0;
 
   for (const game of games) {
     increment(outcomes, game.outcome.winner ?? "DRAW");
@@ -114,6 +116,10 @@ async function main() {
     trainingPositions += game.trainingPositions;
     fallbackDecisions += game.quality.fallbackDecisions;
     timedOutDecisions += game.quality.timedOutDecisions;
+    if (game.quality.trainingEligible) qualityEligibleGames++;
+    for (const reason of game.quality.trainingRejectionReasons ?? []) {
+      increment(trainingRejectionReasons, reason);
+    }
     for (const decision of game.decisions) {
       increment(actionCounts, String(decision.selectedMoves.length));
       increment(
@@ -201,6 +207,8 @@ async function main() {
         incompleteTurnDecisions,
         trainingGames: games.filter((game) => game.trainingPositions > 0)
           .length,
+        qualityEligibleGames,
+        trainingRejectionReasons,
         trainingPositions,
         personalities,
         rejected,

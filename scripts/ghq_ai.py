@@ -1130,6 +1130,12 @@ class Searcher:
     ) -> Dict[str, float]:
         """Measure what a full turn changed, beyond merely spending actions."""
         action_purposes = self.action_purpose_labels(before, moves, mover)
+        counted_actions = sum(
+            move.name not in ("AutoCapture", "Skip") for move in moves
+        )
+        unused_actions = (
+            0 if after.is_game_over() else max(0, self.max_actions - counted_actions)
+        )
         purposeful_actions = sum(
             1
             for item in action_purposes
@@ -1250,6 +1256,7 @@ class Searcher:
             + 2.0 * uncompensated_dispersion
             + 1.5 * congestion_increase
             + 2.5 * extension_gain
+            + 0.9 * unused_actions
         )
         # Benefits offset wasted motion continuously. This matters for turns
         # containing one mildly useful action and two swaps/reversals: the
@@ -1280,6 +1287,8 @@ class Searcher:
             "development_actions": float(development_actions),
             "formation_actions": float(formation_actions),
             "quiet_actions": float(quiet_actions),
+            "counted_actions": float(counted_actions),
+            "unused_actions": float(unused_actions),
             "backfills": float(backfills),
             "reversals": float(reversals),
             "pure_rotations": float(pure_rotations),
@@ -1925,6 +1934,11 @@ class Searcher:
         """Capture a screened fallback before wide root generation can time out."""
         if self.root_key != cache_key or self.root_fallback is not None:
             return
+        counted_actions = sum(
+            move.name not in ("AutoCapture", "Skip") for move in partial.moves
+        )
+        if not partial.board.is_game_over() and counted_actions < self.max_actions:
+            return
         _, wasteful_rotation = self.turn_action_classes(root, partial.moves)
         if wasteful_rotation:
             return
@@ -1990,13 +2004,28 @@ class Searcher:
             return cached
 
         original_turn = board.turn
+        is_root_generation = self.root_key is None or cache_key == self.root_key
         if self.time_ms < 1000:
-            partial_width = max(24, self.beam_width * 4)
+            partial_width = max(12, self.beam_width * 2)
+            evaluation_pool_width = max(16, self.beam_width * 3)
+        elif is_root_generation:
+            # Keep a broad partial frontier at the root so multi-action unlock
+            # sequences survive. Cost is controlled later by the much smaller
+            # evaluated complete-turn pool and bounded retained beam.
+            partial_width = max(48, self.beam_width * 6)
             evaluation_pool_width = max(36, self.beam_width * 6)
         else:
-            partial_width = max(48, self.beam_width * 6)
-            evaluation_pool_width = max(72, self.beam_width * 8)
-        turn_width = max(8, self.beam_width * 2)
+            # Opponent replies receive a narrower beam. This reserves enough
+            # of the wall-clock budget to complete an actual reply instead of
+            # spending the whole turn enumerating root alternatives.
+            partial_width = max(16, self.beam_width * 2)
+            evaluation_pool_width = max(24, self.beam_width * 3)
+        turn_width = (
+            max(4, self.beam_width)
+            if is_root_generation
+            else max(3, (self.beam_width + 1) // 2)
+        )
+        turn_capacity = turn_width + max(1, self.beam_width // 3)
         frontier = [PartialTurn([], board.copy(), 0.0)]
         completed: List[PartialTurn] = []
 
@@ -2222,7 +2251,7 @@ class Searcher:
             ),
         )
         for candidate in tactical:
-            if len(selected) >= turn_width + self.beam_width:
+            if len(selected) >= turn_capacity:
                 break
             if (
                 candidate not in selected
@@ -2240,9 +2269,42 @@ class Searcher:
             for plan_key in self.turn_plan_keys(board, candidate.moves):
                 if plan_key not in plan_representatives:
                     plan_representatives[plan_key] = candidate
-        for candidate in plan_representatives.values():
-            if candidate not in selected and candidate.tactically_safe:
+        plan_items = sorted(
+            plan_representatives.items(),
+            key=lambda item: (
+                0
+                if item[0][0] in ("unlock_and_extract", "escape_and_extract")
+                else 1,
+                self.candidate_sort_key(item[1], original_turn),
+            ),
+        )
+        preserved_plans: List[TurnCandidate] = []
+        plan_limit = max(1, min(3, self.beam_width // 2))
+        for _, candidate in plan_items:
+            if (
+                candidate in preserved_plans
+                or not candidate.tactically_safe
+                or len(preserved_plans) >= plan_limit
+            ):
+                continue
+            preserved_plans.append(candidate)
+            if candidate in selected:
+                continue
+            if len(selected) < turn_capacity:
                 selected.append(candidate)
+                continue
+            # The cap controls cost, but it may not erase a multi-action save
+            # or extraction sequence. Replace the weakest generic slot.
+            replace_index = next(
+                (
+                    index
+                    for index in range(len(selected) - 1, -1, -1)
+                    if selected[index] not in preserved_plans
+                ),
+                None,
+            )
+            if replace_index is not None:
+                selected[replace_index] = candidate
 
         if len(selected) != len(candidates):
             self.exhaustive_within_horizon = False
@@ -2338,13 +2400,13 @@ class Searcher:
         return best
 
 
-def greedy_complete_turn(
+def purposeful_complete_turn_seed(
     board: engine.BaseBoard,
     personality: str,
     turn_number: int = 1,
     max_actions: int = 3,
 ) -> SearchResult:
-    """Fast positional completion used only when no search depth finishes.
+    """Fast full-turn seed used before iterative search.
 
     This fallback must remain able to assemble a useful multi-action turn.
     A quiet first action can unlock pressure, protection, or mobility on the
@@ -2369,7 +2431,7 @@ def greedy_complete_turn(
         candidates: List[Tuple[float, float, str, engine.Move]] = []
         for move in legal:
             piece_type = Searcher.move_piece_type(working, move)
-            if move.name == "Skip" and working.turn_moves < min(2, max_actions):
+            if move.name == "Skip" and working.turn_moves < max_actions:
                 continue
             if (
                 working.turn_moves >= max_actions
@@ -2693,6 +2755,7 @@ def search(
     completed_depth = 0
     timed_out = False
     fallback_kind = "none"
+    emergency_seed: Optional[SearchResult] = None
     book_turn = opening_book_turn(board, turn_number, searcher, opening_seed)
     opening_book_used = book_turn is not None
     if book_turn is not None:
@@ -2710,6 +2773,51 @@ def search(
         )
         best = SearchResult(score, list(book_turn.moves))
     else:
+        # Establish a legal, purposeful full turn before spending the budget on
+        # minimax. If iterative search expires, we still return three counted
+        # actions (unless the game ended) rather than inventing a late greedy
+        # line or stopping after two actions.
+        emergency_seed = purposeful_complete_turn_seed(
+            board, personality, turn_number, max_actions=max_actions
+        )
+        seed_moves, seed_board = first_turn_from_pv(board, emergency_seed.pv)
+        seed_purpose = searcher.turn_purpose_breakdown(
+            board, seed_board, seed_moves, board.turn
+        )
+        seed_penalty = seed_purpose["total_penalty"]
+        emergency_seed.score += (
+            -seed_penalty if board.turn == engine.RED else seed_penalty
+        )
+        seed_counted_actions = sum(
+            move.name not in ("AutoCapture", "Skip") for move in seed_moves
+        )
+        if seed_board.is_game_over() or seed_counted_actions >= searcher.max_actions:
+            try:
+                seed_safety = searcher.assess_turn_safety(
+                    board, seed_board, board.turn
+                )
+            except SearchTimeout:
+                seed_safety = None
+            if seed_safety is not None and seed_safety.tactically_safe:
+                seed_action_purposes = searcher.action_purpose_labels(
+                    board, seed_moves, board.turn
+                )
+                searcher.root_fallback = TurnCandidate(
+                    seed_moves,
+                    seed_board,
+                    0.0,
+                    searcher.quick_score(seed_board),
+                    max(
+                        0.0,
+                        seed_safety.new_risk_value
+                        - seed_safety.compensation_value,
+                    ),
+                    True,
+                    seed_purpose["net_purpose_penalty"],
+                    seed_purpose["paratrooper_mission_penalty"],
+                    seed_action_purposes,
+                    searcher.early_plan_score(seed_action_purposes),
+                )
         for depth in range(1, max(1, max_depth) + 1):
             try:
                 iteration = searcher.alphabeta(board, depth, -math.inf, math.inf)
@@ -2743,29 +2851,23 @@ def search(
             )
             fallback_kind = "safe"
         else:
-            best = greedy_complete_turn(
+            best = emergency_seed or purposeful_complete_turn_seed(
                 board, personality, turn_number, max_actions=max_actions
             )
-            greedy_moves, greedy_board = first_turn_from_pv(board, best.pv)
-            greedy_purpose = searcher.turn_purpose_breakdown(
-                board, greedy_board, greedy_moves, board.turn
-            )
-            greedy_penalty = greedy_purpose["total_penalty"]
-            best.score += -greedy_penalty if board.turn == engine.RED else greedy_penalty
-            fallback_kind = "greedy"
+            fallback_kind = "seeded"
     first_turn, resulting_board = first_turn_from_pv(board, best.pv)
     if not first_turn and not board.is_game_over():
-        fallback = greedy_complete_turn(
+        fallback = purposeful_complete_turn_seed(
             board, personality, turn_number, max_actions=max_actions
         )
         first_turn, resulting_board = first_turn_from_pv(board, fallback.pv)
         best = fallback
-        greedy_purpose = searcher.turn_purpose_breakdown(
+        seed_purpose = searcher.turn_purpose_breakdown(
             board, resulting_board, first_turn, board.turn
         )
-        greedy_penalty = greedy_purpose["total_penalty"]
-        best.score += -greedy_penalty if board.turn == engine.RED else greedy_penalty
-        fallback_kind = "greedy"
+        seed_penalty = seed_purpose["total_penalty"]
+        best.score += -seed_penalty if board.turn == engine.RED else seed_penalty
+        fallback_kind = "seeded"
 
     elapsed_ms = (time.monotonic() - started) * 1000.0
     automatic = [move.uci() for move in first_turn if move.name == "AutoCapture"]
@@ -2848,8 +2950,8 @@ def search(
         if exhaustive
         else "safe fallback"
         if fallback_kind == "safe"
-        else "greedy fallback"
-        if fallback_kind == "greedy"
+        else "complete-turn seed"
+        if fallback_kind == "seeded"
         else "best found"
     )
     return {

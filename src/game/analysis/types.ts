@@ -56,6 +56,8 @@ export interface GhqTurnPurpose {
   development_actions: number;
   formation_actions: number;
   quiet_actions: number;
+  counted_actions: number;
+  unused_actions: number;
   backfills: number;
   reversals: number;
   pure_rotations: number;
@@ -81,7 +83,7 @@ export interface GhqSearchResult {
     | "best move"
     | "best found"
     | "safe fallback"
-    | "greedy fallback"
+    | "complete-turn seed"
     | "opening book"
     | "exploratory";
   input_fen: string;
@@ -111,7 +113,7 @@ export interface GhqSearchResult {
     nodes: number;
     elapsed_ms: number;
     timed_out: boolean;
-    fallback_used: "none" | "safe" | "greedy";
+    fallback_used: "none" | "safe" | "seeded";
     opening_book_used: boolean;
     early_game_focus: boolean;
     approximate: boolean;

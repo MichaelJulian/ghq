@@ -884,7 +884,7 @@ function AnalysisDetails({ analysis }: { analysis: FenAnalysisResponse }) {
             <div className="mt-2 text-xs text-slate-300">
               {analysis.search.search.fallback_used === "safe"
                 ? "Search timed out after producing this tactically screened root turn, but before completing the requested depth."
-                : "Search timed out before a tactically screened root turn was ready, so this came from the emergency positional policy and has no opponent-response verification."}
+                : "Search timed out before a tactically screened root turn was ready. This precomputed full-turn seed has three counted actions but no opponent-response verification."}
             </div>
           )}
         </CardContent>

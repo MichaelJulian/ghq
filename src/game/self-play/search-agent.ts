@@ -23,7 +23,7 @@ export interface SearchDecisionRecord {
   winProbability: number;
   completedDepth: number;
   timedOut: boolean;
-  fallback: "none" | "safe" | "greedy";
+  fallback: "none" | "safe" | "seeded";
   explorationSeed: number;
   explorationTemperature: number;
 }
@@ -59,9 +59,7 @@ export function createSearchSelfPlayAgent(
       }
 
       if (queuedMoves.length === 0) {
-        const explorationSeed = Math.floor(
-          context.random() * 0x1_0000_0000
-        );
+        const explorationSeed = Math.floor(context.random() * 0x1_0000_0000);
         const analysis = await options.analyze({
           serializedState: context.board.serialize(),
           turnNumber: context.turnNumber,
@@ -98,7 +96,10 @@ export function createSearchSelfPlayAgent(
       }
 
       const selected = queuedMoves.shift();
-      if (!selected || !context.legalMoves.some((move) => move.uci() === selected)) {
+      if (
+        !selected ||
+        !context.legalMoves.some((move) => move.uci() === selected)
+      ) {
         throw new Error(
           `${options.id} queued stale search move ${JSON.stringify(selected)}`
         );
