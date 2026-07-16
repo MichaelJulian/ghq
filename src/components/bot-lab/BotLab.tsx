@@ -403,7 +403,7 @@ function PlayBotMatch({
       timeMs: session.timeMs,
       maxDepth: session.maxDepth,
       beamWidth: session.beamWidth,
-      maxActions: 2 as const,
+      maxActions: 3 as const,
       explorationTemperature: session.explorationTemperature,
       explorationSeed: session.matchSeed,
     }),
@@ -463,9 +463,8 @@ function PlayBotMatch({
               <RotateCcw /> New game
             </Button>
             <span className="text-xs text-slate-600">
-              Experimental two-action rules apply to both sides. Click End Turn
-              after your second action; the bot then searches its complete
-              reply.
+              Standard three-action rules apply to both sides. Click End Turn
+              after your third action; the bot then searches its complete reply.
             </span>
           </div>
         </CardContent>
@@ -476,7 +475,7 @@ function PlayBotMatch({
           bot
           playerId={session.humanColor === "RED" ? "0" : "1"}
           analysisBot={analysisBot}
-          maxActionsPerTurn={2}
+          maxActionsPerTurn={3}
         />
       </div>
     </div>

@@ -70,14 +70,14 @@ export async function POST(request: Request) {
     );
     const redMaxActions = integer(
       input.redMaxActions,
-      2,
+      3,
       2,
       3,
       "redMaxActions"
     ) as 2 | 3;
     const blueMaxActions = integer(
       input.blueMaxActions,
-      2,
+      3,
       2,
       3,
       "blueMaxActions"

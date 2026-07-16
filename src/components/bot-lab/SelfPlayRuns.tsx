@@ -128,8 +128,8 @@ export function SelfPlayRuns() {
           maxTurns: 160,
           repetitionLimit: 3,
           noProgressTurns: 24,
-          redMaxActions: 2,
-          blueMaxActions: 2,
+          redMaxActions: 3,
+          blueMaxActions: 3,
           seed: Date.now() >>> 0,
         }),
       });
@@ -146,7 +146,7 @@ export function SelfPlayRuns() {
         ...batches,
       ]);
       setMessage(
-        `${body.runs.length} durable 2-action games launched on Vercel.`
+        `${body.runs.length} durable 3-action games launched on Vercel.`
       );
     } catch (error) {
       setMessage(
@@ -219,7 +219,7 @@ export function SelfPlayRuns() {
           Launch independent durable games. Completed games and quality-gated
           training samples are saved to private Vercel Blob storage; run IDs
           also persist in this browser. Access is controlled by Vercel
-          Authentication. Self-play currently uses two actions per side.
+          Authentication. Self-play uses the standard three actions per side.
         </p>
       </CardHeader>
       <CardContent className="space-y-4">
