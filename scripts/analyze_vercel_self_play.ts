@@ -5,6 +5,7 @@ import "dotenv/config";
 import { get, list, type ListBlobResultBlob } from "@vercel/blob";
 
 import type { DurableSelfPlayGameResult } from "../src/workflows/self-play-game";
+import { summarizeValueModelArena } from "../src/game/self-play/arena-results";
 
 function argumentsFor(name: string): string[] {
   const values: string[] = [];
@@ -373,6 +374,7 @@ async function main() {
           ])
         ),
         pairedOutcomes,
+        valueModelArena: summarizeValueModelArena(games),
         rejected,
         stalledGameTails,
         overLimitExamples,
