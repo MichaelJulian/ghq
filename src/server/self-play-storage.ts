@@ -9,6 +9,36 @@ export interface PersistedSelfPlayArtifacts {
   trainingSamples: number;
 }
 
+export interface SelfPlayGenerationManifest {
+  format: "ghq-self-play-generation-manifest-v1";
+  generationId: string;
+  createdAt: string;
+  expectedGames: number;
+  codeVersion: string;
+  valueModelArena: boolean;
+  settings: {
+    timeMs: number;
+    maxDepth: number;
+    beamWidth: number;
+    maxTurns: number;
+    repetitionLimit: number;
+    noProgressTurns: number;
+    redMaxActions: number;
+    blueMaxActions: number;
+    seed: number;
+  };
+  expectedProvenance: {
+    incumbentCheckpoints: string[];
+    challengerCheckpoints: string[];
+  };
+  runs: Array<{
+    gameId: string;
+    runId: string;
+    redAgentId: string;
+    blueAgentId: string;
+  }>;
+}
+
 export function selfPlayStorageConfigured(): boolean {
   return Boolean(
     process.env.BLOB_STORE_ID || process.env.BLOB_READ_WRITE_TOKEN
@@ -21,6 +51,38 @@ function safeSegment(value: string): string {
     throw new Error("Invalid self-play storage identifier");
   }
   return safe;
+}
+
+function generationManifestPathname(generationId: string): string {
+  return `${SELF_PLAY_BLOB_PREFIX}${safeSegment(generationId)}/manifest.json`;
+}
+
+export async function persistSelfPlayGenerationManifest(
+  manifest: SelfPlayGenerationManifest
+): Promise<"saved" | "not-configured"> {
+  if (!selfPlayStorageConfigured()) return "not-configured";
+  await put(
+    generationManifestPathname(manifest.generationId),
+    JSON.stringify(manifest),
+    {
+      access: "private",
+      addRandomSuffix: false,
+      contentType: "application/json",
+    }
+  );
+  return "saved";
+}
+
+export async function readSelfPlayGenerationManifest(
+  generationId: string
+): Promise<SelfPlayGenerationManifest | undefined> {
+  if (!selfPlayStorageConfigured()) return undefined;
+  const response = await get(generationManifestPathname(generationId), {
+    access: "private",
+    useCache: false,
+  });
+  if (!response?.stream || response.statusCode !== 200) return undefined;
+  return (await new Response(response.stream).json()) as SelfPlayGenerationManifest;
 }
 
 export async function persistSelfPlayArtifacts(input: {
@@ -68,6 +130,7 @@ export async function persistSelfPlayArtifacts(input: {
 
 export interface PersistedSelfPlayGeneration {
   generationId: string;
+  manifestArtifacts: number;
   gameArtifacts: number;
   trainingArtifacts: number;
   bytes: number;
@@ -94,18 +157,24 @@ export async function listPersistedSelfPlayGenerations(): Promise<
   const generations = new Map<string, PersistedSelfPlayGeneration>();
   for (const blob of blobs) {
     const remainder = blob.pathname.slice(SELF_PLAY_BLOB_PREFIX.length);
-    if (!remainder.includes("/games/") && !remainder.includes("/training/")) {
+    if (
+      !remainder.endsWith("/manifest.json") &&
+      !remainder.includes("/games/") &&
+      !remainder.includes("/training/")
+    ) {
       continue;
     }
     const generationId = remainder.split("/", 1)[0];
     if (!generationId) continue;
     const current = generations.get(generationId) ?? {
       generationId,
+      manifestArtifacts: 0,
       gameArtifacts: 0,
       trainingArtifacts: 0,
       bytes: 0,
       updatedAt: blob.uploadedAt.toISOString(),
     };
+    if (remainder.endsWith("/manifest.json")) current.manifestArtifacts++;
     if (remainder.includes("/games/")) current.gameArtifacts++;
     if (remainder.includes("/training/")) current.trainingArtifacts++;
     current.bytes += blob.size;

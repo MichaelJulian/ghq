@@ -3,6 +3,7 @@ import { start } from "workflow/api";
 import { PERSONALITIES } from "@/game/value-model/personalities";
 import type { PersonalityId } from "@/game/analysis/types";
 import { scheduleDurableCompetitors } from "@/game/self-play/durable-schedule";
+import { persistSelfPlayGenerationManifest } from "@/server/self-play-storage";
 import {
   playDurableSelfPlayGame,
   type DurableSelfPlayCompetitor,
@@ -117,6 +118,7 @@ export async function POST(request: Request) {
     }r${redMaxActions}b${blueMaxActions}-${seed.toString(16)}-${Date.now().toString(
       36
     )}`;
+    const codeVersion = process.env.VERCEL_GIT_COMMIT_SHA ?? "local";
     const runs = await Promise.all(
       Array.from({ length: games }, async (_, index) => {
         // Adjacent games form a controlled color-swapped pair: same matchup and
@@ -141,12 +143,72 @@ export async function POST(request: Request) {
             maxTurns,
             repetitionLimit,
             noProgressTurns,
-            codeVersion: process.env.VERCEL_GIT_COMMIT_SHA ?? "local",
+            codeVersion,
           },
         ]);
-        return { gameId, runId: run.runId, red: red.id, blue: blue.id };
+        return {
+          gameId,
+          runId: run.runId,
+          red: red.id,
+          blue: blue.id,
+          redValueModel: red.valueModel ?? "incumbent",
+          blueValueModel: blue.valueModel ?? "incumbent",
+          redValueModelCheckpoint: red.valueModelCheckpoint ?? "unknown",
+          blueValueModelCheckpoint: blue.valueModelCheckpoint ?? "unknown",
+        };
       })
     );
+    const checkpoints = {
+      incumbentCheckpoints: new Set<string>(),
+      challengerCheckpoints: new Set<string>(),
+    };
+    for (const run of runs) {
+      for (const [model, checkpoint] of [
+        [run.redValueModel, run.redValueModelCheckpoint],
+        [run.blueValueModel, run.blueValueModelCheckpoint],
+      ] as const) {
+        checkpoints[
+          model === "challenger"
+            ? "challengerCheckpoints"
+            : "incumbentCheckpoints"
+        ].add(checkpoint);
+      }
+    }
+    let manifestStorage: "saved" | "not-configured" | "failed";
+    try {
+      manifestStorage = await persistSelfPlayGenerationManifest({
+        format: "ghq-self-play-generation-manifest-v1",
+        generationId,
+        createdAt: new Date().toISOString(),
+        expectedGames: games,
+        codeVersion,
+        valueModelArena,
+        settings: {
+          timeMs,
+          maxDepth,
+          beamWidth,
+          maxTurns,
+          repetitionLimit,
+          noProgressTurns,
+          redMaxActions,
+          blueMaxActions,
+          seed,
+        },
+        expectedProvenance: {
+          incumbentCheckpoints: [...checkpoints.incumbentCheckpoints].sort(),
+          challengerCheckpoints: [...checkpoints.challengerCheckpoints].sort(),
+        },
+        runs: runs.map((run) => ({
+          gameId: run.gameId,
+          runId: run.runId,
+          redAgentId: run.red,
+          blueAgentId: run.blue,
+        })),
+      });
+    } catch (error) {
+      manifestStorage = "failed";
+      console.error("Unable to persist self-play generation manifest", error);
+    }
     return NextResponse.json(
       {
         generationId,
@@ -155,6 +217,7 @@ export async function POST(request: Request) {
         blueMaxActions,
         pairedColorSwap: true,
         valueModelArena,
+        manifestStorage,
         runs,
       },
       { status: 202 }

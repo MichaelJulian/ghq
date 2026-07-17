@@ -33,6 +33,7 @@ interface GameResult {
 
 interface PersistedGeneration {
   generationId: string;
+  manifestArtifacts: number;
   gameArtifacts: number;
   trainingArtifacts: number;
   bytes: number;
@@ -57,6 +58,8 @@ interface StartResponse {
 interface GenerationSummary {
   generationId: string;
   games: number;
+  expectedGames?: number;
+  remainingGames?: number;
   outcomes: Record<string, number>;
   terminations: Record<string, number>;
   fallbackRate: number;
@@ -403,7 +406,8 @@ export function SelfPlayRuns() {
                     {generation.generationId}
                   </span>
                   <span className="font-semibold text-slate-700">
-                    {generation.gameArtifacts} games ·{" "}
+                    {generation.gameArtifacts} completed
+                    {generation.manifestArtifacts ? " · tracked" : ""} ·{" "}
                     {generation.trainingArtifacts} training files ·{" "}
                     {(generation.bytes / 1_000_000).toFixed(1)} MB
                   </span>
@@ -423,7 +427,14 @@ export function SelfPlayRuns() {
                 {generationSummary.generationId}
               </div>
               <div className="mt-1">
-                {generationSummary.games} games · outcomes{" "}
+                {generationSummary.games}
+                {generationSummary.expectedGames === undefined
+                  ? " games"
+                  : `/${generationSummary.expectedGames} games complete`}
+                {generationSummary.remainingGames !== undefined &&
+                  generationSummary.remainingGames > 0 &&
+                  ` · ${generationSummary.remainingGames} remaining`}
+                {" · outcomes "}
                 {JSON.stringify(generationSummary.outcomes)} · terminations{" "}
                 {JSON.stringify(generationSummary.terminations)}
               </div>

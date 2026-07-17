@@ -124,4 +124,36 @@ describe("value-model arena promotion gate", () => {
       "mixed-or-missing-code-provenance"
     );
   });
+
+  it("rejects internally consistent provenance that disagrees with the launch manifest", () => {
+    const games = Array.from({ length: 100 }, (_, index) =>
+      game(index, index < 70)
+    );
+    const summary = summarizeValueModelArena(games, 1_000, {
+      generationId: "arena",
+      codeVersion: "test-commit",
+      incumbentCheckpoints: ["three-actions:incumbent:production-model"],
+      challengerCheckpoints: ["three-actions:challenger:expected-model"],
+    })!;
+    expect(summary.promotionGate.passed).toBe(false);
+    expect(summary.promotionGate.reasons).toContain(
+      "challenger-checkpoint-does-not-match-manifest"
+    );
+  });
+
+  it("rejects an arena dominated by tactically unverified decisions", () => {
+    const games = Array.from({ length: 100 }, (_, index) =>
+      game(index, index < 70)
+    );
+    for (const result of games) {
+      result.quality.decisions = 10;
+      result.quality.unverifiedFallbackDecisions = 1;
+    }
+    const summary = summarizeValueModelArena(games, 1_000)!;
+    expect(summary.searchQuality.unverifiedFallbackRate).toBe(0.1);
+    expect(summary.promotionGate.passed).toBe(false);
+    expect(summary.promotionGate.reasons).toContain(
+      "excessive-unverified-search-rate"
+    );
+  });
 });

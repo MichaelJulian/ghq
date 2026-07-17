@@ -10,6 +10,11 @@ export interface ValueModelArenaSummary {
     incumbentCheckpoints: string[];
     challengerCheckpoints: string[];
   };
+  searchQuality: {
+    decisions: number;
+    unverifiedFallbackDecisions: number;
+    unverifiedFallbackRate: number;
+  };
   challenger: {
     points: number;
     scoreRate: number;
@@ -26,6 +31,13 @@ export interface ValueModelArenaSummary {
     ci95High: number;
   };
   promotionGate: { passed: boolean; reasons: string[] };
+}
+
+export interface ValueModelArenaExpectedProvenance {
+  generationId: string;
+  codeVersion: string;
+  incumbentCheckpoints: string[];
+  challengerCheckpoints: string[];
 }
 
 function modelFromAgent(agentId: string, recorded?: string): string {
@@ -65,7 +77,8 @@ function percentile(sorted: number[], fraction: number): number {
 
 export function summarizeValueModelArena(
   games: DurableSelfPlayGameResult[],
-  bootstrapSamples = 5_000
+  bootstrapSamples = 5_000,
+  expectedProvenance?: ValueModelArenaExpectedProvenance
 ): ValueModelArenaSummary | undefined {
   const scored = games
     .map((game) => ({ game, result: challengerResult(game) }))
@@ -157,6 +170,18 @@ export function summarizeValueModelArena(
   }
 
   const points = scored.reduce((sum, entry) => sum + entry.result.score, 0);
+  const decisions = scored.reduce(
+    (sum, entry) => sum + entry.game.quality.decisions,
+    0
+  );
+  const unverifiedFallbackDecisions = scored.reduce(
+    (sum, entry) =>
+      sum + (entry.game.quality.unverifiedFallbackDecisions ?? 0),
+    0
+  );
+  const unverifiedFallbackRate = decisions
+    ? unverifiedFallbackDecisions / decisions
+    : 0;
   const scoreRate = points / scored.length;
   const clamped = Math.max(0.001, Math.min(0.999, scoreRate));
   const ci95Low = percentile(draws, 0.025);
@@ -182,7 +207,32 @@ export function summarizeValueModelArena(
     [...incumbentCheckpoints][0] === [...challengerCheckpoints][0]
   )
     reasons.push("identical-model-checkpoints");
+  if (expectedProvenance) {
+    const sameValues = (actual: Set<string>, expected: string[]) =>
+      JSON.stringify([...actual].sort()) ===
+      JSON.stringify([...expected].sort());
+    if (!sameValues(generationIds, [expectedProvenance.generationId]))
+      reasons.push("generation-does-not-match-manifest");
+    if (!sameValues(codeVersions, [expectedProvenance.codeVersion]))
+      reasons.push("code-does-not-match-manifest");
+    if (
+      !sameValues(
+        incumbentCheckpoints,
+        expectedProvenance.incumbentCheckpoints
+      )
+    )
+      reasons.push("incumbent-checkpoint-does-not-match-manifest");
+    if (
+      !sameValues(
+        challengerCheckpoints,
+        expectedProvenance.challengerCheckpoints
+      )
+    )
+      reasons.push("challenger-checkpoint-does-not-match-manifest");
+  }
   if (scored.length < 100) reasons.push("fewer-than-100-games");
+  if (unverifiedFallbackRate > 0.05)
+    reasons.push("excessive-unverified-search-rate");
   if (pairScores.length * 2 !== scored.length)
     reasons.push("incomplete-color-pair");
   if (scoreRate <= 0.5) reasons.push("challenger-did-not-outscore-incumbent");
@@ -203,6 +253,11 @@ export function summarizeValueModelArena(
       codeVersions: [...codeVersions].sort(),
       incumbentCheckpoints: [...incumbentCheckpoints].sort(),
       challengerCheckpoints: [...challengerCheckpoints].sort(),
+    },
+    searchQuality: {
+      decisions,
+      unverifiedFallbackDecisions,
+      unverifiedFallbackRate: Number(unverifiedFallbackRate.toFixed(4)),
     },
     challenger: {
       points,

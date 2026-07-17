@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { summarizeValueModelArena } from "@/game/self-play/arena-results";
-import { readPersistedSelfPlayGames } from "@/server/self-play-storage";
+import {
+  readPersistedSelfPlayGames,
+  readSelfPlayGenerationManifest,
+} from "@/server/self-play-storage";
 import type { DurableSelfPlayGameResult } from "@/workflows/self-play-game";
 
 export const dynamic = "force-dynamic";
@@ -17,9 +20,10 @@ export async function GET(
 ) {
   try {
     const { generationId } = await params;
-    const games = await readPersistedSelfPlayGames<DurableSelfPlayGameResult>(
-      generationId
-    );
+    const [games, manifest] = await Promise.all([
+      readPersistedSelfPlayGames<DurableSelfPlayGameResult>(generationId),
+      readSelfPlayGenerationManifest(generationId),
+    ]);
     const outcomes: Record<string, number> = {};
     const terminations: Record<string, number> = {};
     let decisions = 0;
@@ -60,6 +64,13 @@ export async function GET(
     return NextResponse.json({
       generationId,
       games: games.length,
+      expectedGames: manifest?.expectedGames,
+      remainingGames:
+        manifest === undefined
+          ? undefined
+          : Math.max(0, manifest.expectedGames - games.length),
+      createdAt: manifest?.createdAt,
+      manifestStorage: manifest ? "saved" : "historical-or-missing",
       outcomes,
       terminations,
       decisions,
@@ -73,7 +84,20 @@ export async function GET(
         codeVersions: [...codeVersions].sort(),
         valueModelCheckpoints: [...valueModelCheckpoints].sort(),
       },
-      valueModelArena: summarizeValueModelArena(games),
+      valueModelArena: summarizeValueModelArena(
+        games,
+        5_000,
+        manifest?.valueModelArena
+          ? {
+              generationId: manifest.generationId,
+              codeVersion: manifest.codeVersion,
+              incumbentCheckpoints:
+                manifest.expectedProvenance.incumbentCheckpoints,
+              challengerCheckpoints:
+                manifest.expectedProvenance.challengerCheckpoints,
+            }
+          : undefined
+      ),
     });
   } catch (error) {
     return NextResponse.json(
