@@ -1735,6 +1735,23 @@ class Searcher:
             return -10000.0
         priority = 0.0
         piece_type = self.move_piece_type(board, move)
+        if (
+            piece_type == engine.HQ
+            and move.from_square is not None
+            and move.to_square is not None
+        ):
+            # Detect an HQ escape before the atomic-action beam is applied.
+            # If mate is noticed only after complete turns are formed, the
+            # sole quiet escape may already have been pruned.
+            _, baseline_forced, _ = self.tactical_risk(board, board.turn)
+            child = board.copy()
+            child.push(move)
+            _, child_forced, _ = self.tactical_risk(child, board.turn)
+            if (
+                baseline_forced >= PIECE_VALUES[engine.HQ]
+                and child_forced < PIECE_VALUES[engine.HQ]
+            ):
+                priority += 4950.0
         infantry_types = (
             engine.INFANTRY,
             engine.ARMORED_INFANTRY,
@@ -1879,20 +1896,26 @@ class Searcher:
             self.rule_filtered_actions += len(moves) - len(diverse)
         return diverse
 
-    def ordered_moves(self, board: engine.BaseBoard) -> List[engine.Move]:
+    def bounded_diverse_moves(
+        self, board: engine.BaseBoard
+    ) -> List[Tuple[float, engine.Move]]:
+        """Bound one atomic-action layer while preserving forcing actions."""
         diverse_scored = self.diverse_moves(board)
         diverse = [move for _, move in diverse_scored]
         if diverse and all(move.name == "AutoCapture" for move in diverse):
-            return diverse
+            return diverse_scored
 
-        selected = diverse[: self.beam_width]
+        selected = list(diverse_scored[: self.beam_width])
         priority_by_uci = {move.uci(): priority for priority, move in diverse_scored}
         critical_limit = max(self.beam_width * 2, self.beam_width + 4)
-        for move in diverse:
+        for priority, move in diverse_scored:
             if len(selected) >= critical_limit:
                 break
-            if move not in selected and priority_by_uci.get(move.uci(), 0.0) >= 4000.0:
-                selected.append(move)
+            if (
+                all(selected_move != move for _, selected_move in selected)
+                and priority_by_uci.get(move.uci(), 0.0) >= 4000.0
+            ):
+                selected.append((priority, move))
         if len(selected) != len(diverse):
             self.exhaustive_within_horizon = False
             self.beam_pruned_actions += len(diverse) - len(selected)
@@ -1904,10 +1927,13 @@ class Searcher:
         if (
             board.turn_moves >= min(2, self.max_actions)
             and skip is not None
-            and skip not in selected
+            and all(selected_move != skip for _, selected_move in selected)
         ):
-            selected.append(skip)
+            selected.append((priority_by_uci[skip.uci()], skip))
         return selected
+
+    def ordered_moves(self, board: engine.BaseBoard) -> List[engine.Move]:
+        return [move for _, move in self.bounded_diverse_moves(board)]
 
     @staticmethod
     def _prefer_partial(
@@ -1934,6 +1960,7 @@ class Searcher:
                 if any(
                     key[0]
                     in (
+                        "hq_escape",
                         "airborne_extraction",
                         "unlock_and_extract",
                         "escape_and_extract",
@@ -1986,6 +2013,7 @@ class Searcher:
         working = board.copy()
         artillery_escapes: List[Tuple[int, int]] = []
         airborne_extractions: List[Tuple[int, int]] = []
+        hq_escapes: List[Tuple[int, int]] = []
         extraction_unlocks: List[str] = []
         for move in moves:
             piece_type = self.move_piece_type(working, move)
@@ -2004,9 +2032,22 @@ class Searcher:
                     < self.home_distance(move.from_square, working.turn)
                 ):
                     airborne_extractions.append((move.from_square, move.to_square))
+                if piece_type == engine.HQ:
+                    _, baseline_forced, _ = self.tactical_risk(
+                        working, working.turn
+                    )
+                    child = working.copy()
+                    child.push(move)
+                    _, child_forced, _ = self.tactical_risk(child, working.turn)
+                    if (
+                        baseline_forced >= PIECE_VALUES[engine.HQ]
+                        and child_forced < PIECE_VALUES[engine.HQ]
+                    ):
+                        hq_escapes.append((move.from_square, move.to_square))
             working.push(move)
 
         keys: List[Tuple[Any, ...]] = []
+        keys.extend(("hq_escape", source, destination) for source, destination in hq_escapes)
         keys.extend(("artillery_escape", source, destination) for source, destination in artillery_escapes)
         keys.extend(("airborne_extraction", source, destination) for source, destination in airborne_extractions)
         keys.extend(("airborne_unlock", uci) for uci in extraction_unlocks)
@@ -2300,7 +2341,16 @@ class Searcher:
                     completed.append(partial)
                     continue
 
-                actions = self.diverse_moves(partial.board)
+                # The first pass exists to verify several complete root lines,
+                # not to enumerate every third-action permutation. Preserve a
+                # normal beam plus every forcing/unlock action at each atomic
+                # layer; the later improvement pass still receives the broad
+                # complete-turn generator.
+                actions = (
+                    self.bounded_diverse_moves(partial.board)
+                    if self.verification_mode
+                    else self.diverse_moves(partial.board)
+                )
                 if not actions:
                     completed.append(partial)
                     continue
@@ -2557,7 +2607,8 @@ class Searcher:
             plan_representatives.items(),
             key=lambda item: (
                 0
-                if item[0][0] in ("unlock_and_extract", "escape_and_extract")
+                if item[0][0]
+                in ("hq_escape", "unlock_and_extract", "escape_and_extract")
                 else 1,
                 self.candidate_sort_key(item[1], original_turn),
             ),

@@ -40,6 +40,10 @@ TURN_FIVE_DEVELOPMENT_FEN = (
     "qr↓1r↓1i2/iiiii3/8/8/8/8/3IIIII/2I1R↑1R↑Q "
     "IIFFFPRTH iifffprth r"
 )
+TURN_23_COMPLEX_ROOT_FEN = (
+    "qr↓4ii/ii4i1/3f1f1r↓/8/6fh↓/2F5/2R←2I1I/"
+    "IIF1FR↖R↑Q III ii r"
+)
 
 
 class EvaluationTests(unittest.TestCase):
@@ -677,6 +681,24 @@ class SearchTests(unittest.TestCase):
         self.assertNotIn("f2f1", moves)
         self.assertEqual(result["best_turn"]["purpose"]["development_actions"], 3)
         self.assertIn(moves, [turn["all_moves"] for turn in result["candidate_turns"]])
+
+    def test_verification_bounds_atomic_breadth_before_comparing_complex_root(self):
+        result = ghq_ai.search(
+            engine.BaseBoard(TURN_23_COMPLEX_ROOT_FEN),
+            "balanced",
+            time_ms=4000,
+            max_depth=2,
+            beam_width=6,
+            turn_number=23,
+        )
+        candidates = result["candidate_turns"]
+        self.assertEqual(result["search"]["completed_depth_in_turns"], 2)
+        self.assertIn("h1g2", result["best_turn"]["all_moves"])
+        self.assertGreater(result["score"]["current_player"], -1000000.0)
+        self.assertIn(
+            result["best_turn"]["all_moves"],
+            [turn["all_moves"] for turn in candidates],
+        )
 
     def test_stagnation_keeps_a_noncycling_root_alternative(self):
         board = engine.BaseBoard(STALL_CONVEYOR_FEN)
