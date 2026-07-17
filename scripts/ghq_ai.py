@@ -2042,6 +2042,17 @@ class Searcher:
     ) -> List[PartialTurn]:
         """Preserve multiple first actions instead of one prolific branch."""
         def plan_rank(partial: PartialTurn) -> int:
+            if (
+                not partial.board.is_game_over()
+                and partial.board.turn == color
+                and self.has_immediate_hq_capture(partial.board)
+            ):
+                # A partial combination that has made the HQ capture legal is
+                # one action from mate.  It must outrank a higher raw-priority
+                # artillery move sharing the same first action; otherwise the
+                # narrow reply frontier can discard the mate before minimax
+                # sees the completed turn.
+                return -1
             keys = self.turn_plan_keys(root, partial.moves)
             return (
                 0

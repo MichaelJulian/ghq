@@ -59,6 +59,9 @@ SELF_PLAY_THREE_ACTION_HQ_FEN = "8/1i3q2/8/8/3ii3/4i1I1/2I4I/5Q2 - - r"
 SELF_PLAY_PURPOSELESS_FILLER_FEN = (
     "1q2i1i1/3i1i1i/1i4fr↓/8/F7/1H↑F2I2/4I1II/1IR↖1R↖I1Q IF - b"
 )
+SELF_PLAY_LATE_HQ_REPLY_FEN = (
+    "q6i/6f1/i7/8/i2i4/1ir↙1f3/I7/Q7 - i r"
+)
 
 
 class EvaluationTests(unittest.TestCase):
@@ -919,6 +922,23 @@ class SearchTests(unittest.TestCase):
         )
         self.assertGreater(
             result["search"]["purposeful_early_stops_generated"], 0
+        )
+
+    def test_late_three_action_hq_mate_survives_the_narrow_reply_frontier(self):
+        board = engine.BaseBoard(SELF_PLAY_LATE_HQ_REPLY_FEN)
+        result = ghq_ai.search(
+            board,
+            "mobile_raider",
+            time_ms=5000,
+            max_depth=2,
+            beam_width=6,
+            turn_number=81,
+        )
+
+        self.assertLessEqual(result["score"]["red"], -ghq_ai.MATE_SCORE)
+        self.assertEqual(
+            result["principal_variation"][-3:],
+            ["b3b2", "e3c1xb1", "a4a3xa2"],
         )
 
     def test_complete_turn_seed_completes_a_one_action_hq_only_turn(self):
