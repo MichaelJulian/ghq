@@ -8,7 +8,7 @@ function game(index: number, challengerWins: boolean): DurableSelfPlayGameResult
   const challengerRed = index % 2 === 0;
   return {
     generationId: "arena",
-    gameId: `arena-${String(index).padStart(4, "0")}`,
+    gameId: `arena-${String(index + 1).padStart(4, "0")}`,
     seed: Math.floor(index / 2),
     redAgentId: challengerRed ? "balanced-challenger-a3" : "balanced-incumbent-a3",
     blueAgentId: challengerRed ? "balanced-incumbent-a3" : "balanced-challenger-a3",
@@ -72,5 +72,15 @@ describe("value-model arena promotion gate", () => {
     expect(summary.promotionGate.reasons).toContain(
       "paired-ci-does-not-clear-50-percent"
     );
+  });
+
+  it("does not manufacture pairs from nonadjacent completed games", () => {
+    const summary = summarizeValueModelArena(
+      [game(0, true), game(2, true), game(3, false)],
+      100
+    )!;
+    expect(summary.games).toBe(3);
+    expect(summary.pairs).toBe(1);
+    expect(summary.promotionGate.reasons).toContain("incomplete-color-pair");
   });
 });

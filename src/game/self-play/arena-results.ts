@@ -86,8 +86,25 @@ export function summarizeValueModelArena(
   }
 
   const pairScores: number[] = [];
-  for (let index = 0; index + 1 < scored.length; index += 2) {
-    pairScores.push((scored[index].result.score + scored[index + 1].result.score) / 2);
+  const byPair = new Map<number, typeof scored>();
+  for (const entry of scored) {
+    const suffix = /-(\d+)$/.exec(entry.game.gameId);
+    if (!suffix) continue;
+    const pair = Math.floor((Number(suffix[1]) - 1) / 2);
+    const members = byPair.get(pair) ?? [];
+    members.push(entry);
+    byPair.set(pair, members);
+  }
+  for (const members of byPair.values()) {
+    if (
+      members.length !== 2 ||
+      members[0].result.color === members[1].result.color
+    ) {
+      continue;
+    }
+    pairScores.push(
+      (members[0].result.score + members[1].result.score) / 2
+    );
   }
   const pairedOutcomes = { wins: 0, ties: 0, losses: 0 };
   for (const score of pairScores) {
