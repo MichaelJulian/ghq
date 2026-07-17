@@ -1780,7 +1780,28 @@ class Searcher:
         child.push(move)
         if child.turn != board.turn or child.is_game_over():
             return False
-        return self.has_immediate_hq_capture(child)
+        if self.has_immediate_hq_capture(child):
+            return True
+
+        # Some three-action mates need one more forcing capture before the HQ
+        # capture becomes legal. Example: move an infantry beside the HQ,
+        # capture the defender engaging that infantry, then take the HQ. Only
+        # inspect capture follow-ups and only when two counted actions remain,
+        # keeping this tactical extension narrow and deterministic.
+        if child.turn_moves >= self.max_actions - 1:
+            return False
+        for follow_up in child.generate_legal_moves():
+            if follow_up.capture_preference is None:
+                continue
+            grandchild = child.copy()
+            grandchild.push(follow_up)
+            if (
+                grandchild.turn == board.turn
+                and not grandchild.is_game_over()
+                and self.has_immediate_hq_capture(grandchild)
+            ):
+                return True
+        return False
 
     def move_priority(self, board: engine.BaseBoard, move: engine.Move) -> float:
         if move.name == "AutoCapture":

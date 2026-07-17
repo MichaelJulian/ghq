@@ -55,6 +55,7 @@ TURN_6_FEN = (
 SELF_PLAY_HQ_UNLOCK_FEN = "8/2q3i1/2I4i/6f1/2F5/8/1F4I1/I1I2I1Q I - b"
 SELF_PLAY_HQ_ENGAGEMENT_FEN = "q7/i5i1/3I1i2/2I5/8/1I5I/I1I5/3I3Q - - b"
 SELF_PLAY_FORCED_SKIP_MATE_FEN = "8/8/5q2/4F3/5I2/8/1I6/I2Q4 - - b"
+SELF_PLAY_THREE_ACTION_HQ_FEN = "8/1i3q2/8/8/3ii3/4i1I1/2I4I/5Q2 - - r"
 
 
 class EvaluationTests(unittest.TestCase):
@@ -1012,6 +1013,33 @@ class SearchTests(unittest.TestCase):
         self.assertLessEqual(result["score"]["current_player"], -ghq_ai.MATE_SCORE)
         self.assertEqual(result["search"]["completed_depth_in_turns"], 2)
         self.assertEqual(result["search"]["fallback_used"], "none")
+
+    def test_three_action_hq_setup_survives_narrow_reply_beam(self):
+        board = engine.BaseBoard(SELF_PLAY_THREE_ACTION_HQ_FEN)
+        root_key = board.serialize()
+        for uci in ("f1e2", "g3f2", "h2g2"):
+            board.push(
+                next(move for move in board.generate_legal_moves() if move.uci() == uci)
+            )
+
+        searcher = ghq_ai.Searcher(
+            "balanced", time_ms=60_000, beam_width=6, turn_number=106
+        )
+        searcher.root_key = root_key
+        searcher.verification_mode = True
+        bounded = [move.uci() for _, move in searcher.bounded_diverse_moves(board)]
+        self.assertIn("e3d2", bounded)
+
+        candidates = searcher.generate_turn_candidates(board)
+        self.assertTrue(
+            any(
+                [move.uci() for move in candidate.moves]
+                == ["e3d2", "d4c3xc2", "e4e3xe2"]
+                and candidate.board.outcome() is not None
+                and candidate.board.outcome().winner == engine.BLUE
+                for candidate in candidates
+            )
+        )
 
 
 if __name__ == "__main__":
