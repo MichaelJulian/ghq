@@ -374,6 +374,14 @@ class SearchTests(unittest.TestCase):
             "b1h8",
             [candidate.uci() for _, candidate in searcher.diverse_moves(board)],
         )
+        seed = ghq_ai.purposeful_complete_turn_seed(
+            board, "battery_commander", turn_number=5
+        )
+        seed_moves, seed_board = ghq_ai.first_turn_from_pv(board, seed.pv)
+        seed_purpose = searcher.turn_purpose_breakdown(
+            board, seed_board, seed_moves, board.turn
+        )
+        self.assertGreaterEqual(seed_purpose["development_actions"], 2.0)
         result = ghq_ai.search(
             board,
             "battery_commander",

@@ -1,4 +1,11 @@
+import json
+import sys
+import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
+from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -6,11 +13,102 @@ from scripts.train_value_model import (
     chronological_split,
     evaluation_unit,
     game_balanced_weights,
+    requested_self_play_shares,
+    main as train_main,
     validate_self_play_code_version,
 )
 
 
 class ValueModelWeightTests(unittest.TestCase):
+    def test_share_grid_is_selected_on_validation_and_exported_once(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset = root / "dataset.jsonl"
+            model = root / "model.json"
+            report = root / "report.json"
+            records = [
+                {
+                    "type": "schema",
+                    "format": "ghq-value-features-v1",
+                    "feature_names": ["signal", "progress"],
+                }
+            ]
+            for unit in range(30):
+                label = unit % 2
+                created_at = f"2026-07-{unit + 1:02d}T00:00:00Z"
+                records.append(
+                    {
+                        "type": "sample",
+                        "source": "human",
+                        "game_id": f"human-{unit:02d}",
+                        "created_at": created_at,
+                        "outcome_reason": "hq-capture",
+                        "turn": 5,
+                        "perspective": "RED" if unit % 2 == 0 else "BLUE",
+                        "label": label,
+                        "features": [label, unit / 30],
+                    }
+                )
+                for member in range(2):
+                    records.append(
+                        {
+                            "type": "sample",
+                            "source": "vercel_self_play",
+                            "generation_id": "generation",
+                            "pair_id": f"pair-{unit:02d}",
+                            "code_version": "commit-a",
+                            "game_id": f"self-{unit:02d}-{member}",
+                            "created_at": created_at,
+                            "outcome_reason": "hq-capture",
+                            "turn": 5,
+                            "perspective": "RED" if member == 0 else "BLUE",
+                            "label": label if member == 0 else 1 - label,
+                            "features": [label if member == 0 else 1 - label, unit / 30],
+                        }
+                    )
+            dataset.write_text(
+                "\n".join(json.dumps(record) for record in records) + "\n",
+                encoding="utf-8",
+            )
+            argv = [
+                "train_value_model.py",
+                "--dataset",
+                str(dataset),
+                "--output",
+                str(model),
+                "--report",
+                str(report),
+                "--self-play-train-shares",
+                "0.02,0.08",
+                "--self-play-code-version",
+                "commit-a",
+            ]
+            with patch.object(sys, "argv", argv), redirect_stdout(StringIO()):
+                train_main()
+
+            evidence = json.loads(report.read_text(encoding="utf-8"))
+            artifact = json.loads(model.read_text(encoding="utf-8"))
+            self.assertIn(evidence["self_play_train_share"], (0.02, 0.08))
+            self.assertEqual(len(evidence["candidate_validation"]), 8)
+            self.assertEqual(
+                artifact["metadata"]["self_play_train_share"],
+                evidence["self_play_train_share"],
+            )
+
+    def test_parses_a_validation_selected_self_play_share_grid(self):
+        self.assertEqual(
+            requested_self_play_shares(None, "0.02, 0.04,0.08"),
+            [0.02, 0.04, 0.08],
+        )
+        self.assertEqual(requested_self_play_shares(None, None), [0.5])
+        self.assertEqual(requested_self_play_shares(0.1, None), [0.1])
+
+    def test_rejects_invalid_or_duplicate_self_play_shares(self):
+        for grid in ("", "0", "1", "0.04,0.04", "word"):
+            with self.subTest(grid=grid):
+                with self.assertRaises(ValueError):
+                    requested_self_play_shares(None, grid)
+
     def test_self_play_requires_explicit_color_swapped_pair(self):
         with self.assertRaisesRegex(ValueError, "requires pair_id"):
             evaluation_unit(

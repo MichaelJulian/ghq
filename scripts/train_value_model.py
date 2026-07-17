@@ -24,10 +24,34 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--report", required=True, type=Path)
     parser.add_argument("--baseline", type=Path)
-    parser.add_argument("--self-play-train-share", type=float, default=0.5)
+    share_group = parser.add_mutually_exclusive_group()
+    share_group.add_argument("--self-play-train-share", type=float)
+    share_group.add_argument(
+        "--self-play-train-shares",
+        help="comma-separated validation-selected training-share grid",
+    )
     parser.add_argument("--self-play-code-version")
     parser.add_argument("--random-state", type=int, default=42)
     return parser.parse_args()
+
+
+def requested_self_play_shares(
+    single: Optional[float], grid: Optional[str]
+) -> List[float]:
+    if grid is not None:
+        try:
+            shares = [float(value.strip()) for value in grid.split(",") if value.strip()]
+        except ValueError as error:
+            raise ValueError("self-play training shares must be numbers") from error
+    else:
+        shares = [0.5 if single is None else float(single)]
+    if not shares:
+        raise ValueError("at least one self-play training share is required")
+    if any(not 0.0 < share < 1.0 for share in shares):
+        raise ValueError("self-play training shares must be between zero and one")
+    if len(set(shares)) != len(shares):
+        raise ValueError("self-play training shares must be unique")
+    return shares
 
 
 def load_dataset(path: Path) -> Tuple[List[str], List[Dict[str, Any]], np.ndarray, np.ndarray]:
@@ -315,8 +339,13 @@ def metrics_by_source(
                     index
                     for index in source_indices
                     if rows[index]["perspective"] == perspective
-                ]
+                ],
+                dtype=np.int64,
             )
+            if not len(perspective_indices):
+                raise ValueError(
+                    f"source {source} split is missing {perspective} perspective samples"
+                )
             perspective_probabilities = np.asarray(
                 [probability_by_index[int(index)] for index in perspective_indices]
             )
@@ -470,23 +499,27 @@ def exported_probabilities(artifact: Dict[str, Any], vectors: np.ndarray) -> np.
 
 def main() -> None:
     args = parse_args()
-    if not 0.0 < args.self_play_train_share < 1.0:
-        raise ValueError("self-play-train-share must be between zero and one")
+    self_play_train_shares = requested_self_play_shares(
+        args.self_play_train_share, args.self_play_train_shares
+    )
     feature_names, rows, vectors, labels = load_dataset(args.dataset)
     self_play_code_version = validate_self_play_code_version(
         rows, args.self_play_code_version
     )
     splits = chronological_split(rows)
     weights = {name: game_balanced_weights(rows, indices) for name, indices in splits.items()}
-    fit_weights = {
-        name: game_balanced_weights(
-            rows,
-            indices,
-            args.self_play_train_share,
-            balance_outcomes=True,
-            outcome_balance_sources={"vercel_self_play"},
-        )
-        for name, indices in splits.items()
+    fit_weights_by_share = {
+        share: {
+            name: game_balanced_weights(
+                rows,
+                indices,
+                share,
+                balance_outcomes=True,
+                outcome_balance_sources={"vercel_self_play"},
+            )
+            for name, indices in splits.items()
+        }
+        for share in self_play_train_shares
     }
 
     candidates = [
@@ -495,40 +528,73 @@ def main() -> None:
         {"n_estimators": 220, "max_depth": 2, "learning_rate": 0.04, "min_samples_leaf": 20},
         {"n_estimators": 200, "max_depth": 3, "learning_rate": 0.03, "min_samples_leaf": 20},
     ]
-    trained: List[Tuple[float, Dict[str, Any], GradientBoostingClassifier]] = []
+    trained: List[
+        Tuple[float, float, Dict[str, Any], GradientBoostingClassifier]
+    ] = []
+    candidate_validation: List[Dict[str, Any]] = []
     train_indices = splits["train"]
     validation_indices = splits["validation"]
-    train_vectors, train_labels, train_weights = expand_soft_labels(
-        vectors[train_indices], labels[train_indices], fit_weights["train"]
+    # When selecting among shares, compare every candidate against one fixed
+    # 50/50 source-balanced validation objective. Letting each share redefine
+    # its own validation weights would make scores incomparable.
+    selection_weights = (
+        weights["validation"]
+        if len(self_play_train_shares) > 1
+        else fit_weights_by_share[self_play_train_shares[0]]["validation"]
     )
-    for parameters in candidates:
-        model = GradientBoostingClassifier(
-            **parameters,
-            loss="log_loss",
-            subsample=0.85,
-            random_state=args.random_state,
+    for share in self_play_train_shares:
+        train_vectors, train_labels, train_weights = expand_soft_labels(
+            vectors[train_indices],
+            labels[train_indices],
+            fit_weights_by_share[share]["train"],
         )
-        model.fit(
-            train_vectors,
-            train_labels,
-            sample_weight=train_weights,
-        )
-        validation_probability = model.predict_proba(vectors[validation_indices])[:, 1]
-        score = metrics(
-            labels[validation_indices],
-            validation_probability,
-            fit_weights["validation"],
-        )["log_loss"]
-        print(json.dumps({"candidate": parameters, "validation_log_loss": round(score, 6)}))
-        trained.append((score, parameters, model))
-    _, best_parameters, model = min(trained, key=lambda item: item[0])
+        for parameters in candidates:
+            model = GradientBoostingClassifier(
+                **parameters,
+                loss="log_loss",
+                subsample=0.85,
+                random_state=args.random_state,
+            )
+            model.fit(
+                train_vectors,
+                train_labels,
+                sample_weight=train_weights,
+            )
+            validation_probability = model.predict_proba(
+                vectors[validation_indices]
+            )[:, 1]
+            score = metrics(
+                labels[validation_indices],
+                validation_probability,
+                selection_weights,
+            )["log_loss"]
+            print(
+                json.dumps(
+                    {
+                        "self_play_train_share": share,
+                        "candidate": parameters,
+                        "validation_log_loss": round(score, 6),
+                    }
+                )
+            )
+            candidate_validation.append(
+                {
+                    "self_play_train_share": share,
+                    "hyperparameters": parameters,
+                    "validation_log_loss": round(score, 6),
+                }
+            )
+            trained.append((score, share, parameters, model))
+    _, selected_self_play_train_share, best_parameters, model = min(
+        trained, key=lambda item: item[0]
+    )
 
     validation_raw_probability = model.predict_proba(vectors[validation_indices])[:, 1]
     calibrator = LogisticRegression(random_state=args.random_state)
     calibration_vectors, calibration_labels, calibration_weights = expand_soft_labels(
         safe_logit(validation_raw_probability).reshape(-1, 1),
         labels[validation_indices],
-        fit_weights["validation"],
+        selection_weights,
     )
     calibrator.fit(
         calibration_vectors,
@@ -606,7 +672,10 @@ def main() -> None:
             "eligible_outcomes": sorted({row["outcome_reason"] for row in rows}),
             "split": "source-stratified chronological 70/15/15 by game; color-swapped self-play pairs are indivisible",
             "hyperparameters": best_parameters,
-            "self_play_train_share": args.self_play_train_share,
+            "self_play_train_share": selected_self_play_train_share,
+            "self_play_train_share_candidates": self_play_train_shares,
+            "model_selection": "validation-only; fixed 50/50 source-balanced validation weights when comparing multiple self-play shares",
+            "candidate_validation": candidate_validation,
             "self_play_code_version": self_play_code_version,
             "metrics": split_metrics,
             "feature_importance": [
@@ -641,7 +710,9 @@ def main() -> None:
             {(data_source(row), row["game_id"], row["turn"]) for row in rows}
         ),
         "samples": len(rows),
-        "self_play_train_share": args.self_play_train_share,
+        "self_play_train_share": selected_self_play_train_share,
+        "self_play_train_share_candidates": self_play_train_shares,
+        "candidate_validation": candidate_validation,
         "self_play_code_version": self_play_code_version,
         "sources": dict(Counter(data_source(row) for row in rows)),
     }

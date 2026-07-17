@@ -2877,6 +2877,10 @@ def purposeful_complete_turn_seed(
                     purpose_penalty += 1.6 if move.to_square in vacated else 1.0
             red_score = quick_evaluation(child, turn_number)
             utility = red_score if original_turn == engine.RED else -red_score
+            if turn_number <= EARLY_GAME_LAST_TURN:
+                utility += 2.5 * fallback_rules.early_plan_score(
+                    candidate_purposes
+                )
             utility -= purpose_penalty
             candidates.append(
                 (
@@ -2919,6 +2923,13 @@ def purposeful_complete_turn_seed(
                 child.push(move)
                 red_score = quick_evaluation(child, turn_number)
                 utility = red_score if original_turn == engine.RED else -red_score
+                candidate_purposes = fallback_rules.action_purpose_labels(
+                    board, moves + [move], original_turn
+                )
+                if turn_number <= EARLY_GAME_LAST_TURN:
+                    utility += 2.5 * fallback_rules.early_plan_score(
+                        candidate_purposes
+                    )
                 candidates.append(
                     (
                         utility - 8.0,
