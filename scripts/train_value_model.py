@@ -357,6 +357,48 @@ def metrics_by_source(
     return result
 
 
+def validation_selection_gates(
+    candidate: Dict[str, Any], baseline: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    """Mirror promotion's source/color retention rules during model selection."""
+    gates: List[Dict[str, Any]] = []
+
+    def add(name: str, source: str, maximum: float, perspective: Optional[str] = None) -> None:
+        candidate_record = candidate[source]
+        baseline_record = baseline[source]
+        if perspective is not None:
+            candidate_record = candidate_record["by_perspective"][perspective]
+            baseline_record = baseline_record["by_perspective"][perspective]
+        delta = float(candidate_record["log_loss"]) - float(
+            baseline_record["log_loss"]
+        )
+        gates.append(
+            {
+                "name": name,
+                "passed": delta <= maximum,
+                "candidate_minus_baseline": round(delta, 6),
+                "maximum": maximum,
+            }
+        )
+
+    add("human-log-loss", "human", 0.01)
+    add("self-play-log-loss", "vercel_self_play", 0.0)
+    for perspective in ("RED", "BLUE"):
+        add(
+            f"human-{perspective.lower()}-log-loss",
+            "human",
+            0.015,
+            perspective,
+        )
+        add(
+            f"self-play-{perspective.lower()}-log-loss",
+            "vercel_self_play",
+            0.0,
+            perspective,
+        )
+    return gates
+
+
 def paired_game_bootstrap(
     rows: List[Dict[str, Any]],
     indices: np.ndarray,
@@ -528,12 +570,25 @@ def main() -> None:
         {"n_estimators": 220, "max_depth": 2, "learning_rate": 0.04, "min_samples_leaf": 20},
         {"n_estimators": 200, "max_depth": 3, "learning_rate": 0.03, "min_samples_leaf": 20},
     ]
-    trained: List[
-        Tuple[float, float, Dict[str, Any], GradientBoostingClassifier]
-    ] = []
-    candidate_validation: List[Dict[str, Any]] = []
     train_indices = splits["train"]
     validation_indices = splits["validation"]
+    baseline_artifact: Optional[Dict[str, Any]] = None
+    baseline_validation_by_source: Optional[Dict[str, Any]] = None
+    if args.baseline:
+        baseline_artifact = json.loads(args.baseline.read_text(encoding="utf-8"))
+        if baseline_artifact.get("feature_names") != feature_names:
+            raise ValueError("baseline feature schema does not match dataset")
+        baseline_validation_by_source = metrics_by_source(
+            rows,
+            validation_indices,
+            labels,
+            exported_probabilities(
+                baseline_artifact, vectors[validation_indices]
+            ),
+        )
+
+    trained: List[Dict[str, Any]] = []
+    candidate_validation: List[Dict[str, Any]] = []
     # When selecting among shares, compare every candidate against one fixed
     # 50/50 source-balanced validation objective. Letting each share redefine
     # its own validation weights would make scores incomparable.
@@ -568,12 +623,29 @@ def main() -> None:
                 validation_probability,
                 selection_weights,
             )["log_loss"]
+            source_metrics = metrics_by_source(
+                rows,
+                validation_indices,
+                labels,
+                validation_probability,
+            )
+            selection_gates = (
+                validation_selection_gates(
+                    source_metrics, baseline_validation_by_source
+                )
+                if baseline_validation_by_source is not None
+                else []
+            )
+            constraints_passed = all(
+                gate["passed"] for gate in selection_gates
+            )
             print(
                 json.dumps(
                     {
                         "self_play_train_share": share,
                         "candidate": parameters,
                         "validation_log_loss": round(score, 6),
+                        "validation_constraints_passed": constraints_passed,
                     }
                 )
             )
@@ -582,12 +654,27 @@ def main() -> None:
                     "self_play_train_share": share,
                     "hyperparameters": parameters,
                     "validation_log_loss": round(score, 6),
+                    "validation_by_source": source_metrics,
+                    "validation_selection_gates": selection_gates,
+                    "validation_constraints_passed": constraints_passed,
                 }
             )
-            trained.append((score, share, parameters, model))
-    _, selected_self_play_train_share, best_parameters, model = min(
-        trained, key=lambda item: item[0]
-    )
+            trained.append(
+                {
+                    "score": score,
+                    "share": share,
+                    "parameters": parameters,
+                    "model": model,
+                    "constraints_passed": constraints_passed,
+                }
+            )
+    feasible = [item for item in trained if item["constraints_passed"]]
+    selection_pool = feasible if feasible else trained
+    selected = min(selection_pool, key=lambda item: item["score"])
+    selected_self_play_train_share = selected["share"]
+    best_parameters = selected["parameters"]
+    model = selected["model"]
+    validation_constraints_passed = bool(feasible) or baseline_artifact is None
 
     validation_raw_probability = model.predict_proba(vectors[validation_indices])[:, 1]
     calibrator = LogisticRegression(random_state=args.random_state)
@@ -626,10 +713,7 @@ def main() -> None:
 
     baseline_metrics: Dict[str, Any] | None = None
     paired_bootstrap_test: Dict[str, Any] | None = None
-    if args.baseline:
-        baseline_artifact = json.loads(args.baseline.read_text(encoding="utf-8"))
-        if baseline_artifact.get("feature_names") != feature_names:
-            raise ValueError("baseline feature schema does not match dataset")
+    if baseline_artifact is not None:
         baseline_metrics = {}
         for name, indices in splits.items():
             probability = exported_probabilities(baseline_artifact, vectors[indices])
@@ -675,6 +759,8 @@ def main() -> None:
             "self_play_train_share": selected_self_play_train_share,
             "self_play_train_share_candidates": self_play_train_shares,
             "model_selection": "validation-only; fixed 50/50 source-balanced validation weights when comparing multiple self-play shares",
+            "validation_constraints": "require human retention and self-play improvement overall and by color before minimizing aggregate validation loss",
+            "validation_constraints_passed": validation_constraints_passed,
             "candidate_validation": candidate_validation,
             "self_play_code_version": self_play_code_version,
             "metrics": split_metrics,
@@ -713,6 +799,7 @@ def main() -> None:
         "self_play_train_share": selected_self_play_train_share,
         "self_play_train_share_candidates": self_play_train_shares,
         "candidate_validation": candidate_validation,
+        "validation_constraints_passed": validation_constraints_passed,
         "self_play_code_version": self_play_code_version,
         "sources": dict(Counter(data_source(row) for row in rows)),
     }

@@ -15,11 +15,54 @@ from scripts.train_value_model import (
     game_balanced_weights,
     requested_self_play_shares,
     main as train_main,
+    validation_selection_gates,
     validate_self_play_code_version,
 )
 
 
 class ValueModelWeightTests(unittest.TestCase):
+    def test_validation_selection_gates_preserve_human_and_improve_self_play(self):
+        def sources(human, self_play, human_red=None, human_blue=None):
+            return {
+                "human": {
+                    "log_loss": human,
+                    "by_perspective": {
+                        "RED": {"log_loss": human if human_red is None else human_red},
+                        "BLUE": {"log_loss": human if human_blue is None else human_blue},
+                    },
+                },
+                "vercel_self_play": {
+                    "log_loss": self_play,
+                    "by_perspective": {
+                        "RED": {"log_loss": self_play},
+                        "BLUE": {"log_loss": self_play},
+                    },
+                },
+            }
+
+        baseline = sources(0.40, 0.80)
+        passing = validation_selection_gates(sources(0.409, 0.70), baseline)
+        self.assertTrue(all(gate["passed"] for gate in passing))
+
+        human_regression = validation_selection_gates(
+            sources(0.42, 0.70), baseline
+        )
+        self.assertFalse(
+            next(
+                gate for gate in human_regression if gate["name"] == "human-log-loss"
+            )["passed"]
+        )
+        self_play_regression = validation_selection_gates(
+            sources(0.40, 0.81), baseline
+        )
+        self.assertFalse(
+            next(
+                gate
+                for gate in self_play_regression
+                if gate["name"] == "self-play-log-loss"
+            )["passed"]
+        )
+
     def test_share_grid_is_selected_on_validation_and_exported_once(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

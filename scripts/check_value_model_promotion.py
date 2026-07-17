@@ -18,6 +18,15 @@ def parse_args() -> argparse.Namespace:
 
 
 def promotion_decision(report: Dict[str, Any]) -> Dict[str, Any]:
+    if report.get("validation_constraints_passed") is False:
+        return {
+            "approved": False,
+            "gates": [],
+            "reason": (
+                "no candidate passed validation-stage human-retention and "
+                "self-play-improvement constraints"
+            ),
+        }
     bootstrap = report.get("paired_bootstrap_test")
     if not bootstrap:
         return {

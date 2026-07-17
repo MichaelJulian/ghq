@@ -57,6 +57,13 @@ class PromotionDecisionTests(unittest.TestCase):
         self.assertFalse(result["approved"])
         self.assertIn("missing", result["reason"])
 
+    def test_rejects_when_no_candidate_passed_validation_constraints(self):
+        report = evidence()
+        report["validation_constraints_passed"] = False
+        result = promotion_decision(report)
+        self.assertFalse(result["approved"])
+        self.assertIn("validation-stage", result["reason"])
+
     def test_rejects_color_specific_self_play_regression(self):
         report = evidence()
         report["paired_bootstrap_test"]["by_source_and_perspective"][
