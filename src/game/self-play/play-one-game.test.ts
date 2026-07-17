@@ -94,7 +94,10 @@ describe("playOneGame", () => {
 
     expect(result.completed).toBe(true);
     expect(result.outcome.termination).toBe("no-progress");
-    expect(result.turns).toHaveLength(1);
+    // Red's first quiet turn reaches a new frontier and therefore counts as
+    // strategic progress. Blue's following retreat does not, so the one-turn
+    // quiet window expires there.
+    expect(result.turns).toHaveLength(2);
   });
 
   it("resolves production automatic captures without spending an action", async () => {

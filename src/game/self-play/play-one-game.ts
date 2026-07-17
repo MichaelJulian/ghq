@@ -4,6 +4,12 @@ import type {
   PythonBoard,
   PythonMove,
 } from "@/game/engine-v2";
+import {
+  extendsStrategicBest,
+  mergeStrategicBest,
+  strategicProgress,
+  type StrategicProgress,
+} from "./strategic-progress";
 
 export type MaybePromise<T> = T | Promise<T>;
 
@@ -61,7 +67,7 @@ export interface PlayOneGameConfig {
   maxDecisions?: number;
   /** Exact position occurrence that ends the game as a draw. Defaults to threefold. */
   repetitionLimit?: number;
-  /** Completed player turns without a capture or deployment. Defaults to 24. */
+  /** Completed turns without material or a new strategic landmark. Defaults to 24. */
   noProgressTurns?: number;
   /** Unsigned 32-bit seed. The generated seed is returned when omitted. */
   seed?: number;
@@ -202,6 +208,10 @@ export async function playOneGame(
   let automaticCaptureCount = 0;
   let finalOutcome: SelfPlayOutcome | undefined;
   let turnsWithoutProgress = 0;
+  const strategicBest: Record<Player, StrategicProgress> = {
+    RED: strategicProgress(initialFen, "RED"),
+    BLUE: strategicProgress(initialFen, "BLUE"),
+  };
   const positionOccurrences = new Map<string, number>([[board.serialize(), 1]]);
 
   const finishCurrentTurn = async (completed: boolean) => {
@@ -211,7 +221,19 @@ export async function playOneGame(
     turns.push(currentTurn);
     await notifyTurn(config.onTurn, currentTurn);
     if (completed && !finalOutcome) {
-      const madeProgress = currentTurn.moves.some(
+      const currentStrategicProgress = strategicProgress(
+        currentTurn.endFen,
+        currentTurn.player
+      );
+      const madeStrategicProgress = extendsStrategicBest(
+        strategicBest[currentTurn.player],
+        currentStrategicProgress
+      );
+      strategicBest[currentTurn.player] = mergeStrategicBest(
+        strategicBest[currentTurn.player],
+        currentStrategicProgress
+      );
+      const madeProgress = madeStrategicProgress || currentTurn.moves.some(
         (move) =>
           move.name === "Reinforce" ||
           move.automaticCapture ||

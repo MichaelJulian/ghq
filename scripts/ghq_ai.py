@@ -861,9 +861,13 @@ class Searcher:
         return max(0.0, min(1.0, (self.stagnation_turns - 4) / 20.0))
 
     def stagnation_value(self, candidate: TurnCandidate) -> float:
+        # One backfill is often how a cohesive formation advances. Forgive it
+        # only when the complete turn demonstrably closes on contact/HQ; pure
+        # conveyor shuffles still pay the full penalty.
+        useful_conveyor = 1.0 if candidate.progress_score >= 3.0 else 0.0
         return (
             candidate.progress_score
-            - 2.5 * candidate.conveyor_actions
+            - 2.5 * max(0.0, candidate.conveyor_actions - useful_conveyor)
             - 5.0 * candidate.skip_actions
         )
 
@@ -1139,6 +1143,12 @@ class Searcher:
             optionality_gain = optionality_score(child, mover) - optionality_score(
                 working, mover
             )
+            contact_gain = self.approach_distance(
+                working, mover
+            ) - self.approach_distance(child, mover)
+            hq_approach_gain = self.approach_distance(
+                working, mover, hq_only=True
+            ) - self.approach_distance(child, mover, hq_only=True)
             if pressure_gain > 0.05:
                 roles.append("threat")
             if protection_gain > 0.25:
@@ -1147,6 +1157,11 @@ class Searcher:
                 roles.append("form")
             if optionality_gain > 0.15:
                 roles.append("mobilize")
+            if (
+                self.turn_number > EARLY_GAME_LAST_TURN
+                and max(contact_gain, hq_approach_gain) > 0.0
+            ):
+                roles.append("advance")
             if move.name == "Skip":
                 roles.append("end_turn")
             if not roles:
@@ -1167,6 +1182,7 @@ class Searcher:
             "extract": 2.5,
             "unlock": 1.5,
             "mobilize": 1.8,
+            "advance": 1.5,
         }
         return sum(
             max((role_values.get(role, 0.0) for role in item["roles"]), default=0.0)
@@ -1273,6 +1289,21 @@ class Searcher:
             0.0,
             optionality_score(after, mover) - optionality_score(before, mover),
         )
+        contact_gain = max(
+            0.0,
+            self.approach_distance(before, mover)
+            - self.approach_distance(after, mover),
+        )
+        hq_approach_gain = max(
+            0.0,
+            self.approach_distance(before, mover, hq_only=True)
+            - self.approach_distance(after, mover, hq_only=True),
+        )
+        frontier_gain = max(
+            0.0,
+            structure_metrics(after, mover)["frontier_rank"]
+            - structure_metrics(before, mover)["frontier_rank"],
+        )
         congestion_increase = max(
             0.0,
             congestion_penalty(after, mover) - congestion_penalty(before, mover),
@@ -1298,6 +1329,19 @@ class Searcher:
             + 0.5 * shape_gain
             + 0.6 * formation_gain
             + 0.75 * optionality_gain
+            + 0.8 * contact_gain
+            + 0.6 * hq_approach_gain
+        )
+        # Formation and optionality can oscillate forever. Only material,
+        # tactical pressure, safety, and objective-closing movement count as
+        # durable progress for the late-game anti-stagnation policy.
+        stagnation_progress = (
+            2.0 * capture_gain
+            + 1.5 * threat_gain
+            + 1.0 * protection_gain
+            + 2.0 * contact_gain
+            + 3.0 * hq_approach_gain
+            + 1.5 * frontier_gain
         )
         waste = (
             1.4 * unpurposed_actions
@@ -1325,6 +1369,9 @@ class Searcher:
             "dispersion_increase": dispersion_gain,
             "uncompensated_dispersion": uncompensated_dispersion,
             "optionality_gain": optionality_gain,
+            "contact_gain": contact_gain,
+            "hq_approach_gain": hq_approach_gain,
+            "frontier_gain": frontier_gain,
             "congestion_increase": congestion_increase,
             "immobile_units": optionality_metrics(after, mover)["immobile_units"],
             "relocation_options": optionality_metrics(after, mover)["relocation_options"],
@@ -1345,6 +1392,7 @@ class Searcher:
             "reversals": float(reversals),
             "pure_rotations": float(pure_rotations),
             "forcing_gain": forcing_gain,
+            "stagnation_progress": stagnation_progress,
             "net_purpose_penalty": net_purpose_penalty,
             "paratrooper_mission_penalty": mission_penalty,
             "total_penalty": net_purpose_penalty + mission_penalty,
@@ -1581,6 +1629,36 @@ class Searcher:
     def home_distance(square: int, color: bool) -> int:
         home_rank = 0 if color == engine.RED else 7
         return abs(engine.square_rank(square) - home_rank)
+
+    @staticmethod
+    def approach_distance(
+        board: engine.BaseBoard, color: bool, *, hq_only: bool = False
+    ) -> float:
+        """Distance from our mobile force to contact or the opposing HQ.
+
+        Infantry are the preferred contact force; if none survive, any
+        non-HQ unit may pursue. Friendly square-swaps cannot improve this
+        measure unless the force actually closes on an objective.
+        """
+        own_non_hq = board.occupied_co[color] & ~board.hq
+        own_infantry = own_non_hq & (
+            board.infantry | board.armored_infantry | board.airborne_infantry
+        )
+        pursuers = own_infantry or own_non_hq
+        targets = (
+            board.occupied_co[not color] & board.hq
+            if hq_only
+            else board.occupied_co[not color]
+        )
+        if not pursuers or not targets:
+            return 8.0
+        return float(
+            min(
+                chebyshev(source, target)
+                for source in squares(pursuers)
+                for target in squares(targets)
+            )
+        )
 
     def artillery_target_bonus(self, board: engine.BaseBoard, move: engine.Move) -> float:
         piece_type = self.move_piece_type(board, move)
@@ -2320,6 +2398,9 @@ class Searcher:
                             purpose["paratrooper_mission_penalty"],
                             action_purposes,
                             self.early_plan_score(action_purposes),
+                            purpose["stagnation_progress"],
+                            purpose["backfills"] + purpose["reversals"],
+                            float(sum(move.name == "Skip" for move in partial.moves)),
                         )
                     )
             if fallback_options:
@@ -2365,7 +2446,7 @@ class Searcher:
                     purpose["paratrooper_mission_penalty"],
                     action_purposes,
                     self.early_plan_score(action_purposes),
-                    purpose["forcing_gain"],
+                    purpose["stagnation_progress"],
                     purpose["backfills"] + purpose["reversals"],
                     float(sum(move.name == "Skip" for move in partial.moves)),
                 )

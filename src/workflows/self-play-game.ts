@@ -4,6 +4,12 @@ import type { Player } from "@/game/engine-v2";
 import { FENtoBoardState } from "@/game/notation";
 import { extractValueFeatures } from "@/game/value-model/features";
 import type { ValueModelVersion } from "@/game/value-model/inference";
+import {
+  extendsStrategicBest,
+  mergeStrategicBest,
+  strategicProgress,
+  type StrategicProgress,
+} from "@/game/self-play/strategic-progress";
 import { analyzeFen } from "@/server/fen-analysis";
 import {
   persistSelfPlayArtifacts,
@@ -308,6 +314,10 @@ export async function playDurableSelfPlayGame(
   let serializedState: string | undefined;
   let player: Player = "RED";
   let turnsWithoutProgress = 0;
+  const strategicBest: Record<Player, StrategicProgress> = {
+    RED: strategicProgress(initialFen, "RED"),
+    BLUE: strategicProgress(initialFen, "BLUE"),
+  };
   let partialTurnAttempts = 0;
   let pendingTurnMoves: string[] = [];
   let outcome: DurableSelfPlayGameResult["outcome"] | undefined;
@@ -348,7 +358,17 @@ export async function playDurableSelfPlayGame(
       continue;
     }
 
-    const madeProgress = pendingTurnMoves.some(actionMadeProgress);
+    const currentStrategicProgress = strategicProgress(fen, player);
+    const madeStrategicProgress = extendsStrategicBest(
+      strategicBest[player],
+      currentStrategicProgress
+    );
+    strategicBest[player] = mergeStrategicBest(
+      strategicBest[player],
+      currentStrategicProgress
+    );
+    const madeProgress =
+      pendingTurnMoves.some(actionMadeProgress) || madeStrategicProgress;
     turnsWithoutProgress = madeProgress ? 0 : turnsWithoutProgress + 1;
     const occurrences = (positionOccurrences[fen] ?? 0) + 1;
     positionOccurrences[fen] = occurrences;

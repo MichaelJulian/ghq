@@ -130,6 +130,7 @@ async function main() {
     tail: Array<{
       turn: number;
       player: string;
+      fen: string;
       moves: string[];
       score: number;
       depth: number;
@@ -262,6 +263,7 @@ async function main() {
         tail: game.decisions.slice(-24).map((decision) => ({
           turn: decision.turnNumber,
           player: decision.player,
+          fen: decision.fen,
           moves: decision.selectedMoves,
           score: decision.currentPlayerScore,
           depth: decision.completedDepth,

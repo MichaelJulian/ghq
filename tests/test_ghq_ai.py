@@ -681,6 +681,31 @@ class SearchTests(unittest.TestCase):
             searcher.candidate_sort_key(cycle, engine.BLUE, True),
         )
 
+    def test_quiet_objective_approach_has_durable_stagnation_purpose(self):
+        board = engine.BaseBoard(
+            "q1i3i1/3i3i/2i3i1/8/8/8/1IIII1I1/1F3I1Q - - r"
+        )
+        searcher = ghq_ai.Searcher(
+            "balanced",
+            time_ms=1000,
+            beam_width=6,
+            turn_number=95,
+            stagnation_turns=17,
+        )
+        moves = [engine.Move.from_uci(uci) for uci in ("d2c3", "c2d2", "b1a1")]
+        after = board.copy()
+        for move in moves:
+            after.push(move)
+        purpose = searcher.turn_purpose_breakdown(board, after, moves, engine.RED)
+        roles = {
+            role
+            for action in searcher.action_purpose_labels(board, moves, engine.RED)
+            for role in action["roles"]
+        }
+
+        self.assertIn("advance", roles)
+        self.assertGreater(purpose["stagnation_progress"], 0.0)
+
     def test_forcing_artillery_pressure_displaces_empty_infantry_move(self):
         board = engine.BaseBoard(POST_EXTRACTION_PRESSURE_FEN)
         searcher = ghq_ai.Searcher(
