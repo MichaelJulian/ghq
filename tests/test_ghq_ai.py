@@ -62,6 +62,15 @@ SELF_PLAY_PURPOSELESS_FILLER_FEN = (
 SELF_PLAY_LATE_HQ_REPLY_FEN = (
     "q6i/6f1/i7/8/i2i4/1ir↙1f3/I7/Q7 - i r"
 )
+SMOKE_IMMEDIATE_HQ_LOSS_CASES = (
+    (75, "q2i3f/4i1i1/1i1i4/8/1F3f2/2I1I1i1/I2I2Q1/1I2I3 - - r"),
+    (102, "5q2/8/3I1I2/3F1R←2/7I/1I6/2F5/3I2Q1 I - b"),
+    (81, SELF_PLAY_LATE_HQ_REPLY_FEN),
+    (77, "q7/i5ii/2i3if/1i6/7f/I6f/F1I4Q/I2I4 - ii r"),
+    (84, "1q6/6i1/F1i4r←/1F5f/I7/8/7i/6IQ - i b"),
+    (44, "1q2i1i1/7i/2F5/3F4/8/5f2/4I1I1/R↑I1F1IQ1 I - b"),
+    (69, "q3i1i1/2ii4/1i6/8/1I6/F5i1/1I5f/2II3Q - - r"),
+)
 
 
 class EvaluationTests(unittest.TestCase):
@@ -940,6 +949,21 @@ class SearchTests(unittest.TestCase):
             result["principal_variation"][-3:],
             ["b3b2", "e3c1xb1", "a4a3xa2"],
         )
+
+    def test_completed_smoke_hq_losses_are_recognized_before_the_move(self):
+        for turn_number, fen in SMOKE_IMMEDIATE_HQ_LOSS_CASES:
+            with self.subTest(turn_number=turn_number, fen=fen):
+                result = ghq_ai.search(
+                    engine.BaseBoard(fen),
+                    "balanced",
+                    time_ms=3000,
+                    max_depth=2,
+                    beam_width=6,
+                    turn_number=turn_number,
+                )
+                self.assertLessEqual(
+                    result["score"]["current_player"], -ghq_ai.MATE_SCORE
+                )
 
     def test_complete_turn_seed_completes_a_one_action_hq_only_turn(self):
         board = engine.BaseBoard(
