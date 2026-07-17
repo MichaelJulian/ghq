@@ -148,6 +148,27 @@ async function main() {
     fallback: string;
     depth: number;
   }> = [];
+  const immediateHqLosses: Array<{
+    gameId: string;
+    winner: string;
+    potentialHorizonBlunder: boolean;
+    loserDecision: {
+      turn: number;
+      player: string;
+      fen: string;
+      moves: string[];
+      score: number;
+      winProbability: number;
+      depth: number;
+      fallback: string;
+    };
+    winningDecision: {
+      turn: number;
+      player: string;
+      moves: string[];
+      score: number;
+    };
+  }> = [];
   const lengths: number[] = [];
   let decisions = 0;
   let trainingPositions = 0;
@@ -274,6 +295,46 @@ async function main() {
         })),
       });
     }
+    if (
+      game.outcome.termination === "hq-capture" &&
+      game.outcome.winner &&
+      game.decisions.length >= 2
+    ) {
+      const loserDecision = game.decisions.at(-2)!;
+      const winningDecision = game.decisions.at(-1)!;
+      if (
+        winningDecision.player === game.outcome.winner &&
+        loserDecision.player !== game.outcome.winner &&
+        winningDecision.turnNumber === loserDecision.turnNumber + 1
+      ) {
+        immediateHqLosses.push({
+          gameId: game.gameId,
+          winner: game.outcome.winner,
+          // A complete opponent reply should see an available next-turn HQ
+          // capture. Scores below this threshold already encode forced mate;
+          // ordinary scores indicate a reply-generation or horizon miss.
+          potentialHorizonBlunder:
+            loserDecision.completedDepth >= 2 &&
+            loserDecision.currentPlayerScore > -50_000,
+          loserDecision: {
+            turn: loserDecision.turnNumber,
+            player: loserDecision.player,
+            fen: loserDecision.fen,
+            moves: loserDecision.selectedMoves,
+            score: loserDecision.currentPlayerScore,
+            winProbability: loserDecision.winProbability,
+            depth: loserDecision.completedDepth,
+            fallback: loserDecision.fallback,
+          },
+          winningDecision: {
+            turn: winningDecision.turnNumber,
+            player: winningDecision.player,
+            moves: winningDecision.selectedMoves,
+            score: winningDecision.currentPlayerScore,
+          },
+        });
+      }
+    }
 
     for (const [color, agentId] of [
       ["RED", game.redAgentId],
@@ -392,6 +453,12 @@ async function main() {
           orphanGameIds: colorPairs.orphans.map((game) => game.gameId),
         },
         pairedOutcomes,
+        immediateHqLosses: immediateHqLosses.sort(
+          (left, right) =>
+            Number(right.potentialHorizonBlunder) -
+              Number(left.potentialHorizonBlunder) ||
+            right.loserDecision.score - left.loserDecision.score
+        ),
         valueModelArena: summarizeValueModelArena(games),
         rejected,
         stalledGameTails,
