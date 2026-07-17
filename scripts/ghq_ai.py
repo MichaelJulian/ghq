@@ -1747,10 +1747,11 @@ class Searcher:
     ) -> bool:
         """Whether a setup action makes a same-turn HQ capture legal.
 
-        GHQ turns are combinations, so a vacating move can be forcing even
-        when it has no immediate tactical effect.  In particular, moving a
-        blocker may open the destination or lane needed by a second piece to
-        take the HQ.  These setup actions must survive the atomic-action beam.
+        GHQ turns are combinations, so a setup move can be forcing even when
+        it has no immediate capture. Moving a blocker can open the square a
+        second piece needs, while moving an infantry beside the HQ can create
+        the engagement needed by that second piece. These actions must survive
+        the atomic-action beam.
         """
         if (
             move.name in ("AutoCapture", "Skip")
@@ -1763,12 +1764,12 @@ class Searcher:
         enemy_hqs = board.pieces(engine.HQ, not board.turn)
         if not any(
             chebyshev(move.from_square, hq_square) == 1
+            or chebyshev(move.to_square, hq_square) == 1
             for hq_square in enemy_hqs
         ):
-            # The currently occupied square must be the obstruction another
-            # unit needs to occupy beside the HQ. This cheap geometric gate
-            # keeps unlock detection from regenerating moves for every quiet
-            # action in an ordinary position.
+            # HQ-capture setup happens immediately around the target. This
+            # cheap geometric gate keeps unlock detection from regenerating
+            # moves for every quiet action in an ordinary position.
             return False
         if self.has_immediate_hq_capture(board):
             # The capture was already legal; this action did not unlock it

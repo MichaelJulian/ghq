@@ -53,6 +53,7 @@ TURN_6_FEN = (
     "PFR↑FF1R↑Q IIIIIR iifffprth b"
 )
 SELF_PLAY_HQ_UNLOCK_FEN = "8/2q3i1/2I4i/6f1/2F5/8/1F4I1/I1I2I1Q I - b"
+SELF_PLAY_HQ_ENGAGEMENT_FEN = "q7/i5i1/3I1i2/2I5/8/1I5I/I1I5/3I3Q - - b"
 
 
 class EvaluationTests(unittest.TestCase):
@@ -966,6 +967,33 @@ class SearchTests(unittest.TestCase):
                 [move.uci() for move in candidate.moves][:2]
                 == ["c6b7", "c4c6xc7"]
                 for candidate in mating_turns
+            )
+        )
+
+    def test_hq_engagement_setup_survives_narrow_reply_beam(self):
+        board = engine.BaseBoard(SELF_PLAY_HQ_ENGAGEMENT_FEN)
+        root_key = board.serialize()
+        for uci in ("f6e6", "g7f6", "a8b7"):
+            board.push(
+                next(move for move in board.generate_legal_moves() if move.uci() == uci)
+            )
+
+        searcher = ghq_ai.Searcher(
+            "balanced", time_ms=60_000, beam_width=6, turn_number=83
+        )
+        searcher.root_key = root_key
+        searcher.verification_mode = True
+        bounded = [move.uci() for _, move in searcher.bounded_diverse_moves(board)]
+        self.assertIn("c5b6", bounded)
+
+        candidates = searcher.generate_turn_candidates(board)
+        self.assertTrue(
+            any(
+                [move.uci() for move in candidate.moves][:2]
+                == ["c5b6", "d6c7xb7"]
+                and candidate.board.outcome() is not None
+                and candidate.board.outcome().winner == engine.RED
+                for candidate in candidates
             )
         )
 
