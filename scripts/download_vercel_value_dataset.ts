@@ -18,6 +18,19 @@ interface DurableTrainingSample {
   codeVersion: string;
 }
 
+function pairedGameId(generationId: string, gameId: string): string {
+  const match = gameId.match(/-(\d+)$/);
+  if (!match) {
+    throw new Error(`Unable to derive color-swapped pair from ${gameId}`);
+  }
+  const gameNumber = Number.parseInt(match[1], 10);
+  if (!Number.isSafeInteger(gameNumber) || gameNumber < 1) {
+    throw new Error(`Invalid paired game number in ${gameId}`);
+  }
+  const pairNumber = Math.floor((gameNumber - 1) / 2) + 1;
+  return `${generationId}-pair-${String(pairNumber).padStart(4, "0")}`;
+}
+
 function argument(name: string): string {
   const index = process.argv.indexOf(name);
   if (index === -1 || !process.argv[index + 1]) {
@@ -110,6 +123,7 @@ async function main() {
             type: "sample",
             game_id: sample.gameId,
             generation_id: sample.generationId,
+            pair_id: pairedGameId(sample.generationId, sample.gameId),
             source: "vercel_self_play",
             code_version: sample.codeVersion,
             created_at: createdAt,

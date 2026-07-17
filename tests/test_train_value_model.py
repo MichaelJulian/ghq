@@ -3,12 +3,41 @@ import unittest
 import numpy as np
 
 from scripts.train_value_model import (
+    chronological_split,
+    evaluation_unit,
     game_balanced_weights,
     validate_self_play_code_version,
 )
 
 
 class ValueModelWeightTests(unittest.TestCase):
+    def test_self_play_requires_explicit_color_swapped_pair(self):
+        with self.assertRaisesRegex(ValueError, "requires pair_id"):
+            evaluation_unit(
+                {"source": "vercel_self_play", "game_id": "generation-0001"}
+            )
+
+    def test_chronological_split_keeps_color_swapped_pairs_together(self):
+        rows = []
+        for pair in range(1, 31):
+            for color_game in range(2):
+                game_number = 2 * pair - 1 + color_game
+                rows.append(
+                    {
+                        "source": "vercel_self_play",
+                        "game_id": f"generation-{game_number:04d}",
+                        "pair_id": f"generation-pair-{pair:04d}",
+                        "created_at": f"2026-07-{pair:02d}T00:00:0{color_game}Z",
+                    }
+                )
+
+        splits = chronological_split(rows)
+        split_by_index = {
+            int(index): name for name, indices in splits.items() for index in indices
+        }
+        for pair in range(30):
+            self.assertEqual(split_by_index[2 * pair], split_by_index[2 * pair + 1])
+
     def test_requires_one_exact_self_play_search_revision(self):
         rows = [
             {"source": "human", "game_id": "human"},

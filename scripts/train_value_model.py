@@ -61,6 +61,19 @@ def data_source(row: Dict[str, Any]) -> str:
     return str(row.get("source") or ("vercel_self_play" if row.get("generation_id") else "human"))
 
 
+def evaluation_unit(row: Dict[str, Any]) -> Tuple[str, str]:
+    """Keep correlated color-swapped self-play games in one data split."""
+    source = data_source(row)
+    if source == "vercel_self_play":
+        pair_id = str(row.get("pair_id") or "").strip()
+        if not pair_id:
+            raise ValueError(
+                f"self-play row {row.get('game_id', '<missing>')} requires pair_id"
+            )
+        return source, pair_id
+    return source, str(row["game_id"])
+
+
 def validate_self_play_code_version(
     rows: List[Dict[str, Any]], required: Optional[str] = None
 ) -> Optional[str]:
@@ -90,34 +103,37 @@ def validate_self_play_code_version(
 
 
 def chronological_split(rows: List[Dict[str, Any]]) -> Dict[str, np.ndarray]:
-    game_dates: Dict[Tuple[str, str], str] = {}
+    unit_dates: Dict[Tuple[str, str], str] = {}
     for row in rows:
-        key = (data_source(row), row["game_id"])
-        game_dates[key] = row["created_at"]
+        key = evaluation_unit(row)
+        created_at = str(row["created_at"])
+        unit_dates[key] = min(unit_dates.get(key, created_at), created_at)
     sets: Dict[str, set[Tuple[str, str]]] = {
         "train": set(),
         "validation": set(),
         "test": set(),
     }
-    sources = sorted({source for source, _ in game_dates})
+    sources = sorted({source for source, _ in unit_dates})
     for source in sources:
-        games = sorted(
-            (key for key in game_dates if key[0] == source),
-            key=lambda key: (game_dates[key], key[1]),
+        units = sorted(
+            (key for key in unit_dates if key[0] == source),
+            key=lambda key: (unit_dates[key], key[1]),
         )
-        if len(games) < 30:
-            raise ValueError(f"source {source} requires at least 30 games for splits")
-        train_end = max(1, int(len(games) * 0.70))
-        validation_end = max(train_end + 1, int(len(games) * 0.85))
-        sets["train"].update(games[:train_end])
-        sets["validation"].update(games[train_end:validation_end])
-        sets["test"].update(games[validation_end:])
+        if len(units) < 30:
+            raise ValueError(
+                f"source {source} requires at least 30 independent evaluation units for splits"
+            )
+        train_end = max(1, int(len(units) * 0.70))
+        validation_end = max(train_end + 1, int(len(units) * 0.85))
+        sets["train"].update(units[:train_end])
+        sets["validation"].update(units[train_end:validation_end])
+        sets["test"].update(units[validation_end:])
     return {
         name: np.asarray(
             [
                 index
                 for index, row in enumerate(rows)
-                if (data_source(row), row["game_id"]) in game_ids
+                if evaluation_unit(row) in game_ids
             ]
         )
         for name, game_ids in sets.items()
@@ -321,11 +337,12 @@ def paired_game_bootstrap(
     random_state: int,
     samples: int = 2000,
 ) -> Dict[str, Any]:
-    """Estimate candidate-minus-baseline loss by resampling whole games.
+    """Estimate candidate-minus-baseline loss by resampling independent units.
 
     Positions inside a game are highly correlated. Treating them as
-    independent would produce falsely narrow confidence intervals, so each
-    bootstrap draw resamples game-level mean losses within each source.
+    independent would produce falsely narrow confidence intervals. The two
+    color-swapped self-play games sharing a seed are correlated as well, so
+    each bootstrap draw resamples pair-level means within each source.
     """
     candidate_by_index = {
         int(index): candidate_probabilities[offset]
@@ -339,12 +356,12 @@ def paired_game_bootstrap(
     for index in indices:
         row = rows[int(index)]
         source = data_source(row)
-        game = str(row["game_id"])
+        unit = evaluation_unit(row)[1]
         label = labels[int(index)]
         candidate = np.clip(candidate_by_index[int(index)], 1e-7, 1 - 1e-7)
         baseline = np.clip(baseline_by_index[int(index)], 1e-7, 1 - 1e-7)
         record = by_source_game.setdefault(source, {}).setdefault(
-            game,
+            unit,
             {
                 "log_loss": [],
                 "brier": [],
@@ -398,7 +415,7 @@ def paired_game_bootstrap(
         for source, values in source_arrays.items():
             source_record = result["by_source"].setdefault(source, {})
             source_record[metric] = summarize({source: values})
-            source_record["games"] = len(values)
+            source_record["resampling_units"] = len(values)
         for perspective in ("RED", "BLUE"):
             perspective_arrays = {
                 source: np.asarray(
@@ -587,7 +604,7 @@ def main() -> None:
         "metadata": {
             "target": "expected eventual score for the perspective player (win=1, draw=0.5, loss=0)",
             "eligible_outcomes": sorted({row["outcome_reason"] for row in rows}),
-            "split": "source-stratified chronological 70/15/15 by whole game",
+            "split": "source-stratified chronological 70/15/15 by game; color-swapped self-play pairs are indivisible",
             "hyperparameters": best_parameters,
             "self_play_train_share": args.self_play_train_share,
             "self_play_code_version": self_play_code_version,
