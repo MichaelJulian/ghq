@@ -848,6 +848,7 @@ class Searcher:
         self.turn_cache: Dict[str, List[TurnCandidate]] = {}
         self.value_cache: Dict[str, float] = {}
         self.safety_cache: Dict[Tuple[str, bool], Tuple[float, float, float]] = {}
+        self.immediate_hq_capture_cache: Dict[str, bool] = {}
         self.root_key: Optional[str] = None
         self.root_fallback: Optional[TurnCandidate] = None
         self.root_ranked_turns: List[Tuple[float, TurnCandidate]] = []
@@ -1132,6 +1133,8 @@ class Searcher:
                 roles.append("develop")
             if self.unlocks_airborne_extraction(working, move):
                 roles.append("unlock")
+            if self.unlocks_immediate_hq_capture(working, move):
+                roles.append("hq_capture_unlock")
             if move.from_square is not None and move.to_square is not None:
                 if (
                     piece_type in ARTILLERY_TYPES
@@ -1199,6 +1202,7 @@ class Searcher:
             "protect": 1.5,
             "extract": 2.5,
             "unlock": 1.5,
+            "hq_capture_unlock": 5.0,
             "mobilize": 1.8,
             "advance": 1.5,
         }
@@ -1724,13 +1728,69 @@ class Searcher:
                 return True
         return False
 
+    def has_immediate_hq_capture(self, board: engine.BaseBoard) -> bool:
+        """Whether the side to act can take the enemy HQ with one legal action."""
+        key = board.serialize()
+        cached = self.immediate_hq_capture_cache.get(key)
+        if cached is not None:
+            return cached
+        for candidate in board.generate_legal_moves():
+            target = candidate.capture_preference
+            if target is not None and board.piece_type_at(target) == engine.HQ:
+                self.immediate_hq_capture_cache[key] = True
+                return True
+        self.immediate_hq_capture_cache[key] = False
+        return False
+
+    def unlocks_immediate_hq_capture(
+        self, board: engine.BaseBoard, move: engine.Move
+    ) -> bool:
+        """Whether a setup action makes a same-turn HQ capture legal.
+
+        GHQ turns are combinations, so a vacating move can be forcing even
+        when it has no immediate tactical effect.  In particular, moving a
+        blocker may open the destination or lane needed by a second piece to
+        take the HQ.  These setup actions must survive the atomic-action beam.
+        """
+        if (
+            move.name in ("AutoCapture", "Skip")
+            or move.from_square is None
+            or move.to_square is None
+            or move.from_square == move.to_square
+            or board.turn_moves >= self.max_actions - 1
+        ):
+            return False
+        enemy_hqs = board.pieces(engine.HQ, not board.turn)
+        if not any(
+            chebyshev(move.from_square, hq_square) == 1
+            for hq_square in enemy_hqs
+        ):
+            # The currently occupied square must be the obstruction another
+            # unit needs to occupy beside the HQ. This cheap geometric gate
+            # keeps unlock detection from regenerating moves for every quiet
+            # action in an ordinary position.
+            return False
+        if self.has_immediate_hq_capture(board):
+            # The capture was already legal; this action did not unlock it
+            # and must not receive forcing priority merely for preserving it.
+            return False
+
+        child = board.copy()
+        child.push(move)
+        if child.turn != board.turn or child.is_game_over():
+            return False
+        return self.has_immediate_hq_capture(child)
+
     def move_priority(self, board: engine.BaseBoard, move: engine.Move) -> float:
         if move.name == "AutoCapture":
             target = board.piece_type_at(move.capture_preference) if move.capture_preference is not None else None
             return 10000.0 + 100.0 * PIECE_VALUES.get(target, 0.0)
         if move.capture_preference is not None:
             target = board.piece_type_at(move.capture_preference)
-            return 5000.0 + 100.0 * PIECE_VALUES.get(target, 0.0)
+            priority = 5000.0 + 100.0 * PIECE_VALUES.get(target, 0.0)
+            if target != engine.HQ and self.unlocks_immediate_hq_capture(board, move):
+                priority += 8000.0
+            return priority
         if move.name == "Skip":
             return -10000.0
         priority = 0.0
@@ -1800,6 +1860,11 @@ class Searcher:
             # Quiet blocker-vacating moves such as g3-f4 must survive long
             # enough for the next action, h2-g3, to be considered.
             priority += 4800.0
+        if self.unlocks_immediate_hq_capture(board, move):
+            # A quiet action that makes mate legal on the next action is more
+            # forcing than ordinary captures and must not be lost to the
+            # atomic-action or partial-turn beams.
+            priority += 8000.0
         artillery_bonus = self.artillery_target_bonus(board, move)
         if self.turn_number <= EARLY_GAME_LAST_TURN:
             # Early play should build the army, not let one speculative gun
@@ -1964,6 +2029,7 @@ class Searcher:
                         "airborne_extraction",
                         "unlock_and_extract",
                         "escape_and_extract",
+                        "hq_capture_unlock",
                     )
                     for key in keys
                 )
@@ -1978,6 +2044,7 @@ class Searcher:
             values.sort(
                 key=lambda item: (
                     plan_rank(item),
+                    len(item.moves) if item.board.is_game_over() else 99,
                     -item.priority,
                     normalized_turn_key(item.moves, color),
                 )
@@ -1987,6 +2054,7 @@ class Searcher:
             groups.values(),
             key=lambda values: (
                 plan_rank(values[0]),
+                len(values[0].moves) if values[0].board.is_game_over() else 99,
                 -values[0].priority,
                 normalized_move_uci(values[0].moves[0], color)
                 if values[0].moves
@@ -2015,10 +2083,13 @@ class Searcher:
         airborne_extractions: List[Tuple[int, int]] = []
         hq_escapes: List[Tuple[int, int]] = []
         extraction_unlocks: List[str] = []
+        hq_capture_unlocks: List[str] = []
         for move in moves:
             piece_type = self.move_piece_type(working, move)
             if self.unlocks_airborne_extraction(working, move):
                 extraction_unlocks.append(move.uci())
+            if self.unlocks_immediate_hq_capture(working, move):
+                hq_capture_unlocks.append(move.uci())
             if move.from_square is not None and move.to_square is not None:
                 if (
                     piece_type in ARTILLERY_TYPES
@@ -2051,6 +2122,7 @@ class Searcher:
         keys.extend(("artillery_escape", source, destination) for source, destination in artillery_escapes)
         keys.extend(("airborne_extraction", source, destination) for source, destination in airborne_extractions)
         keys.extend(("airborne_unlock", uci) for uci in extraction_unlocks)
+        keys.extend(("hq_capture_unlock", uci) for uci in hq_capture_unlocks)
         for unlock in extraction_unlocks:
             for airborne_extraction in airborne_extractions:
                 keys.append(("unlock_and_extract", unlock) + airborne_extraction)

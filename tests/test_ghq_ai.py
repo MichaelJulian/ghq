@@ -52,6 +52,7 @@ TURN_6_FEN = (
     "qr↓1r↓1i2/iiiii3/8/8/8/5T↑2/4H↑III/"
     "PFR↑FF1R↑Q IIIIIR iifffprth b"
 )
+SELF_PLAY_HQ_UNLOCK_FEN = "8/2q3i1/2I4i/6f1/2F5/8/1F4I1/I1I2I1Q I - b"
 
 
 class EvaluationTests(unittest.TestCase):
@@ -933,6 +934,40 @@ class SearchTests(unittest.TestCase):
         )
         self.assertEqual(result["best_turn"]["actions"], ["h2g1xf1", "g3h2xh1"])
         self.assertLessEqual(result["score"]["red"], -ghq_ai.MATE_SCORE)
+
+    def test_quiet_hq_capture_unlock_survives_action_and_turn_beams(self):
+        board = engine.BaseBoard(SELF_PLAY_HQ_UNLOCK_FEN)
+        root_key = board.serialize()
+        for uci in ("g5h4", "h6g5", "g7h6"):
+            board.push(
+                next(move for move in board.generate_legal_moves() if move.uci() == uci)
+            )
+
+        searcher = ghq_ai.Searcher(
+            "balanced", time_ms=60_000, beam_width=6, turn_number=63
+        )
+        # Exercise the deliberately narrow opponent-reply generator used by
+        # the production depth-two verification pass, not only the wide root.
+        searcher.root_key = root_key
+        searcher.verification_mode = True
+        bounded = [move.uci() for _, move in searcher.bounded_diverse_moves(board)]
+        self.assertIn("c6b7", bounded)
+
+        candidates = searcher.generate_turn_candidates(board)
+        mating_turns = [
+            candidate
+            for candidate in candidates
+            if candidate.board.outcome() is not None
+            and candidate.board.outcome().winner == engine.RED
+        ]
+        self.assertTrue(mating_turns)
+        self.assertTrue(
+            any(
+                [move.uci() for move in candidate.moves][:2]
+                == ["c6b7", "c4c6xc7"]
+                for candidate in mating_turns
+            )
+        )
 
 
 if __name__ == "__main__":

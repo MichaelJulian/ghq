@@ -131,6 +131,8 @@ async function main() {
     tail: Array<{
       turn: number;
       player: string;
+      personality: string;
+      agentId: string;
       fen: string;
       moves: string[];
       score: number;
@@ -319,6 +321,8 @@ async function main() {
           loserDecision: {
             turn: loserDecision.turnNumber,
             player: loserDecision.player,
+            personality: loserDecision.personality,
+            agentId: loserDecision.agentId,
             fen: loserDecision.fen,
             moves: loserDecision.selectedMoves,
             score: loserDecision.currentPlayerScore,
