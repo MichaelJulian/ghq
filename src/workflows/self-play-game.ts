@@ -47,6 +47,8 @@ export interface DurableSelfPlayDecision {
   completedDepth: number;
   timedOut: boolean;
   fallback: "none" | "safe" | "seeded";
+  /** Missing on historical records created before recommendation telemetry. */
+  recommendationLabel?: string;
   explorationSeed: number;
   explorationTemperature: number;
   features: number[];
@@ -66,6 +68,8 @@ interface DurableTurnStepInput {
   opponentId: string;
   opponentMaxActions: number;
   explorationSeed: number;
+  recentFens: string[];
+  previousOwnTurnMoves: string[];
 }
 
 interface DurableTurnStepResult {
@@ -135,6 +139,8 @@ async function playDurableTurn(
     maxActions: input.competitor.maxActions ?? 3,
     explorationTemperature: input.competitor.explorationTemperature,
     explorationSeed: input.explorationSeed,
+    recentFens: input.recentFens,
+    previousOwnTurnMoves: input.previousOwnTurnMoves,
   });
   const state = FENtoBoardState(analysis.fen);
   const resultingState = FENtoBoardState(analysis.resultingFen);
@@ -157,6 +163,7 @@ async function playDurableTurn(
     completedDepth: analysis.search.search.completed_depth_in_turns,
     timedOut: analysis.search.search.timed_out,
     fallback: analysis.search.search.fallback_used,
+    recommendationLabel: analysis.search.recommendation_label,
     explorationSeed: input.explorationSeed,
     explorationTemperature: input.competitor.explorationTemperature,
     features: extractValueFeatures(
@@ -267,6 +274,8 @@ export async function playDurableSelfPlayGame(
   const noProgressTurns = config.noProgressTurns ?? 24;
   const decisions: DurableSelfPlayDecision[] = [];
   const positionOccurrences: Record<string, number> = { [initialFen]: 1 };
+  const positionHistory: string[] = [initialFen];
+  const lastTurnMoves: Record<Player, string[]> = { RED: [], BLUE: [] };
   let fen: string | undefined = initialFen;
   let serializedState: string | undefined;
   let player: Player = "RED";
@@ -288,6 +297,8 @@ export async function playDurableSelfPlayGame(
       opponentId: opponent.id,
       opponentMaxActions: opponent.maxActions ?? 3,
       explorationSeed: turnSeed(config.seed, turnNumber),
+      recentFens: positionHistory.slice(-32),
+      previousOwnTurnMoves: lastTurnMoves[player],
     });
     decisions.push(step.decision);
     fen = step.decision.resultingFen;
@@ -296,7 +307,8 @@ export async function playDurableSelfPlayGame(
     pendingTurnMoves.push(...step.decision.selectedMoves);
 
     const resultingPlayer = FENtoBoardState(fen).currentPlayerTurn;
-    const nextPlayer = resultingPlayer ?? (player === "RED" ? "BLUE" : "RED");
+    const nextPlayer: Player =
+      resultingPlayer ?? (player === "RED" ? "BLUE" : "RED");
     if (!outcome && !step.decision.completedTurn) {
       partialTurnAttempts++;
       player = nextPlayer;
@@ -310,6 +322,8 @@ export async function playDurableSelfPlayGame(
     turnsWithoutProgress = madeProgress ? 0 : turnsWithoutProgress + 1;
     const occurrences = (positionOccurrences[fen] ?? 0) + 1;
     positionOccurrences[fen] = occurrences;
+    positionHistory.push(fen);
+    lastTurnMoves[player] = [...pendingTurnMoves];
     if (!outcome && occurrences >= repetitionLimit) {
       outcome = { termination: "repetition" };
     } else if (!outcome && turnsWithoutProgress >= noProgressTurns) {

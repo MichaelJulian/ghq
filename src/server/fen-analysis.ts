@@ -174,6 +174,91 @@ export function applyExploration(
   return result;
 }
 
+function ordinaryMoveEndpoints(uci: string): [string, string] | undefined {
+  const match = /^([a-h][1-8])([a-h][1-8])/.exec(uci);
+  return match ? [match[1], match[2]] : undefined;
+}
+
+function reversalCount(
+  actions: string[],
+  previousOwnTurnMoves: string[]
+): number {
+  const reversedPrevious = new Set(
+    previousOwnTurnMoves.flatMap((move) => {
+      const endpoints = ordinaryMoveEndpoints(move);
+      return endpoints ? [`${endpoints[1]}${endpoints[0]}`] : [];
+    })
+  );
+  return actions.reduce((count, move) => {
+    const endpoints = ordinaryMoveEndpoints(move);
+    return (
+      count + (endpoints && reversedPrevious.has(endpoints.join("")) ? 1 : 0)
+    );
+  }, 0);
+}
+
+/** Prefer a near-best novel turn when the nominal choice repeats or undoes play. */
+export function applyHistoryAvoidance(
+  result: GhqSearchResult,
+  sideToMove: Player,
+  recentFens: string[],
+  previousOwnTurnMoves: string[]
+): GhqSearchResult {
+  const candidates = result.candidate_turns ?? [];
+  if (candidates.length < 2 || result.search.opening_book_used) return result;
+
+  const recentCounts = new Map<string, number>();
+  for (const fen of recentFens.slice(-32)) {
+    recentCounts.set(fen, (recentCounts.get(fen) ?? 0) + 1);
+  }
+  const penalty = (candidate: (typeof candidates)[number]): number => {
+    const repeats = recentCounts.get(candidate.resulting_fen) ?? 0;
+    const reversals = reversalCount(candidate.actions, previousOwnTurnMoves);
+    return repeats * 100 + (reversals >= 2 ? reversals * 12 : reversals * 1.5);
+  };
+
+  const selectedRank = result.exploration?.selectedRank ?? 1;
+  const selected =
+    candidates.find((candidate) => candidate.rank === selectedRank) ??
+    candidates.find(
+      (candidate) => candidate.resulting_fen === result.best_turn.resulting_fen
+    ) ??
+    candidates[0];
+  const selectedPenalty = penalty(selected);
+  if (selectedPenalty <= 0) return result;
+
+  const bestScore = candidates[0].score;
+  const replacement = candidates
+    .filter((candidate) => candidate.score >= bestScore - 1.25)
+    .sort(
+      (left, right) =>
+        penalty(left) - penalty(right) || right.score - left.score
+    )
+    .find((candidate) => penalty(candidate) < selectedPenalty);
+  if (!replacement) return result;
+
+  result.best_turn = {
+    automatic_captures: replacement.automatic_captures,
+    actions: replacement.actions,
+    all_moves: replacement.all_moves,
+    resulting_fen: replacement.resulting_fen,
+    action_purposes: replacement.action_purposes,
+    purpose: replacement.purpose,
+  };
+  result.principal_variation = replacement.all_moves;
+  result.score.current_player = replacement.score;
+  result.score.red =
+    sideToMove === "RED" ? replacement.score : -replacement.score;
+  result.recommendation_label = "history avoidance";
+  result.exploration = {
+    temperature: result.exploration?.temperature ?? 0,
+    seed: result.exploration?.seed ?? 0,
+    selectedRank: replacement.rank,
+    candidateCount: candidates.length,
+  };
+  return result;
+}
+
 function playerToMove(board: PythonBoard): Player {
   return board.is_red_turn() ? "RED" : "BLUE";
 }
@@ -324,11 +409,20 @@ export async function analyzeFen(
     );
     let searchResult: GhqSearchResult;
     try {
-      searchResult = applyExploration(
-        toSearchResult(resultProxy),
+      searchResult = applyHistoryAvoidance(
+        applyExploration(
+          toSearchResult(resultProxy),
+          sideToMove,
+          explorationTemperature,
+          explorationSeed
+        ),
         sideToMove,
-        explorationTemperature,
-        explorationSeed
+        (request.recentFens ?? []).filter(
+          (value): value is string => typeof value === "string"
+        ),
+        (request.previousOwnTurnMoves ?? []).filter(
+          (value): value is string => typeof value === "string"
+        )
       );
     } finally {
       destroyProxy(resultProxy);

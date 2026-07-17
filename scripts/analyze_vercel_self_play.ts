@@ -80,6 +80,8 @@ async function main() {
   const fallbackTypes: Record<string, number> = {};
   const fallbackByColor: Record<string, number> = {};
   const fallbackByPhase: Record<string, number> = {};
+  const fallbackByTurn: Record<string, number> = {};
+  const historyAvoidanceByTurn: Record<string, number> = {};
   const depthByColor: Record<string, number> = {};
   const trainingRejectionReasons: Record<string, number> = {};
   const personalities: Record<
@@ -146,6 +148,10 @@ async function main() {
             ? "mid"
             : "late";
         increment(fallbackByPhase, phase);
+        increment(fallbackByTurn, String(decision.turnNumber));
+      }
+      if (decision.recommendationLabel === "history avoidance") {
+        increment(historyAvoidanceByTurn, String(decision.turnNumber));
       }
       if (!decision.completedTurn) incompleteTurnDecisions++;
       if (
@@ -230,6 +236,8 @@ async function main() {
         fallbackTypes,
         fallbackByColor,
         fallbackByPhase,
+        fallbackByTurn,
+        historyAvoidanceByTurn,
         fallbackDecisions,
         fallbackRate: Number((fallbackDecisions / decisions).toFixed(4)),
         timedOutDecisions,

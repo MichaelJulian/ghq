@@ -21,6 +21,10 @@ export interface FenAnalysisRequest {
   /** Zero is deterministic; larger values sample more broadly among safe near-best turns. */
   explorationTemperature?: number;
   explorationSeed?: number;
+  /** Recent full-turn positions used to avoid self-play repetition loops. */
+  recentFens?: string[];
+  /** The same player's previous turn, used to detect immediate undo cycles. */
+  previousOwnTurnMoves?: string[];
 }
 
 export interface SearchEvaluationBreakdown {
@@ -85,7 +89,8 @@ export interface GhqSearchResult {
     | "safe fallback"
     | "complete-turn seed"
     | "opening book"
-    | "exploratory";
+    | "exploratory"
+    | "history avoidance";
   input_fen: string;
   side_to_move: "red" | "blue";
   best_turn: {

@@ -2095,11 +2095,14 @@ class Searcher:
         original_turn = board.turn
         is_root_generation = self.root_key is None or cache_key == self.root_key
         if self.verification_mode and is_root_generation:
-            partial_width = max(18, self.beam_width * 3)
-            evaluation_pool_width = max(14, self.beam_width * 2)
+            # The verification pass is deliberately small: its job is to
+            # finish one complete opponent reply before the clock expires.
+            # The later improvement pass is responsible for breadth.
+            partial_width = max(10, self.beam_width * 2)
+            evaluation_pool_width = max(8, self.beam_width + 2)
         elif self.verification_mode:
-            partial_width = max(8, self.beam_width)
-            evaluation_pool_width = max(10, self.beam_width + 2)
+            partial_width = max(6, self.beam_width)
+            evaluation_pool_width = max(6, self.beam_width)
         elif self.time_ms < 1000:
             partial_width = max(12, self.beam_width * 2)
             evaluation_pool_width = max(16, self.beam_width * 3)
@@ -2117,9 +2120,9 @@ class Searcher:
             evaluation_pool_width = max(24, self.beam_width * 3)
         if self.verification_mode:
             turn_width = (
-                max(3, min(4, self.beam_width))
+                max(2, min(3, (self.beam_width + 1) // 2))
                 if is_root_generation
-                else max(2, min(3, (self.beam_width + 1) // 2))
+                else 2
             )
             turn_capacity = turn_width + 1
         else:
@@ -2881,6 +2884,7 @@ def search(
     timed_out = False
     fallback_kind = "none"
     emergency_seed: Optional[SearchResult] = None
+    verified_seed: Optional[SearchResult] = None
     book_turn = opening_book_turn(board, turn_number, searcher, opening_seed)
     opening_book_used = book_turn is not None
     if book_turn is not None:
@@ -2946,6 +2950,45 @@ def search(
         requested_depth = max(1, max_depth)
         final_deadline = searcher.deadline
         if requested_depth >= 2:
+            # First verify the purposeful emergency turn against one complete
+            # opponent reply. This produces a tactically checked floor even if
+            # enumerating alternative root turns later exhausts the budget.
+            # It is still labelled a fallback because root alternatives were
+            # not all compared at the same horizon.
+            if seed_board.is_game_over():
+                verified_seed = SearchResult(emergency_seed.score, list(seed_moves))
+            elif seed_board.turn != board.turn:
+                searcher.verification_mode = True
+                searcher.deadline = min(
+                    final_deadline,
+                    started + max(0.05, time_ms / 1000.0 * 0.18),
+                )
+                try:
+                    reply = searcher.alphabeta(
+                        seed_board, 1, -math.inf, math.inf
+                    )
+                    early_bonus = (
+                        0.40 * searcher.early_plan_score(
+                            searcher.action_purpose_labels(
+                                board, seed_moves, board.turn
+                            )
+                        )
+                        if turn_number <= EARLY_GAME_LAST_TURN
+                        else 0.0
+                    )
+                    seed_quality = early_bonus - seed_penalty
+                    verified_seed = SearchResult(
+                        reply.score
+                        + (seed_quality if board.turn == engine.RED else -seed_quality),
+                        list(seed_moves) + list(reply.pv),
+                    )
+                except SearchTimeout:
+                    timed_out = True
+                finally:
+                    searcher.deadline = final_deadline
+                    searcher.table.clear()
+                    searcher.turn_cache.clear()
+
             # Reserve the first 65% of the budget for a narrow but complete
             # depth-two pass. Depth two means our complete turn plus one full
             # opponent reply. A later broad pass may improve it, but may never
@@ -2982,15 +3025,20 @@ def search(
                     if abs(iteration.score) >= MATE_SCORE:
                         break
             elif completed_depth < 2:
-                # Root generation often completed even when a reply did not.
-                # Use the remaining budget to finish a stable depth-one result
-                # instead of immediately dropping to an unverified seed.
-                searcher.verification_mode = False
-                try:
-                    best = searcher.alphabeta(board, 1, -math.inf, math.inf)
-                    completed_depth = 1
-                except SearchTimeout:
-                    timed_out = True
+                if verified_seed is not None:
+                    best = verified_seed
+                    completed_depth = 2
+                    fallback_kind = "safe"
+                else:
+                    # Root generation often completed even when a reply did
+                    # not. Finish a stable depth-one result only when no
+                    # reply-verified floor exists.
+                    searcher.verification_mode = False
+                    try:
+                        best = searcher.alphabeta(board, 1, -math.inf, math.inf)
+                        completed_depth = 1
+                    except SearchTimeout:
+                        timed_out = True
         else:
             try:
                 best = searcher.alphabeta(board, 1, -math.inf, math.inf)
@@ -2999,7 +3047,11 @@ def search(
                 timed_out = True
 
     if best is None:
-        if searcher.root_fallback is not None:
+        if verified_seed is not None:
+            best = verified_seed
+            completed_depth = 2
+            fallback_kind = "safe"
+        elif searcher.root_fallback is not None:
             fallback_penalty = (
                 searcher.root_fallback.purpose_penalty
                 + searcher.root_fallback.paratrooper_mission_penalty

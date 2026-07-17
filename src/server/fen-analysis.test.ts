@@ -2,11 +2,54 @@
 
 import { describe, expect, it, jest } from "@jest/globals";
 import { GHQ_STARTING_FEN } from "@/game/analysis/types";
-import { analyzeFen } from "./fen-analysis";
+import type { GhqCandidateTurn, GhqSearchResult } from "@/game/analysis/types";
+import { analyzeFen, applyHistoryAvoidance } from "./fen-analysis";
 
 jest.setTimeout(30_000);
 
 describe("production FEN analysis", () => {
+  it("chooses a near-best novel turn over a multi-move undo cycle", () => {
+    const candidate = (
+      rank: number,
+      actions: string[],
+      resulting_fen: string,
+      score: number
+    ) =>
+      ({
+        rank,
+        actions,
+        all_moves: actions,
+        automatic_captures: [],
+        resulting_fen,
+        score,
+        action_purposes: [],
+        purpose: {},
+      } as unknown as GhqCandidateTurn);
+    const repeating = candidate(1, ["a2a1", "b2b1", "c1c2"], "old", 4);
+    const novel = candidate(2, ["a2a3", "b2c3", "c1d2"], "new", 3.4);
+    const result = {
+      recommendation_label: "best found",
+      best_turn: repeating,
+      principal_variation: repeating.all_moves,
+      candidate_turns: [repeating, novel],
+      score: { current_player: 4, red: 4 },
+      search: { opening_book_used: false },
+      exploration: {
+        temperature: 0,
+        seed: 1,
+        selectedRank: 1,
+        candidateCount: 2,
+      },
+    } as unknown as GhqSearchResult;
+
+    applyHistoryAvoidance(result, "RED", ["old"], ["a1a2", "b1b2"]);
+
+    expect(result.best_turn.resulting_fen).toBe("new");
+    expect(result.recommendation_label).toBe("history avoidance");
+    expect(result.score.current_player).toBe(3.4);
+    expect(result.exploration?.selectedRank).toBe(2);
+  });
+
   it("returns a legal complete turn plus model and search outputs", async () => {
     const result = await analyzeFen({
       fen: GHQ_STARTING_FEN,
