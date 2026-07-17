@@ -4,6 +4,12 @@ import type { Player } from "@/game/engine-v2";
 export interface ValueModelArenaSummary {
   games: number;
   pairs: number;
+  provenance: {
+    generationIds: string[];
+    codeVersions: string[];
+    incumbentCheckpoints: string[];
+    challengerCheckpoints: string[];
+  };
   challenger: {
     points: number;
     scoreRate: number;
@@ -74,6 +80,29 @@ export function summarizeValueModelArena(
     .sort((left, right) => left.game.gameId.localeCompare(right.game.gameId));
   if (!scored.length) return undefined;
 
+  const generationIds = new Set<string>();
+  const codeVersions = new Set<string>();
+  const incumbentCheckpoints = new Set<string>();
+  const challengerCheckpoints = new Set<string>();
+  for (const { game } of scored) {
+    generationIds.add(game.generationId || "unknown");
+    codeVersions.add(game.codeVersion || "unknown");
+    for (const [model, checkpoint] of [
+      [
+        modelFromAgent(game.redAgentId, game.redValueModel),
+        game.redValueModelCheckpoint,
+      ],
+      [
+        modelFromAgent(game.blueAgentId, game.blueValueModel),
+        game.blueValueModelCheckpoint,
+      ],
+    ] as const) {
+      const destination =
+        model === "challenger" ? challengerCheckpoints : incumbentCheckpoints;
+      destination.add(checkpoint || "unknown");
+    }
+  }
+
   const byColor: ValueModelArenaSummary["challenger"]["byColor"] = {
     RED: { games: 0, points: 0, scoreRate: 0 },
     BLUE: { games: 0, points: 0, scoreRate: 0 },
@@ -133,6 +162,26 @@ export function summarizeValueModelArena(
   const ci95Low = percentile(draws, 0.025);
   const ci95High = percentile(draws, 0.975);
   const reasons: string[] = [];
+  if (generationIds.size !== 1 || generationIds.has("unknown"))
+    reasons.push("mixed-or-missing-generation-provenance");
+  if (codeVersions.size !== 1 || codeVersions.has("unknown"))
+    reasons.push("mixed-or-missing-code-provenance");
+  if (
+    incumbentCheckpoints.size !== 1 ||
+    incumbentCheckpoints.has("unknown")
+  )
+    reasons.push("mixed-or-missing-incumbent-checkpoint");
+  if (
+    challengerCheckpoints.size !== 1 ||
+    challengerCheckpoints.has("unknown")
+  )
+    reasons.push("mixed-or-missing-challenger-checkpoint");
+  if (
+    incumbentCheckpoints.size === 1 &&
+    challengerCheckpoints.size === 1 &&
+    [...incumbentCheckpoints][0] === [...challengerCheckpoints][0]
+  )
+    reasons.push("identical-model-checkpoints");
   if (scored.length < 100) reasons.push("fewer-than-100-games");
   if (pairScores.length * 2 !== scored.length)
     reasons.push("incomplete-color-pair");
@@ -149,6 +198,12 @@ export function summarizeValueModelArena(
   return {
     games: scored.length,
     pairs: pairScores.length,
+    provenance: {
+      generationIds: [...generationIds].sort(),
+      codeVersions: [...codeVersions].sort(),
+      incumbentCheckpoints: [...incumbentCheckpoints].sort(),
+      challengerCheckpoints: [...challengerCheckpoints].sort(),
+    },
     challenger: {
       points,
       scoreRate: Number(scoreRate.toFixed(4)),

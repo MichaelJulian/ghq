@@ -23,6 +23,13 @@ function game(
     blueMaxActions: 3,
     redValueModel: challengerRed ? "challenger" : "incumbent",
     blueValueModel: challengerRed ? "incumbent" : "challenger",
+    redValueModelCheckpoint: challengerRed
+      ? "three-actions:challenger:new-model"
+      : "three-actions:incumbent:production-model",
+    blueValueModelCheckpoint: challengerRed
+      ? "three-actions:incumbent:production-model"
+      : "three-actions:challenger:new-model",
+    codeVersion: "test-commit",
     initialFen: "initial",
     finalFen: "final",
     decisions: [],
@@ -91,5 +98,30 @@ describe("value-model arena promotion gate", () => {
     expect(summary.games).toBe(3);
     expect(summary.pairs).toBe(1);
     expect(summary.promotionGate.reasons).toContain("incomplete-color-pair");
+  });
+
+  it("rejects mixed model checkpoints even when the challenger wins", () => {
+    const games = Array.from({ length: 100 }, (_, index) =>
+      game(index, index < 70)
+    );
+    games[99].blueValueModelCheckpoint = "three-actions:challenger:other-model";
+    const summary = summarizeValueModelArena(games, 1_000)!;
+    expect(summary.challenger.scoreRate).toBe(0.7);
+    expect(summary.promotionGate.passed).toBe(false);
+    expect(summary.promotionGate.reasons).toContain(
+      "mixed-or-missing-challenger-checkpoint"
+    );
+  });
+
+  it("rejects missing code provenance", () => {
+    const games = Array.from({ length: 100 }, (_, index) =>
+      game(index, index < 70)
+    );
+    games[0].codeVersion = "unknown";
+    const summary = summarizeValueModelArena(games, 1_000)!;
+    expect(summary.promotionGate.passed).toBe(false);
+    expect(summary.promotionGate.reasons).toContain(
+      "mixed-or-missing-code-provenance"
+    );
   });
 });
