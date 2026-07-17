@@ -229,6 +229,79 @@ def metrics_by_source(
     return result
 
 
+def paired_game_bootstrap(
+    rows: List[Dict[str, Any]],
+    indices: np.ndarray,
+    labels: np.ndarray,
+    candidate_probabilities: np.ndarray,
+    baseline_probabilities: np.ndarray,
+    random_state: int,
+    samples: int = 2000,
+) -> Dict[str, Any]:
+    """Estimate candidate-minus-baseline loss by resampling whole games.
+
+    Positions inside a game are highly correlated. Treating them as
+    independent would produce falsely narrow confidence intervals, so each
+    bootstrap draw resamples game-level mean losses within each source.
+    """
+    candidate_by_index = {
+        int(index): candidate_probabilities[offset]
+        for offset, index in enumerate(indices)
+    }
+    baseline_by_index = {
+        int(index): baseline_probabilities[offset]
+        for offset, index in enumerate(indices)
+    }
+    by_source_game: Dict[str, Dict[str, Dict[str, List[float]]]] = {}
+    for index in indices:
+        row = rows[int(index)]
+        source = data_source(row)
+        game = str(row["game_id"])
+        label = labels[int(index)]
+        candidate = np.clip(candidate_by_index[int(index)], 1e-7, 1 - 1e-7)
+        baseline = np.clip(baseline_by_index[int(index)], 1e-7, 1 - 1e-7)
+        record = by_source_game.setdefault(source, {}).setdefault(
+            game, {"log_loss": [], "brier": []}
+        )
+        candidate_log = -(label * math.log(candidate) + (1 - label) * math.log(1 - candidate))
+        baseline_log = -(label * math.log(baseline) + (1 - label) * math.log(1 - baseline))
+        record["log_loss"].append(candidate_log - baseline_log)
+        record["brier"].append((candidate - label) ** 2 - (baseline - label) ** 2)
+
+    rng = np.random.default_rng(random_state)
+
+    def summarize(source_arrays: Dict[str, np.ndarray]) -> Dict[str, float]:
+        point = float(np.mean([values.mean() for values in source_arrays.values()]))
+        draws = np.empty(samples, dtype=np.float64)
+        for sample in range(samples):
+            source_means = []
+            for values in source_arrays.values():
+                selected = rng.integers(0, len(values), size=len(values))
+                source_means.append(float(np.mean(values[selected])))
+            draws[sample] = float(np.mean(source_means))
+        return {
+            "candidate_minus_baseline": round(point, 6),
+            "ci95_low": round(float(np.quantile(draws, 0.025)), 6),
+            "ci95_high": round(float(np.quantile(draws, 0.975)), 6),
+        }
+
+    result: Dict[str, Any] = {"bootstrap_samples": samples, "by_source": {}}
+    for metric in ("log_loss", "brier"):
+        source_arrays = {
+            source: np.asarray(
+                [np.mean(game[metric]) for game in games.values()],
+                dtype=np.float64,
+            )
+            for source, games in by_source_game.items()
+        }
+        result[metric] = summarize(source_arrays)
+        for source, values in source_arrays.items():
+            source_record = result["by_source"].setdefault(source, {})
+            source_record[metric] = summarize({source: values})
+            source_record["games"] = len(values)
+    return result
+
+
 def export_tree(tree: Any) -> Dict[str, Any]:
     raw = tree.tree_
     return {
@@ -341,6 +414,7 @@ def main() -> None:
         )
 
     baseline_metrics: Dict[str, Any] | None = None
+    paired_bootstrap_test: Dict[str, Any] | None = None
     if args.baseline:
         baseline_artifact = json.loads(args.baseline.read_text(encoding="utf-8"))
         if baseline_artifact.get("feature_names") != feature_names:
@@ -356,6 +430,14 @@ def main() -> None:
             baseline_metrics[name]["by_source"] = metrics_by_source(
                 rows, indices, labels, probability
             )
+        paired_bootstrap_test = paired_game_bootstrap(
+            rows,
+            splits["test"],
+            labels,
+            all_probabilities["test"],
+            exported_probabilities(baseline_artifact, vectors[splits["test"]]),
+            args.random_state,
+        )
 
     priors = model.init_.class_prior_
     base_raw_score = math.log(float(priors[1]) / float(priors[0]))
@@ -403,6 +485,7 @@ def main() -> None:
         "best_hyperparameters": best_parameters,
         "metrics": split_metrics,
         "baseline_metrics": baseline_metrics,
+        "paired_bootstrap_test": paired_bootstrap_test,
         "feature_importance": artifact["metadata"]["feature_importance"],
         "export_parity_max_absolute_error": max_export_error,
         "feature_count": len(feature_names),

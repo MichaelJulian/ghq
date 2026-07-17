@@ -5,6 +5,7 @@ import {
   ValuePosition,
 } from "@/game/value-model/features";
 import generatedModel from "@/game/value-model/model.generated.json";
+import challengerGeneratedModel from "@/game/value-model/model.challenger.generated.json";
 import twoActionGeneratedModel from "@/game/value-model/model.two-action.generated.json";
 
 interface ExportedTree {
@@ -30,12 +31,19 @@ export interface ValueModelArtifact {
 }
 
 const model = generatedModel as unknown as ValueModelArtifact;
+const challengerModel =
+  challengerGeneratedModel as unknown as ValueModelArtifact;
 const twoActionModel = twoActionGeneratedModel as unknown as ValueModelArtifact;
 
 export type ValueModelRuleset = "three-actions" | "two-actions";
+export type ValueModelVersion = "incumbent" | "challenger";
 
-function modelForRuleset(ruleset: ValueModelRuleset): ValueModelArtifact {
-  return ruleset === "two-actions" ? twoActionModel : model;
+function modelForRuleset(
+  ruleset: ValueModelRuleset,
+  version: ValueModelVersion
+): ValueModelArtifact {
+  if (ruleset === "two-actions") return twoActionModel;
+  return version === "challenger" ? challengerModel : model;
 }
 
 function sigmoid(value: number): number {
@@ -96,7 +104,8 @@ export function predictFromFeatures(
 export function predictWinProbability(
   position: ValuePosition,
   perspective: Player,
-  ruleset: ValueModelRuleset = "three-actions"
+  ruleset: ValueModelRuleset = "three-actions",
+  version: ValueModelVersion = "incumbent"
 ): number {
   const ownHq = position.board
     .flat()
@@ -109,7 +118,7 @@ export function predictWinProbability(
   if (!opponentHq) return 1;
   return predictFromFeatures(
     extractValueFeatures(position, perspective),
-    modelForRuleset(ruleset)
+    modelForRuleset(ruleset, version)
   );
 }
 
@@ -122,14 +131,16 @@ export function predictWinProbability(
 export function predictZeroSumWinProbability(
   position: ValuePosition,
   perspective: Player,
-  ruleset: ValueModelRuleset = "three-actions"
+  ruleset: ValueModelRuleset = "three-actions",
+  version: ValueModelVersion = "incumbent"
 ): number {
   const opponent = perspective === "RED" ? "BLUE" : "RED";
-  const own = predictWinProbability(position, perspective, ruleset);
-  const other = predictWinProbability(position, opponent, ruleset);
+  const own = predictWinProbability(position, perspective, ruleset, version);
+  const other = predictWinProbability(position, opponent, ruleset, version);
   const total = own + other;
   return total > 0 ? own / total : 0.5;
 }
 
 export const VALUE_MODEL_METADATA = model.metadata;
+export const CHALLENGER_VALUE_MODEL_METADATA = challengerModel.metadata;
 export const TWO_ACTION_VALUE_MODEL_METADATA = twoActionModel.metadata;

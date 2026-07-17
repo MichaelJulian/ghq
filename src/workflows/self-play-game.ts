@@ -3,6 +3,7 @@ import type { GhqCandidateTurn, PersonalityId } from "@/game/analysis/types";
 import type { Player } from "@/game/engine-v2";
 import { FENtoBoardState } from "@/game/notation";
 import { extractValueFeatures } from "@/game/value-model/features";
+import type { ValueModelVersion } from "@/game/value-model/inference";
 import { analyzeFen } from "@/server/fen-analysis";
 import {
   persistSelfPlayArtifacts,
@@ -17,6 +18,7 @@ export interface DurableSelfPlayCompetitor {
   beamWidth: number;
   explorationTemperature: number;
   maxActions?: 2 | 3;
+  valueModel?: ValueModelVersion;
 }
 
 export interface DurableSelfPlayGameConfig {
@@ -57,6 +59,8 @@ export interface DurableSelfPlayDecision {
   selfActionLimit?: number;
   /** Missing on historical records, which used the standard three-action turn. */
   opponentActionLimit?: number;
+  /** Missing on historical records, which used the incumbent checkpoint. */
+  valueModel?: ValueModelVersion;
 }
 
 interface DurableTurnStepInput {
@@ -88,6 +92,8 @@ export interface DurableSelfPlayGameResult {
   blueAgentId: string;
   redMaxActions: number;
   blueMaxActions: number;
+  redValueModel: ValueModelVersion;
+  blueValueModel: ValueModelVersion;
   initialFen: string;
   finalFen: string;
   decisions: DurableSelfPlayDecision[];
@@ -139,6 +145,7 @@ async function playDurableTurn(
     maxDepth: input.competitor.maxDepth,
     beamWidth: input.competitor.beamWidth,
     maxActions: input.competitor.maxActions ?? 3,
+    valueModel: input.competitor.valueModel ?? "incumbent",
     explorationTemperature: input.competitor.explorationTemperature,
     explorationSeed: input.explorationSeed,
     recentFens: input.recentFens,
@@ -185,6 +192,7 @@ async function playDurableTurn(
     ),
     selfActionLimit: input.competitor.maxActions ?? 3,
     opponentActionLimit: input.opponentMaxActions,
+    valueModel: input.competitor.valueModel ?? "incumbent",
   };
   return {
     decision,
@@ -383,6 +391,8 @@ export async function playDurableSelfPlayGame(
     blueAgentId: config.blue.id,
     redMaxActions: config.red.maxActions ?? 3,
     blueMaxActions: config.blue.maxActions ?? 3,
+    redValueModel: config.red.valueModel ?? "incumbent",
+    blueValueModel: config.blue.valueModel ?? "incumbent",
     initialFen,
     finalFen: fen ?? initialFen,
     decisions,

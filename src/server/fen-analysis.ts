@@ -10,7 +10,10 @@ import type {
 } from "@/game/analysis/types";
 import { FENtoBoardState } from "@/game/notation";
 import type { Player } from "@/game/engine";
-import { predictZeroSumWinProbability } from "@/game/value-model/inference";
+import {
+  predictZeroSumWinProbability,
+  type ValueModelVersion,
+} from "@/game/value-model/inference";
 import { evaluatePersonalityPosition } from "@/game/value-model/styled-evaluation";
 import { PERSONALITIES } from "@/game/value-model/personalities";
 import { loadServerPyodide } from "@/server/pyodide";
@@ -299,7 +302,8 @@ function modelOutput(
   turnNumber: number,
   perspective: Player,
   personality: PersonalityId,
-  maxActions: number
+  maxActions: number,
+  valueModel: ValueModelVersion
 ): ModelPositionOutput {
   const state = FENtoBoardState(fen);
   const position = {
@@ -313,12 +317,14 @@ function modelOutput(
     redWinProbability: predictZeroSumWinProbability(
       position,
       "RED",
-      maxActions === 2 ? "two-actions" : "three-actions"
+      maxActions === 2 ? "two-actions" : "three-actions",
+      valueModel
     ),
     blueWinProbability: predictZeroSumWinProbability(
       position,
       "BLUE",
-      maxActions === 2 ? "two-actions" : "three-actions"
+      maxActions === 2 ? "two-actions" : "three-actions",
+      valueModel
     ),
     personality: evaluatePersonalityPosition(
       position,
@@ -331,7 +337,8 @@ function modelOutput(
 function redModelValue(
   fen: string,
   turnNumber: number,
-  maxActions: number
+  maxActions: number,
+  valueModel: ValueModelVersion
 ): number {
   const state = FENtoBoardState(fen);
   return predictZeroSumWinProbability(
@@ -343,7 +350,8 @@ function redModelValue(
       turnNumber,
     },
     "RED",
-    maxActions === 2 ? "two-actions" : "three-actions"
+    maxActions === 2 ? "two-actions" : "three-actions",
+    valueModel
   );
 }
 
@@ -385,6 +393,10 @@ export async function analyzeFen(
   const personality = request.personality ?? "balanced";
   if (!(personality in PERSONALITIES)) {
     throw new AnalysisInputError(`Unknown personality: ${personality}`);
+  }
+  const valueModel = request.valueModel ?? "incumbent";
+  if (valueModel !== "incumbent" && valueModel !== "challenger") {
+    throw new AnalysisInputError(`Unknown value model: ${valueModel}`);
   }
   const turnNumber = integerInRange(
     request.turnNumber,
@@ -441,7 +453,7 @@ export async function analyzeFen(
       beamWidth,
       turnNumber,
       (valueFen, valueTurnNumber) =>
-        redModelValue(valueFen, valueTurnNumber, maxActions),
+        redModelValue(valueFen, valueTurnNumber, maxActions, valueModel),
       explorationSeed,
       maxActions,
       turnsWithoutProgress
@@ -511,6 +523,7 @@ export async function analyzeFen(
         explorationTemperature,
         explorationSeed,
         maxActions: maxActions as 2 | 3,
+        valueModel,
       },
       outcome: pythonOutcome(board),
       model: {
@@ -519,14 +532,16 @@ export async function analyzeFen(
           turnNumber,
           sideToMove,
           personality,
-          maxActions
+          maxActions,
+          valueModel
         ),
         after: modelOutput(
           resultingFen,
           turnNumber + 1,
           sideToMove,
           personality,
-          maxActions
+          maxActions,
+          valueModel
         ),
       },
       search: searchResult,

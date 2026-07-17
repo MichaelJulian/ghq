@@ -45,7 +45,14 @@ async function readGame(blob: ListBlobResultBlob) {
 }
 
 function personality(agentId: string): string {
-  return agentId.replace(/-workflow.*$/, "");
+  return agentId
+    .replace(/-workflow.*$/, "")
+    .replace(/-(?:incumbent|challenger)-a[23]$/, "");
+}
+
+function valueModel(agentId: string, recorded?: string): string {
+  if (recorded === "challenger" || recorded === "incumbent") return recorded;
+  return agentId.includes("-challenger-") ? "challenger" : "incumbent";
 }
 
 function increment(counts: Record<string, number>, key: string, amount = 1) {
@@ -87,6 +94,10 @@ async function main() {
   const personalities: Record<
     string,
     { games: number; wins: number; losses: number; draws: number }
+  > = {};
+  const valueModels: Record<
+    string,
+    { games: number; wins: number; losses: number; draws: number; points: number }
   > = {};
   const rejected: Array<{
     gameId: string;
@@ -229,6 +240,30 @@ async function main() {
       else if (game.outcome.winner === color) record.wins++;
       else record.losses++;
     }
+
+    for (const [color, agentId, recordedModel] of [
+      ["RED", game.redAgentId, game.redValueModel],
+      ["BLUE", game.blueAgentId, game.blueValueModel],
+    ] as const) {
+      const id = valueModel(agentId, recordedModel);
+      const record = (valueModels[id] ??= {
+        games: 0,
+        wins: 0,
+        losses: 0,
+        draws: 0,
+        points: 0,
+      });
+      record.games++;
+      if (!game.outcome.winner) {
+        record.draws++;
+        record.points += 0.5;
+      } else if (game.outcome.winner === color) {
+        record.wins++;
+        record.points++;
+      } else {
+        record.losses++;
+      }
+    }
   }
 
   const pairedOutcomes: Record<string, number> = {};
@@ -283,6 +318,15 @@ async function main() {
         trainingRejectionReasons,
         trainingPositions,
         personalities,
+        valueModels: Object.fromEntries(
+          Object.entries(valueModels).map(([id, record]) => [
+            id,
+            {
+              ...record,
+              scoreRate: Number((record.points / record.games).toFixed(4)),
+            },
+          ])
+        ),
         pairedOutcomes,
         rejected,
         stalledGameTails,

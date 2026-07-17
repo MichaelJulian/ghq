@@ -4,6 +4,7 @@ import type {
   StyleContribution,
 } from "@/game/value-model/styled-evaluation";
 import type { PersonalityId } from "@/game/value-model/personalities";
+import type { ValueModelVersion } from "@/game/value-model/inference";
 
 export const GHQ_STARTING_FEN =
   "qr↓6/iii5/8/8/8/8/5III/6R↑Q IIIIIFFFPRRTH iiiiifffprrth r";
@@ -18,6 +19,8 @@ export interface FenAnalysisRequest {
   beamWidth?: number;
   /** Experimental policy cap; production GHQ permits three voluntary actions. */
   maxActions?: 2 | 3;
+  /** Selects a staged value checkpoint; production defaults to incumbent. */
+  valueModel?: ValueModelVersion;
   /** Zero is deterministic; larger values sample more broadly among safe near-best turns. */
   explorationTemperature?: number;
   explorationSeed?: number;
@@ -172,6 +175,7 @@ export interface FenAnalysisResponse {
     explorationTemperature: number;
     explorationSeed: number;
     maxActions: 2 | 3;
+    valueModel: ValueModelVersion;
   };
   outcome?: {
     winner?: Player;

@@ -2,6 +2,7 @@ import { endgame } from "@/game/variants";
 import { extractValueFeatures, VALUE_FEATURE_NAMES } from "./features";
 import {
   assertValueModelCompatible,
+  CHALLENGER_VALUE_MODEL_METADATA,
   predictFromFeatures,
   predictWinProbability,
   predictZeroSumWinProbability,
@@ -45,6 +46,25 @@ describe("gradient-boosted value model", () => {
     expect(Number.isFinite(twoAction)).toBe(true);
     expect(twoAction).not.toBe(standard);
     expect(TWO_ACTION_VALUE_MODEL_METADATA).toBeDefined();
+  });
+
+  it("can evaluate the staged three-action challenger", () => {
+    const incumbent = predictZeroSumWinProbability(
+      position,
+      "RED",
+      "three-actions",
+      "incumbent"
+    );
+    const challenger = predictZeroSumWinProbability(
+      position,
+      "RED",
+      "three-actions",
+      "challenger"
+    );
+    expect(challenger).toBeGreaterThan(0);
+    expect(challenger).toBeLessThan(1);
+    expect(challenger).not.toBe(incumbent);
+    expect(CHALLENGER_VALUE_MODEL_METADATA).toBeDefined();
   });
 
   it("evaluates an exported tree vector directly", () => {
