@@ -61,6 +61,8 @@ interface GenerationSummary {
   terminations: Record<string, number>;
   fallbackRate: number;
   unverifiedFallbackRate: number;
+  timedOutRate?: number;
+  persistentCacheHitRate?: number;
   provenance?: {
     codeVersions: string[];
     valueModelCheckpoints: string[];
@@ -429,6 +431,20 @@ export function SelfPlayRuns() {
                 fallback {(100 * generationSummary.fallbackRate).toFixed(1)}% ·
                 unverified{" "}
                 {(100 * generationSummary.unverifiedFallbackRate).toFixed(1)}%
+                {generationSummary.timedOutRate !== undefined && (
+                  <>
+                    {" "}· timeout {(
+                      100 * generationSummary.timedOutRate
+                    ).toFixed(1)}%
+                  </>
+                )}
+                {generationSummary.persistentCacheHitRate !== undefined && (
+                  <>
+                    {" "}· shared cache {(
+                      100 * generationSummary.persistentCacheHitRate
+                    ).toFixed(1)}%
+                  </>
+                )}
               </div>
               {generationSummary.provenance &&
                 (generationSummary.provenance.codeVersions.length > 0 ||

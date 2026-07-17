@@ -25,6 +25,8 @@ export async function GET(
     let decisions = 0;
     let fallbackDecisions = 0;
     let unverifiedFallbackDecisions = 0;
+    let timedOutDecisions = 0;
+    let persistentCacheHits = 0;
     const codeVersions = new Set<string>();
     const valueModelCheckpoints = new Set<string>();
     for (const game of games) {
@@ -32,6 +34,10 @@ export async function GET(
       increment(terminations, game.outcome.termination);
       decisions += game.decisions.length;
       fallbackDecisions += game.quality.fallbackDecisions;
+      timedOutDecisions += game.quality.timedOutDecisions;
+      persistentCacheHits += game.decisions.filter(
+        (decision) => decision.persistentCacheHit
+      ).length;
       unverifiedFallbackDecisions +=
         game.quality.unverifiedFallbackDecisions ??
         game.decisions.filter(
@@ -61,6 +67,8 @@ export async function GET(
       unverifiedFallbackRate: decisions
         ? unverifiedFallbackDecisions / decisions
         : 0,
+      timedOutRate: decisions ? timedOutDecisions / decisions : 0,
+      persistentCacheHitRate: decisions ? persistentCacheHits / decisions : 0,
       provenance: {
         codeVersions: [...codeVersions].sort(),
         valueModelCheckpoints: [...valueModelCheckpoints].sort(),
