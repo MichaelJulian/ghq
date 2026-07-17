@@ -966,6 +966,51 @@ class SearchTests(unittest.TestCase):
                     result["score"]["current_player"], -ghq_ai.MATE_SCORE
                 )
 
+    def test_purposeful_early_stop_finds_escape_from_smoke_hq_mate(self):
+        board = engine.BaseBoard("8/2q5/8/1F6/I7/2i5/1i6/Q7 - - r")
+        result = ghq_ai.search(
+            board,
+            "fortress",
+            time_ms=3000,
+            max_depth=2,
+            beam_width=6,
+            turn_number=141,
+        )
+
+        self.assertEqual(
+            result["best_turn"]["actions"], ["b5c6", "a4b5", "skip"]
+        )
+        self.assertGreater(result["score"]["current_player"], -ghq_ai.MATE_SCORE)
+        self.assertEqual(result["best_turn"]["purpose"]["unpurposed_actions"], 0.0)
+
+        escaped = board.copy()
+        for uci in result["best_turn"]["all_moves"]:
+            move = next(
+                move for move in escaped.generate_legal_moves() if move.uci() == uci
+            )
+            escaped.push(move)
+        opponent = escaped.turn
+        frontier = [escaped]
+        completed = set()
+        while frontier:
+            partial = frontier.pop()
+            if partial.is_game_over() or partial.turn != opponent:
+                key = partial.serialize()
+                if key in completed:
+                    continue
+                completed.add(key)
+                outcome = partial.outcome()
+                self.assertFalse(
+                    outcome is not None and outcome.winner == opponent,
+                    "the supposedly safe turn still permits an immediate HQ capture",
+                )
+                continue
+            for move in partial.generate_legal_moves():
+                child = partial.copy()
+                child.push(move)
+                frontier.append(child)
+        self.assertGreater(len(completed), 400)
+
     def test_complete_turn_seed_completes_a_one_action_hq_only_turn(self):
         board = engine.BaseBoard(
             "q6i/8/8/2ii1i2/1i4i1/r→7/8/5Q2 - - r"

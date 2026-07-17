@@ -3614,6 +3614,57 @@ def search(
             )
         )
 
+    selected_move_key = tuple(move.uci() for move in first_turn)
+    if not any(
+        tuple(move.uci() for move in turn.moves) == selected_move_key
+        for _, turn in ranked_root_turns
+    ):
+        # A later improvement pass may time out after the reply-verified pass
+        # has already supplied the move we return.  In that case
+        # ``root_ranked_turns`` can describe the interrupted pass and omit the
+        # actual recommendation.  Preserve the invariant that candidate
+        # telemetry always contains the selected complete turn.
+        selected_candidate = next(
+            (
+                turn
+                for _, turn, _ in searcher.root_verified_lines
+                if tuple(move.uci() for move in turn.moves) == selected_move_key
+            ),
+            None,
+        )
+        if selected_candidate is None:
+            selected_candidate = next(
+                (
+                    turn
+                    for turn in searcher.turn_cache.get(searcher.root_key or "", [])
+                    if tuple(move.uci() for move in turn.moves) == selected_move_key
+                ),
+                None,
+            )
+        if selected_candidate is None:
+            action_purposes = searcher.action_purpose_labels(
+                board, first_turn, board.turn
+            )
+            purpose = searcher.turn_purpose_breakdown(
+                board, resulting_board, first_turn, board.turn
+            )
+            selected_candidate = TurnCandidate(
+                list(first_turn),
+                resulting_board,
+                0.0,
+                best.score,
+                action_purposes=action_purposes,
+                purpose_penalty=purpose["net_purpose_penalty"],
+                paratrooper_mission_penalty=purpose[
+                    "paratrooper_mission_penalty"
+                ],
+                early_plan_score=searcher.early_plan_score(action_purposes),
+                progress_score=purpose["stagnation_progress"],
+                conveyor_actions=purpose["backfills"] + purpose["reversals"],
+                skip_actions=float(sum(move.name == "Skip" for move in first_turn)),
+            )
+        ranked_root_turns.insert(0, (best.score, selected_candidate))
+
     candidate_turns = []
     seen_candidate_moves = set()
     for red_score, candidate_turn in ranked_root_turns[:8]:
