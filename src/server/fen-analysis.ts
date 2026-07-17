@@ -454,6 +454,7 @@ export async function analyzeFen(
       serializedPosition: board.serialize(),
       personality,
       turnNumber,
+      timeMs,
       maxDepth,
       beamWidth,
       maxActions,

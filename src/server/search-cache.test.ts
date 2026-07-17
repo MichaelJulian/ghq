@@ -8,6 +8,7 @@ const key: SearchCacheKey = {
   serializedPosition: "position",
   personality: "balanced",
   turnNumber: 12,
+  timeMs: 20_000,
   maxDepth: 2,
   beamWidth: 6,
   maxActions: 3,

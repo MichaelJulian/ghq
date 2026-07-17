@@ -11,6 +11,7 @@ export interface SearchCacheKey {
   serializedPosition: string;
   personality: PersonalityId;
   turnNumber: number;
+  timeMs: number;
   maxDepth: number;
   beamWidth: number;
   maxActions: number;
