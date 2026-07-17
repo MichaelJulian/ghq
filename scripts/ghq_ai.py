@@ -851,6 +851,12 @@ class Searcher:
         self.root_key: Optional[str] = None
         self.root_fallback: Optional[TurnCandidate] = None
         self.root_ranked_turns: List[Tuple[float, TurnCandidate]] = []
+        # Each entry has completed the opponent reply at the requested root
+        # horizon. Keep it incrementally: a later timeout must not erase root
+        # lines that were already tactically verified.
+        self.root_verified_lines: List[
+            Tuple[float, TurnCandidate, List[engine.Move]]
+        ] = []
         # Search begins with a deliberately narrow depth-two pass. Only after
         # every retained root has a complete opponent reply may the broader
         # user-requested beam consume the remaining budget.
@@ -876,6 +882,18 @@ class Searcher:
             self.nodes += 1
         if time.monotonic() >= self.deadline:
             raise SearchTimeout
+
+    def best_verified_root_result(self, mover: bool) -> Optional[SearchResult]:
+        if not self.root_verified_lines:
+            return None
+        score, turn, reply = min(
+            self.root_verified_lines,
+            key=lambda item: (
+                -item[0] if mover == engine.RED else item[0],
+                normalized_turn_key(item[1].moves, mover),
+            ),
+        )
+        return SearchResult(score, list(turn.moves) + list(reply))
 
     def terminal_score(self, board: engine.BaseBoard, turns_left: int) -> Optional[float]:
         outcome = board.outcome()
@@ -2649,6 +2667,16 @@ class Searcher:
             )
             if is_root:
                 root_scores.append((candidate, turn))
+                self.root_verified_lines.append(
+                    (candidate, turn, list(result.pv))
+                )
+                self.root_ranked_turns = sorted(
+                    root_scores,
+                    key=lambda item: (
+                        -item[0] if maximizing else item[0],
+                        normalized_turn_key(item[1].moves, board.turn),
+                    ),
+                )
             if (maximizing and candidate > best.score) or (not maximizing and candidate < best.score):
                 best = SearchResult(candidate, list(turn.moves) + result.pv)
             if maximizing:
@@ -3145,14 +3173,17 @@ def search(
                     timed_out = True
                 finally:
                     searcher.deadline = final_deadline
-                    searcher.table.clear()
-                    searcher.turn_cache.clear()
+                    # A completed seed reply is a valid depth-one
+                    # transposition. Reuse it when the narrow root pass reaches
+                    # that same child instead of paying for the reply twice.
 
             # Reserve the first 65% of the budget for a narrow but complete
             # depth-two pass. Depth two means our complete turn plus one full
             # opponent reply. A later broad pass may improve it, but may never
             # erase this tactically verified result merely by timing out.
             searcher.verification_mode = True
+            searcher.root_verified_lines = []
+            searcher.root_ranked_turns = []
             searcher.deadline = min(
                 final_deadline,
                 started + max(0.05, time_ms / 1000.0 * 0.65),
@@ -3162,6 +3193,11 @@ def search(
                 completed_depth = 2
             except SearchTimeout:
                 timed_out = True
+                partial_verified = searcher.best_verified_root_result(board.turn)
+                if partial_verified is not None:
+                    best = partial_verified
+                    completed_depth = 2
+                    fallback_kind = "safe"
             finally:
                 searcher.deadline = final_deadline
 
