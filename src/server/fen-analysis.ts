@@ -12,6 +12,7 @@ import { FENtoBoardState } from "@/game/notation";
 import type { Player } from "@/game/engine";
 import {
   predictZeroSumWinProbability,
+  valueModelCheckpointId,
   type ValueModelVersion,
 } from "@/game/value-model/inference";
 import { evaluatePersonalityPosition } from "@/game/value-model/styled-evaluation";
@@ -460,6 +461,10 @@ export async function analyzeFen(
       maxActions,
       stagnationTurns: turnsWithoutProgress,
       valueModel,
+      valueModelCheckpoint: valueModelCheckpointId(
+        maxActions === 2 ? "two-actions" : "three-actions",
+        valueModel
+      ),
     };
     let rawSearchResult = await readPersistedSearch(searchCacheKey);
     if (rawSearchResult) {

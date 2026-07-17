@@ -4,7 +4,7 @@ import type { GhqSearchResult, PersonalityId } from "@/game/analysis/types";
 import type { ValueModelVersion } from "@/game/value-model/inference";
 import { selfPlayStorageConfigured } from "@/server/self-play-storage";
 
-const SEARCH_CACHE_VERSION = "early-depth-v1";
+const SEARCH_CACHE_VERSION = "early-depth-v2";
 const SEARCH_CACHE_PREFIX = `self-play/search-cache/${SEARCH_CACHE_VERSION}/`;
 
 export interface SearchCacheKey {
@@ -17,9 +17,10 @@ export interface SearchCacheKey {
   maxActions: number;
   stagnationTurns: number;
   valueModel: ValueModelVersion;
+  valueModelCheckpoint: string;
 }
 
-function pathname(key: SearchCacheKey): string {
+export function searchCachePathname(key: SearchCacheKey): string {
   const digest = createHash("sha256").update(JSON.stringify(key)).digest("hex");
   return `${SEARCH_CACHE_PREFIX}${digest}.json`;
 }
@@ -49,7 +50,7 @@ export async function readPersistedSearch(
     return undefined;
   }
   try {
-    const response = await get(pathname(key), {
+    const response = await get(searchCachePathname(key), {
       access: "private",
       useCache: true,
     });
@@ -67,7 +68,7 @@ export async function persistSearch(
 ): Promise<void> {
   if (!selfPlayStorageConfigured() || !shouldPersistSearch(key, result)) return;
   try {
-    await put(pathname(key), JSON.stringify(result), {
+    await put(searchCachePathname(key), JSON.stringify(result), {
       access: "private",
       addRandomSuffix: false,
       contentType: "application/json",

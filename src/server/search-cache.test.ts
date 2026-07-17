@@ -2,7 +2,11 @@
 
 import { describe, expect, it } from "@jest/globals";
 import type { GhqSearchResult } from "@/game/analysis/types";
-import { shouldPersistSearch, type SearchCacheKey } from "./search-cache";
+import {
+  searchCachePathname,
+  shouldPersistSearch,
+  type SearchCacheKey,
+} from "./search-cache";
 
 const key: SearchCacheKey = {
   serializedPosition: "position",
@@ -14,6 +18,7 @@ const key: SearchCacheKey = {
   maxActions: 3,
   stagnationTurns: 0,
   valueModel: "incumbent",
+  valueModelCheckpoint: "three-actions:incumbent:test",
 };
 
 function result(overrides: Partial<GhqSearchResult["search"]> = {}) {
@@ -28,6 +33,15 @@ function result(overrides: Partial<GhqSearchResult["search"]> = {}) {
 }
 
 describe("persistent early search cache", () => {
+  it("isolates different artifacts that occupy the challenger slot", () => {
+    expect(searchCachePathname(key)).not.toBe(
+      searchCachePathname({
+        ...key,
+        valueModelCheckpoint: "three-actions:incumbent:replacement",
+      })
+    );
+  });
+
   it("admits only reply-complete non-fallback opening searches", () => {
     expect(shouldPersistSearch(key, result())).toBe(true);
     expect(
