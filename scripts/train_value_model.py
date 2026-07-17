@@ -10,7 +10,7 @@ import math
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 from sklearn.ensemble import GradientBoostingClassifier
@@ -99,6 +99,8 @@ def game_balanced_weights(
     rows: List[Dict[str, Any]],
     indices: np.ndarray,
     self_play_share: float = 0.5,
+    balance_outcomes: bool = False,
+    outcome_balance_sources: Optional[set[str]] = None,
 ) -> np.ndarray:
     counts = Counter(
         (data_source(rows[index]), rows[index]["game_id"]) for index in indices
@@ -115,14 +117,49 @@ def game_balanced_weights(
         }
     else:
         source_weight = {source: 1.0 / len(source_games) for source in source_games}
-    weights = np.asarray(
-        [
-            source_weight[data_source(rows[index])]
-            / counts[(data_source(rows[index]), rows[index]["game_id"])]
-            / len(source_games[data_source(rows[index])])
-            for index in indices
-        ]
+    outcome_games: Dict[Tuple[str, str], set[str]] = {}
+    balanced_sources = (
+        set(source_games)
+        if balance_outcomes and outcome_balance_sources is None
+        else set(outcome_balance_sources or ())
     )
+    if balance_outcomes:
+        for index in indices:
+            row = rows[index]
+            source = data_source(row)
+            if source not in balanced_sources:
+                continue
+            label = float(row["label"])
+            if label == 0.5:
+                outcome = "draw"
+            elif (row["perspective"] == "RED") == (label == 1.0):
+                outcome = "red_win"
+            else:
+                outcome = "blue_win"
+            outcome_games.setdefault((source, outcome), set()).add(row["game_id"])
+
+    weights_list: List[float] = []
+    for index in indices:
+        row = rows[index]
+        source = data_source(row)
+        game = row["game_id"]
+        denominator = len(source_games[source])
+        if source in balanced_sources:
+            label = float(row["label"])
+            if label == 0.5:
+                outcome = "draw"
+            elif (row["perspective"] == "RED") == (label == 1.0):
+                outcome = "red_win"
+            else:
+                outcome = "blue_win"
+            source_outcomes = {
+                bucket for candidate_source, bucket in outcome_games if candidate_source == source
+            }
+            denominator = len(source_outcomes) * len(outcome_games[(source, outcome)])
+        weights_list.append(
+            source_weight[source] / counts[(source, game)] / denominator
+        )
+    weights = np.asarray(weights_list)
     return weights / weights.mean()
 
 
@@ -226,6 +263,23 @@ def metrics_by_source(
             {rows[index]["game_id"] for index in source_indices}
         )
         result[source]["samples"] = len(source_indices)
+        result[source]["by_perspective"] = {}
+        for perspective in ("RED", "BLUE"):
+            perspective_indices = np.asarray(
+                [
+                    index
+                    for index in source_indices
+                    if rows[index]["perspective"] == perspective
+                ]
+            )
+            perspective_probabilities = np.asarray(
+                [probability_by_index[int(index)] for index in perspective_indices]
+            )
+            result[source]["by_perspective"][perspective] = metrics(
+                labels[perspective_indices],
+                perspective_probabilities,
+                game_balanced_weights(rows, perspective_indices),
+            )
     return result
 
 
@@ -252,7 +306,7 @@ def paired_game_bootstrap(
         int(index): baseline_probabilities[offset]
         for offset, index in enumerate(indices)
     }
-    by_source_game: Dict[str, Dict[str, Dict[str, List[float]]]] = {}
+    by_source_game: Dict[str, Dict[str, Dict[str, Any]]] = {}
     for index in indices:
         row = rows[int(index)]
         source = data_source(row)
@@ -261,12 +315,24 @@ def paired_game_bootstrap(
         candidate = np.clip(candidate_by_index[int(index)], 1e-7, 1 - 1e-7)
         baseline = np.clip(baseline_by_index[int(index)], 1e-7, 1 - 1e-7)
         record = by_source_game.setdefault(source, {}).setdefault(
-            game, {"log_loss": [], "brier": []}
+            game,
+            {
+                "log_loss": [],
+                "brier": [],
+                "by_perspective": {},
+            },
         )
         candidate_log = -(label * math.log(candidate) + (1 - label) * math.log(1 - candidate))
         baseline_log = -(label * math.log(baseline) + (1 - label) * math.log(1 - baseline))
         record["log_loss"].append(candidate_log - baseline_log)
         record["brier"].append((candidate - label) ** 2 - (baseline - label) ** 2)
+        perspective_record = record["by_perspective"].setdefault(
+            row["perspective"], {"log_loss": [], "brier": []}
+        )
+        perspective_record["log_loss"].append(candidate_log - baseline_log)
+        perspective_record["brier"].append(
+            (candidate - label) ** 2 - (baseline - label) ** 2
+        )
 
     rng = np.random.default_rng(random_state)
 
@@ -285,7 +351,12 @@ def paired_game_bootstrap(
             "ci95_high": round(float(np.quantile(draws, 0.975)), 6),
         }
 
-    result: Dict[str, Any] = {"bootstrap_samples": samples, "by_source": {}}
+    result: Dict[str, Any] = {
+        "bootstrap_samples": samples,
+        "by_source": {},
+        "by_perspective": {},
+        "by_source_and_perspective": {},
+    }
     for metric in ("log_loss", "brier"):
         source_arrays = {
             source: np.asarray(
@@ -299,6 +370,25 @@ def paired_game_bootstrap(
             source_record = result["by_source"].setdefault(source, {})
             source_record[metric] = summarize({source: values})
             source_record["games"] = len(values)
+        for perspective in ("RED", "BLUE"):
+            perspective_arrays = {
+                source: np.asarray(
+                    [
+                        np.mean(game["by_perspective"][perspective][metric])
+                        for game in games.values()
+                        if perspective in game["by_perspective"]
+                    ],
+                    dtype=np.float64,
+                )
+                for source, games in by_source_game.items()
+            }
+            result["by_perspective"].setdefault(perspective, {})[metric] = summarize(
+                perspective_arrays
+            )
+            for source, values in perspective_arrays.items():
+                result["by_source_and_perspective"].setdefault(source, {}).setdefault(
+                    perspective, {}
+                )[metric] = summarize({source: values})
     return result
 
 
@@ -340,7 +430,13 @@ def main() -> None:
     splits = chronological_split(rows)
     weights = {name: game_balanced_weights(rows, indices) for name, indices in splits.items()}
     fit_weights = {
-        name: game_balanced_weights(rows, indices, args.self_play_train_share)
+        name: game_balanced_weights(
+            rows,
+            indices,
+            args.self_play_train_share,
+            balance_outcomes=True,
+            outcome_balance_sources={"vercel_self_play"},
+        )
         for name, indices in splits.items()
     }
 
