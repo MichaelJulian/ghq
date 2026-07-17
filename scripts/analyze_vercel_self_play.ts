@@ -6,6 +6,7 @@ import { get, list, type ListBlobResultBlob } from "@vercel/blob";
 
 import type { DurableSelfPlayGameResult } from "../src/workflows/self-play-game";
 import { summarizeValueModelArena } from "../src/game/self-play/arena-results";
+import { partitionColorSwapPairs } from "../src/game/self-play/color-pairs";
 
 function argumentsFor(name: string): string[] {
   const values: string[] = [];
@@ -317,12 +318,10 @@ async function main() {
   }
 
   const pairedOutcomes: Record<string, number> = {};
-  const sortedGames = [...games].sort((left, right) =>
-    left.gameId.localeCompare(right.gameId)
-  );
-  for (let index = 0; index + 1 < sortedGames.length; index += 2) {
-    const first = sortedGames[index].outcome.winner ?? "DRAW";
-    const second = sortedGames[index + 1].outcome.winner ?? "DRAW";
+  const colorPairs = partitionColorSwapPairs(games);
+  for (const [firstGame, secondGame] of colorPairs.pairs) {
+    const first = firstGame.outcome.winner ?? "DRAW";
+    const second = secondGame.outcome.winner ?? "DRAW";
     increment(pairedOutcomes, `${first}/${second}`);
   }
 
@@ -387,6 +386,11 @@ async function main() {
             },
           ])
         ),
+        pairIntegrity: {
+          completePairs: colorPairs.pairs.length,
+          orphanGames: colorPairs.orphans.length,
+          orphanGameIds: colorPairs.orphans.map((game) => game.gameId),
+        },
         pairedOutcomes,
         valueModelArena: summarizeValueModelArena(games),
         rejected,
