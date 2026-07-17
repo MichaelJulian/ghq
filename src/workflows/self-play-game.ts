@@ -109,6 +109,10 @@ export interface DurableSelfPlayQuality {
   eligibleDecisions: number;
   completedSearches: number;
   fallbackDecisions: number;
+  /** Safe fallbacks that still completed a full opponent reply. */
+  verifiedFallbackDecisions: number;
+  /** Seeded or shallow fallbacks without a complete opponent reply. */
+  unverifiedFallbackDecisions: number;
   timedOutDecisions: number;
   decisive: boolean;
   trainingEligible: boolean;
@@ -224,7 +228,7 @@ export function isDurableTrainingDecisionEligible(
       decision.completedTurn &&
       (decision.selfActionLimit ?? 3) === 3 &&
       (decision.opponentActionLimit ?? 3) === 3 &&
-      decision.fallback === "none" &&
+      decision.fallback !== "seeded" &&
       // Depth one evaluates only our resulting position. Depth two includes a
       // complete opponent reply and is the minimum tactically verified label
       // admitted to the value-model dataset.
@@ -256,11 +260,16 @@ export function durableGameTrainingRejectionReasons(
   if (decisions.some((decision) => decision.fallback === "seeded")) {
     reasons.push("unverified-complete-turn-seed");
   }
-  const fallbackDecisions = decisions.filter(
-    (decision) => decision.fallback !== "none"
+  const unverifiedFallbackDecisions = decisions.filter(
+    (decision) =>
+      decision.fallback === "seeded" ||
+      (decision.fallback !== "none" && decision.completedDepth < 2)
   ).length;
-  if (decisions.length && fallbackDecisions / decisions.length > 0.05) {
-    reasons.push("excessive-fallback-rate");
+  if (
+    decisions.length &&
+    unverifiedFallbackDecisions / decisions.length > 0.05
+  ) {
+    reasons.push("excessive-unverified-fallback-rate");
   }
   return reasons;
 }
@@ -408,6 +417,15 @@ export async function playDurableSelfPlayGame(
       ).length,
       fallbackDecisions: decisions.filter(
         (decision) => decision.fallback !== "none"
+      ).length,
+      verifiedFallbackDecisions: decisions.filter(
+        (decision) =>
+          decision.fallback === "safe" && decision.completedDepth >= 2
+      ).length,
+      unverifiedFallbackDecisions: decisions.filter(
+        (decision) =>
+          decision.fallback === "seeded" ||
+          (decision.fallback !== "none" && decision.completedDepth < 2)
       ).length,
       timedOutDecisions: decisions.filter((decision) => decision.timedOut)
         .length,

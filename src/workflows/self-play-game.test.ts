@@ -53,6 +53,18 @@ describe("durable self-play training quality", () => {
         outcome
       )
     ).toBe(false);
+    expect(
+      isDurableTrainingDecisionEligible(
+        decision({ fallback: "safe", completedDepth: 2 }),
+        outcome
+      )
+    ).toBe(true);
+    expect(
+      isDurableTrainingDecisionEligible(
+        decision({ fallback: "seeded", completedDepth: 2 }),
+        outcome
+      )
+    ).toBe(false);
   });
 
   it("accepts a clean three-action HQ-capture game", () => {
@@ -66,11 +78,13 @@ describe("durable self-play training quality", () => {
     ).toEqual([]);
   });
 
-  it("rejects seeded turns and excessive fallback contamination", () => {
+  it("distinguishes reply-verified safe fallbacks from unverified ones", () => {
     const decisions = Array.from({ length: 20 }, (_, index) =>
       decision({
         turnNumber: index + 1,
-        fallback: index === 0 ? "seeded" : index === 1 ? "safe" : "none",
+        fallback:
+          index === 0 ? "seeded" : index === 1 || index === 2 ? "safe" : "none",
+        completedDepth: index === 1 ? 2 : index <= 2 ? 0 : 2,
       })
     );
     expect(
@@ -78,7 +92,10 @@ describe("durable self-play training quality", () => {
         winner: "BLUE",
         termination: "hq-capture",
       })
-    ).toEqual(["unverified-complete-turn-seed", "excessive-fallback-rate"]);
+    ).toEqual([
+      "unverified-complete-turn-seed",
+      "excessive-unverified-fallback-rate",
+    ]);
   });
 
   it("rejects draws and experimental action limits", () => {

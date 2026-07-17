@@ -88,6 +88,17 @@ async function main() {
   const fallbackByColor: Record<string, number> = {};
   const fallbackByPhase: Record<string, number> = {};
   const fallbackByTurn: Record<string, number> = {};
+  const fallbackExamples: Array<{
+    gameId: string;
+    turn: number;
+    player: string;
+    fen: string;
+    moves: string[];
+    fallback: string;
+    depth: number;
+    candidates: number;
+    score: number;
+  }> = [];
   const historyAvoidanceByTurn: Record<string, number> = {};
   const depthByColor: Record<string, number> = {};
   const trainingRejectionReasons: Record<string, number> = {};
@@ -132,6 +143,8 @@ async function main() {
   let decisions = 0;
   let trainingPositions = 0;
   let fallbackDecisions = 0;
+  let verifiedFallbackDecisions = 0;
+  let unverifiedFallbackDecisions = 0;
   let timedOutDecisions = 0;
   let incompleteTurnDecisions = 0;
   let qualityEligibleGames = 0;
@@ -145,6 +158,19 @@ async function main() {
     decisions += game.decisions.length;
     trainingPositions += game.trainingPositions;
     fallbackDecisions += game.quality.fallbackDecisions;
+    verifiedFallbackDecisions +=
+      game.quality.verifiedFallbackDecisions ??
+      game.decisions.filter(
+        (decision) =>
+          decision.fallback === "safe" && decision.completedDepth >= 2
+      ).length;
+    unverifiedFallbackDecisions +=
+      game.quality.unverifiedFallbackDecisions ??
+      game.decisions.filter(
+        (decision) =>
+          decision.fallback === "seeded" ||
+          (decision.fallback !== "none" && decision.completedDepth < 2)
+      ).length;
     timedOutDecisions += game.quality.timedOutDecisions;
     if (game.quality.trainingEligible) qualityEligibleGames++;
     for (const reason of game.quality.trainingRejectionReasons ?? []) {
@@ -174,6 +200,19 @@ async function main() {
             : "late";
         increment(fallbackByPhase, phase);
         increment(fallbackByTurn, String(decision.turnNumber));
+        if (fallbackExamples.length < 40) {
+          fallbackExamples.push({
+            gameId: game.gameId,
+            turn: decision.turnNumber,
+            player: decision.player,
+            fen: decision.fen,
+            moves: decision.selectedMoves,
+            fallback: decision.fallback,
+            depth: decision.completedDepth,
+            candidates: decision.candidateTurns?.length ?? 0,
+            score: decision.currentPlayerScore,
+          });
+        }
       }
       if (decision.recommendationLabel === "history avoidance") {
         increment(historyAvoidanceByTurn, String(decision.turnNumber));
@@ -306,9 +345,15 @@ async function main() {
         fallbackByColor,
         fallbackByPhase,
         fallbackByTurn,
+        fallbackExamples,
         historyAvoidanceByTurn,
         fallbackDecisions,
         fallbackRate: Number((fallbackDecisions / decisions).toFixed(4)),
+        verifiedFallbackDecisions,
+        unverifiedFallbackDecisions,
+        unverifiedFallbackRate: Number(
+          (unverifiedFallbackDecisions / decisions).toFixed(4)
+        ),
         timedOutDecisions,
         timedOutRate: Number((timedOutDecisions / decisions).toFixed(4)),
         incompleteTurnDecisions,
