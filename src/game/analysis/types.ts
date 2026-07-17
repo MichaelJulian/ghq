@@ -25,6 +25,10 @@ export interface FenAnalysisRequest {
   recentFens?: string[];
   /** The same player's previous turn, used to detect immediate undo cycles. */
   previousOwnTurnMoves?: string[];
+  /** Several same-player turns, ordered oldest to newest, for longer cycles. */
+  previousOwnTurns?: string[][];
+  /** Current durable-game quiet clock, used to escalate anti-stagnation policy. */
+  turnsWithoutProgress?: number;
 }
 
 export interface SearchEvaluationBreakdown {

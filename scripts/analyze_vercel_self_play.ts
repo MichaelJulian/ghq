@@ -95,6 +95,20 @@ async function main() {
     decisions: number;
     fallbackDecisions: number;
   }> = [];
+  const stalledGameTails: Array<{
+    gameId: string;
+    termination: string;
+    tail: Array<{
+      turn: number;
+      player: string;
+      moves: string[];
+      score: number;
+      depth: number;
+      fallback: string;
+      recommendation?: string;
+      selectedRank: number;
+    }>;
+  }> = [];
   const overLimitExamples: Array<{
     gameId: string;
     turnNumber: number;
@@ -178,6 +192,26 @@ async function main() {
         fallbackDecisions: game.quality.fallbackDecisions,
       });
     }
+    if (
+      game.outcome.termination === "no-progress" ||
+      game.outcome.termination === "repetition" ||
+      game.outcome.termination === "max-turns"
+    ) {
+      stalledGameTails.push({
+        gameId: game.gameId,
+        termination: game.outcome.termination,
+        tail: game.decisions.slice(-24).map((decision) => ({
+          turn: decision.turnNumber,
+          player: decision.player,
+          moves: decision.selectedMoves,
+          score: decision.currentPlayerScore,
+          depth: decision.completedDepth,
+          fallback: decision.fallback,
+          recommendation: decision.recommendationLabel,
+          selectedRank: decision.selectedRank,
+        })),
+      });
+    }
 
     for (const [color, agentId] of [
       ["RED", game.redAgentId],
@@ -251,6 +285,7 @@ async function main() {
         personalities,
         pairedOutcomes,
         rejected,
+        stalledGameTails,
         overLimitExamples,
       },
       null,

@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from "@jest/globals";
 import {
+  actionMadeProgress,
   durableGameTrainingRejectionReasons,
   isDurableTrainingDecisionEligible,
   type DurableSelfPlayDecision,
@@ -37,6 +38,12 @@ function decision(
 }
 
 describe("durable self-play training quality", () => {
+  it("does not let skip reset the no-progress clock", () => {
+    expect(actionMadeProgress("skip")).toBe(false);
+    expect(actionMadeProgress("sbe5")).toBe(true);
+    expect(actionMadeProgress("ria1")).toBe(true);
+  });
+
   it("requires a complete opponent reply for an individual training label", () => {
     const outcome = { winner: "RED" as const, termination: "hq-capture" };
     expect(isDurableTrainingDecisionEligible(decision(), outcome)).toBe(true);

@@ -70,6 +70,8 @@ interface DurableTurnStepInput {
   explorationSeed: number;
   recentFens: string[];
   previousOwnTurnMoves: string[];
+  previousOwnTurns: string[][];
+  turnsWithoutProgress: number;
 }
 
 interface DurableTurnStepResult {
@@ -141,6 +143,8 @@ async function playDurableTurn(
     explorationSeed: input.explorationSeed,
     recentFens: input.recentFens,
     previousOwnTurnMoves: input.previousOwnTurnMoves,
+    previousOwnTurns: input.previousOwnTurns,
+    turnsWithoutProgress: input.turnsWithoutProgress,
   });
   const state = FENtoBoardState(analysis.fen);
   const resultingState = FENtoBoardState(analysis.resultingFen);
@@ -189,8 +193,12 @@ async function playDurableTurn(
   };
 }
 
-function actionMadeProgress(uci: string): boolean {
-  return uci.startsWith("r") || uci.startsWith("s") || uci.includes("x");
+export function actionMadeProgress(uci: string): boolean {
+  return (
+    uci.startsWith("r") ||
+    (uci.startsWith("s") && uci !== "skip") ||
+    uci.includes("x")
+  );
 }
 
 function turnSeed(seed: number, turnNumber: number): number {
@@ -276,6 +284,7 @@ export async function playDurableSelfPlayGame(
   const positionOccurrences: Record<string, number> = { [initialFen]: 1 };
   const positionHistory: string[] = [initialFen];
   const lastTurnMoves: Record<Player, string[]> = { RED: [], BLUE: [] };
+  const ownTurnHistory: Record<Player, string[][]> = { RED: [], BLUE: [] };
   let fen: string | undefined = initialFen;
   let serializedState: string | undefined;
   let player: Player = "RED";
@@ -299,6 +308,8 @@ export async function playDurableSelfPlayGame(
       explorationSeed: turnSeed(config.seed, turnNumber),
       recentFens: positionHistory.slice(-32),
       previousOwnTurnMoves: lastTurnMoves[player],
+      previousOwnTurns: ownTurnHistory[player].slice(-4),
+      turnsWithoutProgress,
     });
     decisions.push(step.decision);
     fen = step.decision.resultingFen;
@@ -324,6 +335,7 @@ export async function playDurableSelfPlayGame(
     positionOccurrences[fen] = occurrences;
     positionHistory.push(fen);
     lastTurnMoves[player] = [...pendingTurnMoves];
+    ownTurnHistory[player].push([...pendingTurnMoves]);
     if (!outcome && occurrences >= repetitionLimit) {
       outcome = { termination: "repetition" };
     } else if (!outcome && turnsWithoutProgress >= noProgressTurns) {

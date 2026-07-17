@@ -30,7 +30,8 @@ interface SearchModule extends PythonProxy {
     turnNumber: number,
     valueFunction: (fen: string, turnNumber: number) => number,
     openingSeed: number,
-    maxActions: number
+    maxActions: number,
+    stagnationTurns: number
   ) => PythonProxy;
   evaluation_breakdown: (
     board: PythonBoard,
@@ -202,7 +203,8 @@ export function applyHistoryAvoidance(
   result: GhqSearchResult,
   sideToMove: Player,
   recentFens: string[],
-  previousOwnTurnMoves: string[]
+  previousOwnTurns: string[][],
+  turnsWithoutProgress: number
 ): GhqSearchResult {
   const candidates = result.candidate_turns ?? [];
   if (candidates.length < 2 || result.search.opening_book_used) return result;
@@ -211,10 +213,28 @@ export function applyHistoryAvoidance(
   for (const fen of recentFens.slice(-32)) {
     recentCounts.set(fen, (recentCounts.get(fen) ?? 0) + 1);
   }
+  const stagnation = Math.max(0, Math.min(1, (turnsWithoutProgress - 4) / 20));
+  const priorTurns = previousOwnTurns.slice(-4);
   const penalty = (candidate: (typeof candidates)[number]): number => {
     const repeats = recentCounts.get(candidate.resulting_fen) ?? 0;
-    const reversals = reversalCount(candidate.actions, previousOwnTurnMoves);
-    return repeats * 100 + (reversals >= 2 ? reversals * 12 : reversals * 1.5);
+    const reversals = priorTurns.reduce(
+      (total, moves, index) =>
+        total +
+        reversalCount(candidate.actions, moves) *
+          (index === priorTurns.length - 1 ? 1 : 0.65),
+      0
+    );
+    const skips = candidate.actions.filter((move) => move === "skip").length;
+    const purpose = candidate.purpose;
+    const conveyorMotion = (purpose.backfills ?? 0) + (purpose.reversals ?? 0);
+    const lowPurpose = (purpose.forcing_gain ?? 0) < 0.25 ? 1 : 0;
+    const emptyPurpose = (purpose.purposeful_actions ?? 0) < 1 ? 1 : 0;
+    return (
+      repeats * 100 +
+      reversals * (1.5 + 3.5 * stagnation) +
+      stagnation *
+        (2.5 * conveyorMotion + 5 * skips + 5 * lowPurpose + 4 * emptyPurpose)
+    );
   };
 
   const selectedRank = result.exploration?.selectedRank ?? 1;
@@ -228,14 +248,25 @@ export function applyHistoryAvoidance(
   if (selectedPenalty <= 0) return result;
 
   const bestScore = candidates[0].score;
+  // Early in a quiet spell, preserve normal search quality. As the draw clock
+  // grows, permit a larger controlled score sacrifice to break a proven loop.
+  const qualityWindow = 1.25 + 4.75 * stagnation;
   const replacement = candidates
-    .filter((candidate) => candidate.score >= bestScore - 1.25)
+    .filter((candidate) => candidate.score >= bestScore - qualityWindow)
     .sort(
       (left, right) =>
-        penalty(left) - penalty(right) || right.score - left.score
-    )
-    .find((candidate) => penalty(candidate) < selectedPenalty);
-  if (!replacement) return result;
+        right.score - penalty(right) - (left.score - penalty(left)) ||
+        penalty(left) - penalty(right) ||
+        right.score - left.score
+    )[0];
+  if (
+    !replacement ||
+    replacement.rank === selected.rank ||
+    replacement.score - penalty(replacement) <=
+      selected.score - selectedPenalty + 0.05
+  ) {
+    return result;
+  }
 
   result.best_turn = {
     automatic_captures: replacement.automatic_captures,
@@ -380,6 +411,13 @@ export async function analyzeFen(
     0xffff_ffff,
     "explorationSeed"
   );
+  const turnsWithoutProgress = integerInRange(
+    request.turnsWithoutProgress,
+    0,
+    0,
+    400,
+    "turnsWithoutProgress"
+  );
   const { engine, search } = await loadAnalysisEngine();
   let board: PythonBoard;
   try {
@@ -405,7 +443,8 @@ export async function analyzeFen(
       (valueFen, valueTurnNumber) =>
         redModelValue(valueFen, valueTurnNumber, maxActions),
       explorationSeed,
-      maxActions
+      maxActions,
+      turnsWithoutProgress
     );
     let searchResult: GhqSearchResult;
     try {
@@ -420,9 +459,12 @@ export async function analyzeFen(
         (request.recentFens ?? []).filter(
           (value): value is string => typeof value === "string"
         ),
-        (request.previousOwnTurnMoves ?? []).filter(
-          (value): value is string => typeof value === "string"
-        )
+        (request.previousOwnTurns ?? [request.previousOwnTurnMoves ?? []])
+          .filter((turn): turn is string[] => Array.isArray(turn))
+          .map((turn) =>
+            turn.filter((value): value is string => typeof value === "string")
+          ),
+        turnsWithoutProgress
       );
     } finally {
       destroyProxy(resultProxy);

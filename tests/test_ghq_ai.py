@@ -35,6 +35,7 @@ STAGGERED_INFANTRY_FEN = (
     "qr↓h↓r↓iiii/iiiffr↓t←p/5f2/8/6I1/5I1I/1R↑1R↑4/"
     "FIFPT↑H↑R↑Q - - r"
 )
+STALL_CONVEYOR_FEN = "q2i4/6f1/i3ii1i/1i6/8/2I5/1F3I2/I5IQ I i b"
 
 
 class EvaluationTests(unittest.TestCase):
@@ -657,6 +658,28 @@ class SearchTests(unittest.TestCase):
         )
         self.assertEqual(result["search"]["completed_depth_in_turns"], 2)
         self.assertEqual(result["search"]["fallback_used"], "none")
+
+    def test_stagnation_keeps_a_noncycling_root_alternative(self):
+        board = engine.BaseBoard(STALL_CONVEYOR_FEN)
+        searcher = ghq_ai.Searcher(
+            "balanced",
+            time_ms=1000,
+            beam_width=6,
+            turn_number=82,
+            stagnation_turns=17,
+        )
+        searcher.root_key = board.serialize()
+        cycle = ghq_ai.TurnCandidate(
+            [], board, 0.0, progress_score=0.12, conveyor_actions=1.0
+        )
+        central_break = ghq_ai.TurnCandidate(
+            [], board, 0.0, progress_score=0.90, conveyor_actions=1.0
+        )
+
+        self.assertLess(
+            searcher.candidate_sort_key(central_break, engine.BLUE, True),
+            searcher.candidate_sort_key(cycle, engine.BLUE, True),
+        )
 
     def test_forcing_artillery_pressure_displaces_empty_infantry_move(self):
         board = engine.BaseBoard(POST_EXTRACTION_PRESSURE_FEN)

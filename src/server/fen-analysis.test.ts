@@ -42,12 +42,72 @@ describe("production FEN analysis", () => {
       },
     } as unknown as GhqSearchResult;
 
-    applyHistoryAvoidance(result, "RED", ["old"], ["a1a2", "b1b2"]);
+    applyHistoryAvoidance(result, "RED", ["old"], [["a1a2", "b1b2"]], 0);
 
     expect(result.best_turn.resulting_fen).toBe("new");
     expect(result.recommendation_label).toBe("history avoidance");
     expect(result.score.current_player).toBe(3.4);
     expect(result.exploration?.selectedRank).toBe(2);
+  });
+
+  it("widens the quality window late in a quiet multi-turn cycle", () => {
+    const stalled = {
+      rank: 1,
+      actions: ["a2a1", "b2b1", "c2c1"],
+      all_moves: ["a2a1", "b2b1", "c2c1"],
+      automatic_captures: [],
+      resulting_fen: "stalled",
+      score: 10,
+      action_purposes: [],
+      purpose: {
+        backfills: 2,
+        reversals: 0,
+        forcing_gain: 0,
+        purposeful_actions: 0,
+      },
+    } as unknown as GhqCandidateTurn;
+    const breaker = {
+      ...stalled,
+      rank: 2,
+      actions: ["a2a3", "b2c3", "c2d3"],
+      all_moves: ["a2a3", "b2c3", "c2d3"],
+      resulting_fen: "breaker",
+      score: 5.5,
+      purpose: {
+        backfills: 0,
+        reversals: 0,
+        forcing_gain: 2,
+        purposeful_actions: 3,
+      },
+    } as unknown as GhqCandidateTurn;
+    const result = {
+      recommendation_label: "best found",
+      best_turn: stalled,
+      principal_variation: stalled.all_moves,
+      candidate_turns: [stalled, breaker],
+      score: { current_player: 10, red: 10 },
+      search: { opening_book_used: false },
+      exploration: {
+        temperature: 0,
+        seed: 1,
+        selectedRank: 1,
+        candidateCount: 2,
+      },
+    } as unknown as GhqSearchResult;
+
+    applyHistoryAvoidance(
+      result,
+      "RED",
+      [],
+      [
+        ["a1a2", "b1b2", "c1c2"],
+        ["d1d2", "e1e2", "f1f2"],
+      ],
+      24
+    );
+
+    expect(result.best_turn.resulting_fen).toBe("breaker");
+    expect(result.score.current_player).toBe(5.5);
   });
 
   it("returns a legal complete turn plus model and search outputs", async () => {

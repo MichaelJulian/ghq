@@ -789,6 +789,9 @@ class TurnCandidate:
     paratrooper_mission_penalty: float = 0.0
     action_purposes: List[Dict[str, Any]] = field(default_factory=list)
     early_plan_score: float = 0.0
+    progress_score: float = 0.0
+    conveyor_actions: float = 0.0
+    skip_actions: float = 0.0
 
 
 @dataclass
@@ -817,12 +820,14 @@ class Searcher:
         turn_number: int = 1,
         value_function: Optional[Any] = None,
         max_actions: int = 3,
+        stagnation_turns: int = 0,
     ) -> None:
         self.personality = personality
         self.time_ms = max(1, time_ms)
         self.turn_number = max(1, turn_number)
         self.value_function = value_function
         self.max_actions = max(2, min(3, max_actions))
+        self.stagnation_turns = max(0, stagnation_turns)
         self.deadline = time.monotonic() + max(1, time_ms) / 1000.0
         self.beam_width = max(1, beam_width)
         self.nodes = 0
@@ -850,6 +855,17 @@ class Searcher:
         # every retained root has a complete opponent reply may the broader
         # user-requested beam consume the remaining budget.
         self.verification_mode = False
+
+    def stagnation_factor(self) -> float:
+        """Escalate only after several consecutive non-progress turns."""
+        return max(0.0, min(1.0, (self.stagnation_turns - 4) / 20.0))
+
+    def stagnation_value(self, candidate: TurnCandidate) -> float:
+        return (
+            candidate.progress_score
+            - 2.5 * candidate.conveyor_actions
+            - 5.0 * candidate.skip_actions
+        )
 
     def check_time(self, count_node: bool = True) -> None:
         if count_node:
@@ -1939,10 +1955,22 @@ class Searcher:
             classes.add("formation")
         return classes, wasteful_rotation
 
-    def candidate_sort_key(self, candidate: TurnCandidate, color: bool) -> Tuple[Any, ...]:
+    def candidate_sort_key(
+        self,
+        candidate: TurnCandidate,
+        color: bool,
+        root_bias: bool = False,
+    ) -> Tuple[Any, ...]:
+        stagnation_bias = (
+            -self.stagnation_factor() * self.stagnation_value(candidate)
+            if root_bias
+            else 0.0
+        )
         return (
             candidate.safety_penalty,
-            candidate.purpose_penalty + candidate.paratrooper_mission_penalty,
+            candidate.paratrooper_mission_penalty,
+            stagnation_bias,
+            candidate.purpose_penalty,
             -candidate.early_plan_score,
             -(candidate.static_score if color == engine.RED else -candidate.static_score),
             len(candidate.moves) if candidate.board.is_game_over() else 99,
@@ -1987,6 +2015,31 @@ class Searcher:
         )
         if terminal:
             add(terminal[0])
+
+        if (
+            board.serialize() == self.root_key
+            and self.stagnation_factor() >= 0.20
+        ):
+            # Keep genuinely progressive root alternatives in the minimax
+            # beam even when the static evaluator slightly prefers another
+            # three-piece conveyor. Search, not a post-hoc rule, then checks
+            # them against the opponent reply.
+            progressive = sorted(
+                eligible,
+                key=lambda candidate: (
+                    -self.stagnation_value(candidate),
+                    self.candidate_sort_key(candidate, board.turn, True),
+                ),
+            )
+            for candidate in progressive[:2]:
+                if (
+                    self.stagnation_value(candidate) > 0.0
+                    or (
+                        candidate.conveyor_actions == 0.0
+                        and candidate.skip_actions == 0.0
+                    )
+                ):
+                    add(candidate)
 
         # Guarantee useful alternatives before filling by score. A beam is a
         # count of complete turns retained, not permission for one action type
@@ -2100,6 +2153,11 @@ class Searcher:
             # The later improvement pass is responsible for breadth.
             partial_width = max(10, self.beam_width * 2)
             evaluation_pool_width = max(8, self.beam_width + 2)
+            if self.stagnation_factor() >= 0.20:
+                partial_width = max(partial_width, self.beam_width * 4)
+                evaluation_pool_width = max(
+                    evaluation_pool_width, self.beam_width * 3
+                )
         elif self.verification_mode:
             partial_width = max(6, self.beam_width)
             evaluation_pool_width = max(6, self.beam_width)
@@ -2125,6 +2183,9 @@ class Searcher:
                 else 2
             )
             turn_capacity = turn_width + 1
+            if is_root_generation and self.stagnation_factor() >= 0.20:
+                turn_width = max(turn_width, min(5, self.beam_width))
+                turn_capacity = turn_width + 2
         else:
             turn_width = (
                 max(4, self.beam_width)
@@ -2304,11 +2365,18 @@ class Searcher:
                     purpose["paratrooper_mission_penalty"],
                     action_purposes,
                     self.early_plan_score(action_purposes),
+                    purpose["forcing_gain"],
+                    purpose["backfills"] + purpose["reversals"],
+                    float(sum(move.name == "Skip" for move in partial.moves)),
                 )
             )
             if not safety.tactically_safe:
                 self.tactically_unsafe_turns += 1
-        candidates.sort(key=lambda item: self.candidate_sort_key(item, original_turn))
+        candidates.sort(
+            key=lambda item: self.candidate_sort_key(
+                item, original_turn, is_root_generation
+            )
+        )
 
         if self.turn_number <= EARLY_GAME_LAST_TURN:
             structured = [
@@ -2341,10 +2409,13 @@ class Searcher:
                 for candidate in candidates
             ]
             minimum_no_effect = min(no_effect_counts)
+            permitted_no_effect = minimum_no_effect
+            if is_root_generation and self.stagnation_factor() >= 0.30:
+                permitted_no_effect += 1
             focused = [
                 candidate
                 for candidate, count in zip(candidates, no_effect_counts)
-                if count == minimum_no_effect
+                if count <= permitted_no_effect
             ]
             self.purpose_filtered_turns += len(candidates) - len(focused)
             if len(focused) != len(candidates):
@@ -2485,6 +2556,11 @@ class Searcher:
                 else 0.0
             )
             turn_quality = early_bonus - transition_penalty
+            if is_root and self.stagnation_factor() > 0.0:
+                turn_quality += (
+                    self.stagnation_factor()
+                    * self.stagnation_value(turn)
+                )
             candidate = (
                 result.score + turn_quality
                 if maximizing
@@ -2868,6 +2944,7 @@ def search(
     value_function: Optional[Any] = None,
     opening_seed: int = 0,
     max_actions: int = 3,
+    stagnation_turns: int = 0,
 ) -> Dict[str, Any]:
     started = time.monotonic()
     searcher = Searcher(
@@ -2877,6 +2954,7 @@ def search(
         turn_number=turn_number,
         value_function=value_function,
         max_actions=max_actions,
+        stagnation_turns=stagnation_turns,
     )
     searcher.root_key = board.serialize()
     best: Optional[SearchResult] = None
