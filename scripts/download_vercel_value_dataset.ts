@@ -18,7 +18,7 @@ interface DurableTrainingSample {
   codeVersion: string;
 }
 
-function pairedGameId(generationId: string, gameId: string): string {
+function pairedGameNumber(gameId: string): number {
   const match = gameId.match(/-(\d+)$/);
   if (!match) {
     throw new Error(`Unable to derive color-swapped pair from ${gameId}`);
@@ -27,8 +27,19 @@ function pairedGameId(generationId: string, gameId: string): string {
   if (!Number.isSafeInteger(gameNumber) || gameNumber < 1) {
     throw new Error(`Invalid paired game number in ${gameId}`);
   }
+  return gameNumber;
+}
+
+function pairedGameId(generationId: string, gameId: string): string {
+  const gameNumber = pairedGameNumber(gameId);
   const pairNumber = Math.floor((gameNumber - 1) / 2) + 1;
   return `${generationId}-pair-${String(pairNumber).padStart(4, "0")}`;
+}
+
+function isCompleteColorSwap(gameIds: string[]): boolean {
+  if (gameIds.length !== 2) return false;
+  const numbers = gameIds.map(pairedGameNumber).sort((a, b) => a - b);
+  return numbers[0] % 2 === 1 && numbers[1] === numbers[0] + 1;
 }
 
 function argument(name: string): string {
@@ -94,12 +105,19 @@ async function main() {
       source: "vercel-self-play",
       generation_prefix: generationPrefix,
       code_version: codeVersion,
+      paired_complete_only: true,
     })}\n`
   );
 
-  let samples = 0;
-  const games = new Set<string>();
-  const generations = new Set<string>();
+  const recordsByGame = new Map<
+    string,
+    {
+      createdAt: string;
+      generationId: string;
+      pairId: string;
+      samples: DurableTrainingSample[];
+    }
+  >();
   for (let index = 0; index < blobs.length; index += 12) {
     const batch = blobs.slice(index, index + 12);
     const records = await Promise.all(batch.map(readBlob));
@@ -118,26 +136,70 @@ async function main() {
         if (sample.features.length !== VALUE_FEATURE_NAMES.length) {
           throw new Error(`Feature mismatch in ${sample.gameId}`);
         }
-        output.write(
-          `${JSON.stringify({
-            type: "sample",
-            game_id: sample.gameId,
-            generation_id: sample.generationId,
-            pair_id: pairedGameId(sample.generationId, sample.gameId),
-            source: "vercel_self_play",
-            code_version: sample.codeVersion,
-            created_at: createdAt,
-            outcome_reason: "hq-capture",
-            turn: sample.turnNumber,
-            perspective: sample.player,
-            label: sample.outcomeValue,
-            features: sample.features,
-          })}\n`
-        );
-        samples++;
-        games.add(sample.gameId);
-        generations.add(sample.generationId);
+        const pairId = pairedGameId(sample.generationId, sample.gameId);
+        const record = recordsByGame.get(sample.gameId);
+        if (record) {
+          if (
+            record.generationId !== sample.generationId ||
+            record.pairId !== pairId
+          ) {
+            throw new Error(`Inconsistent game provenance for ${sample.gameId}`);
+          }
+          record.samples.push(sample);
+        } else {
+          recordsByGame.set(sample.gameId, {
+            createdAt,
+            generationId: sample.generationId,
+            pairId,
+            samples: [sample],
+          });
+        }
       }
+    }
+  }
+
+  const gamesByPair = new Map<string, string[]>();
+  for (const [gameId, record] of recordsByGame) {
+    const games = gamesByPair.get(record.pairId) ?? [];
+    games.push(gameId);
+    gamesByPair.set(record.pairId, games);
+  }
+  const completePairs = new Set(
+    [...gamesByPair]
+      .filter(([, gameIds]) => isCompleteColorSwap(gameIds))
+      .map(([pairId]) => pairId)
+  );
+  if (!completePairs.size) {
+    throw new Error("No complete quality-eligible color-swapped pairs found");
+  }
+
+  let samples = 0;
+  const games = new Set<string>();
+  const generations = new Set<string>();
+  for (const [gameId, record] of [...recordsByGame].sort(([left], [right]) =>
+    left.localeCompare(right)
+  )) {
+    if (!completePairs.has(record.pairId)) continue;
+    games.add(gameId);
+    generations.add(record.generationId);
+    for (const sample of record.samples) {
+      output.write(
+        `${JSON.stringify({
+          type: "sample",
+          game_id: sample.gameId,
+          generation_id: sample.generationId,
+          pair_id: record.pairId,
+          source: "vercel_self_play",
+          code_version: sample.codeVersion,
+          created_at: record.createdAt,
+          outcome_reason: "hq-capture",
+          turn: sample.turnNumber,
+          perspective: sample.player,
+          label: sample.outcomeValue,
+          features: sample.features,
+        })}\n`
+      );
+      samples++;
     }
   }
   await new Promise<void>((resolve, reject) => {
@@ -151,6 +213,9 @@ async function main() {
       generations: generations.size,
       artifacts: blobs.length,
       games: games.size,
+      pairs: completePairs.size,
+      excludedGames: recordsByGame.size - games.size,
+      excludedIncompletePairs: gamesByPair.size - completePairs.size,
       samples,
       outputPath,
     })}\n`
