@@ -136,6 +136,8 @@ export interface GhqSearchResult {
     complete_turns_generated: number;
     complete_turns_deduplicated: number;
     complete_turns_pruned: number;
+    /** Clean two-action candidates derived by removing a replayable filler. */
+    purposeful_early_stops_generated?: number;
     tactically_unsafe_turns: number;
     rotation_quota_pruned: number;
     purpose_filtered_turns: number;

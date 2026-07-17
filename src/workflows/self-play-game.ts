@@ -58,6 +58,8 @@ export interface DurableSelfPlayDecision {
   selectedActionPurposes?: Array<{ move: string; roles: string[] }>;
   /** Exact aggregate purpose telemetry for the selected turn. */
   selectedPurpose?: GhqTurnPurpose;
+  /** Number of clean two-action alternatives synthesized during this search. */
+  purposefulEarlyStopsGenerated?: number;
   selectedRank: number;
   candidateTurns: GhqCandidateTurn[];
   currentPlayerScore: number;
@@ -193,6 +195,8 @@ async function playDurableTurn(
     selectedMoves: [...analysis.search.best_turn.all_moves],
     selectedActionPurposes: analysis.search.best_turn.action_purposes,
     selectedPurpose: analysis.search.best_turn.purpose,
+    purposefulEarlyStopsGenerated:
+      analysis.search.search.purposeful_early_stops_generated,
     selectedRank: analysis.search.exploration?.selectedRank ?? 1,
     candidateTurns: analysis.search.candidate_turns ?? [],
     currentPlayerScore: analysis.search.score.current_player,

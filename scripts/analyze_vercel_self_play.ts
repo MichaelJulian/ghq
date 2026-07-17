@@ -119,6 +119,9 @@ async function main() {
     paratrooperMissionPenaltyDecisions: 0,
     totalParatrooperMissionPenalty: 0,
     totalNetPurposePenalty: 0,
+    decisionsWithGeneratedEarlyStops: 0,
+    generatedEarlyStopCandidates: 0,
+    selectedPurposefulEarlyStops: 0,
   };
   const purposeExamples: Array<{
     gameId: string;
@@ -305,6 +308,22 @@ async function main() {
         purposeTelemetry.totalParatrooperMissionPenalty +=
           purpose.paratrooper_mission_penalty;
         purposeTelemetry.totalNetPurposePenalty += purpose.net_purpose_penalty;
+        const generatedEarlyStops =
+          decision.purposefulEarlyStopsGenerated ?? 0;
+        purposeTelemetry.generatedEarlyStopCandidates += generatedEarlyStops;
+        if (generatedEarlyStops > 0) {
+          purposeTelemetry.decisionsWithGeneratedEarlyStops++;
+        }
+        const countedActions = decision.selectedMoves.filter(
+          (move) => move !== "skip" && !move.startsWith("s")
+        ).length;
+        if (
+          countedActions === 2 &&
+          decision.selectedMoves.includes("skip") &&
+          noNewEffectActions === 0
+        ) {
+          purposeTelemetry.selectedPurposefulEarlyStops++;
+        }
         if (noNewEffectActions) {
           purposeTelemetry.decisionsWithNoNewEffect++;
         }
@@ -527,6 +546,12 @@ async function main() {
           unpurposedActionsPerDecision: Number(
             (
               purposeTelemetry.unpurposedActions /
+              Math.max(1, purposeTelemetry.decisions)
+            ).toFixed(4)
+          ),
+          selectedPurposefulEarlyStopRate: Number(
+            (
+              purposeTelemetry.selectedPurposefulEarlyStops /
               Math.max(1, purposeTelemetry.decisions)
             ).toFixed(4)
           ),
