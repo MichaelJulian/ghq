@@ -17,6 +17,11 @@ import {
 import { evaluatePersonalityPosition } from "@/game/value-model/styled-evaluation";
 import { PERSONALITIES } from "@/game/value-model/personalities";
 import { loadServerPyodide } from "@/server/pyodide";
+import {
+  persistSearch,
+  readPersistedSearch,
+  type SearchCacheKey,
+} from "@/server/search-cache";
 
 interface PythonProxy {
   destroy?: () => void;
@@ -445,42 +450,59 @@ export async function analyzeFen(
   try {
     const fen = board.board_fen();
     const sideToMove = playerToMove(board);
-    const resultProxy = search.search(
-      board,
+    const searchCacheKey: SearchCacheKey = {
+      serializedPosition: board.serialize(),
       personality,
-      timeMs,
+      turnNumber,
       maxDepth,
       beamWidth,
-      turnNumber,
-      (valueFen, valueTurnNumber) =>
-        redModelValue(valueFen, valueTurnNumber, maxActions, valueModel),
-      explorationSeed,
       maxActions,
-      turnsWithoutProgress
-    );
-    let searchResult: GhqSearchResult;
-    try {
-      searchResult = applyHistoryAvoidance(
-        applyExploration(
-          toSearchResult(resultProxy),
-          sideToMove,
-          explorationTemperature,
-          explorationSeed
-        ),
-        sideToMove,
-        (request.recentFens ?? []).filter(
-          (value): value is string => typeof value === "string"
-        ),
-        (request.previousOwnTurns ?? [request.previousOwnTurnMoves ?? []])
-          .filter((turn): turn is string[] => Array.isArray(turn))
-          .map((turn) =>
-            turn.filter((value): value is string => typeof value === "string")
-          ),
+      stagnationTurns: turnsWithoutProgress,
+      valueModel,
+    };
+    let rawSearchResult = await readPersistedSearch(searchCacheKey);
+    if (rawSearchResult) {
+      rawSearchResult = structuredClone(rawSearchResult);
+      rawSearchResult.search.persistent_cache_hit = true;
+    } else {
+      const resultProxy = search.search(
+        board,
+        personality,
+        timeMs,
+        maxDepth,
+        beamWidth,
+        turnNumber,
+        (valueFen, valueTurnNumber) =>
+          redModelValue(valueFen, valueTurnNumber, maxActions, valueModel),
+        explorationSeed,
+        maxActions,
         turnsWithoutProgress
       );
-    } finally {
-      destroyProxy(resultProxy);
+      try {
+        rawSearchResult = toSearchResult(resultProxy);
+      } finally {
+        destroyProxy(resultProxy);
+      }
+      await persistSearch(searchCacheKey, rawSearchResult);
     }
+    const searchResult = applyHistoryAvoidance(
+      applyExploration(
+        rawSearchResult,
+        sideToMove,
+        explorationTemperature,
+        explorationSeed
+      ),
+      sideToMove,
+      (request.recentFens ?? []).filter(
+        (value): value is string => typeof value === "string"
+      ),
+      (request.previousOwnTurns ?? [request.previousOwnTurnMoves ?? []])
+        .filter((turn): turn is string[] => Array.isArray(turn))
+        .map((turn) =>
+          turn.filter((value): value is string => typeof value === "string")
+        ),
+      turnsWithoutProgress
+    );
 
     for (const uci of searchResult.best_turn.all_moves) {
       const move = engine.Move.from_uci(uci);

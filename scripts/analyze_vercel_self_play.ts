@@ -148,6 +148,7 @@ async function main() {
   let unverifiedFallbackDecisions = 0;
   let timedOutDecisions = 0;
   let incompleteTurnDecisions = 0;
+  let persistentCacheHits = 0;
   let qualityEligibleGames = 0;
 
   for (const game of games) {
@@ -186,6 +187,7 @@ async function main() {
         )
       );
       increment(depths, String(decision.completedDepth));
+      if (decision.persistentCacheHit) persistentCacheHits++;
       increment(
         depthByColor,
         `${decision.player}:depth-${decision.completedDepth}`
@@ -358,6 +360,10 @@ async function main() {
         timedOutDecisions,
         timedOutRate: Number((timedOutDecisions / decisions).toFixed(4)),
         incompleteTurnDecisions,
+        persistentCacheHits,
+        persistentCacheHitRate: Number(
+          (persistentCacheHits / decisions).toFixed(4)
+        ),
         trainingGames: games.filter((game) => game.trainingPositions > 0)
           .length,
         qualityEligibleGames,

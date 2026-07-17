@@ -142,6 +142,8 @@ export interface GhqSearchResult {
     value_model_evaluations: number;
     turn_cache_hits: number;
     transposition_hits: number;
+    /** True when a shared reply-verified early search was reused. */
+    persistent_cache_hit?: boolean;
   };
   evaluation: {
     before: SearchEvaluationBreakdown;

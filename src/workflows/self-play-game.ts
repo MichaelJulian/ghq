@@ -47,6 +47,7 @@ export interface DurableSelfPlayDecision {
   currentPlayerScore: number;
   winProbability: number;
   completedDepth: number;
+  persistentCacheHit?: boolean;
   timedOut: boolean;
   fallback: "none" | "safe" | "seeded";
   /** Missing on historical records created before recommendation telemetry. */
@@ -176,6 +177,7 @@ async function playDurableTurn(
         ? analysis.model.before.redWinProbability
         : analysis.model.before.blueWinProbability,
     completedDepth: analysis.search.search.completed_depth_in_turns,
+    persistentCacheHit: analysis.search.search.persistent_cache_hit === true,
     timedOut: analysis.search.search.timed_out,
     fallback: analysis.search.search.fallback_used,
     recommendationLabel: analysis.search.recommendation_label,
