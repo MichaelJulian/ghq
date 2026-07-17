@@ -56,6 +56,9 @@ SELF_PLAY_HQ_UNLOCK_FEN = "8/2q3i1/2I4i/6f1/2F5/8/1F4I1/I1I2I1Q I - b"
 SELF_PLAY_HQ_ENGAGEMENT_FEN = "q7/i5i1/3I1i2/2I5/8/1I5I/I1I5/3I3Q - - b"
 SELF_PLAY_FORCED_SKIP_MATE_FEN = "8/8/5q2/4F3/5I2/8/1I6/I2Q4 - - b"
 SELF_PLAY_THREE_ACTION_HQ_FEN = "8/1i3q2/8/8/3ii3/4i1I1/2I4I/5Q2 - - r"
+SELF_PLAY_PURPOSELESS_FILLER_FEN = (
+    "1q2i1i1/3i1i1i/1i4fr↓/8/F7/1H↑F2I2/4I1II/1IR↖1R↖I1Q IF - b"
+)
 
 
 class EvaluationTests(unittest.TestCase):
@@ -895,6 +898,28 @@ class SearchTests(unittest.TestCase):
             self.assertIn(move, list(replay.generate_legal_moves()))
             replay.push(move)
         self.assertNotEqual(replay.turn, board.turn)
+
+    def test_search_removes_a_replayable_no_effect_third_action(self):
+        board = engine.BaseBoard(SELF_PLAY_PURPOSELESS_FILLER_FEN)
+        result = ghq_ai.search(
+            board,
+            "battery_commander",
+            time_ms=5000,
+            max_depth=2,
+            beam_width=6,
+            turn_number=36,
+        )
+
+        self.assertEqual(
+            result["best_turn"]["actions"],
+            ["b6c7", "h6h5↙", "skip"],
+        )
+        self.assertEqual(
+            result["best_turn"]["purpose"]["unpurposed_actions"], 0.0
+        )
+        self.assertGreater(
+            result["search"]["purposeful_early_stops_generated"], 0
+        )
 
     def test_complete_turn_seed_completes_a_one_action_hq_only_turn(self):
         board = engine.BaseBoard(

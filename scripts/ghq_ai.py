@@ -841,6 +841,7 @@ class Searcher:
         self.complete_turns_generated = 0
         self.complete_turns_deduplicated = 0
         self.complete_turns_pruned = 0
+        self.purposeful_early_stops_generated = 0
         self.tactically_unsafe_turns = 0
         self.rotation_quota_pruned = 0
         self.purpose_filtered_turns = 0
@@ -2363,6 +2364,115 @@ class Searcher:
                 self.early_plan_score(action_purposes),
             )
 
+    def trim_filler_action(
+        self,
+        root: engine.BaseBoard,
+        candidate: TurnCandidate,
+        mover: bool,
+    ) -> Optional[TurnCandidate]:
+        """Turn ``useful + useful + filler`` into a legal two-action option.
+
+        This is intentionally derived from a complete retained turn instead
+        of keeping arbitrary low-priority Skip partials.  Removing the filler
+        must leave both useful actions legal in their original order; if the
+        apparent filler secretly unlocked either action, replay rejects it.
+        The cleaned line then competes normally with every useful three-action
+        line in minimax.
+        """
+        if self.max_actions != 3 or candidate.board.is_game_over():
+            return None
+        counted_actions = sum(
+            move.name not in ("AutoCapture", "Skip") for move in candidate.moves
+        )
+        if counted_actions != 3 or any(
+            move.name == "Skip" for move in candidate.moves
+        ):
+            return None
+        removable = [
+            index
+            for index, (move, purpose) in enumerate(
+                zip(candidate.moves, candidate.action_purposes)
+            )
+            if move.name not in ("AutoCapture", "Skip")
+            and "no_new_effect" in purpose["roles"]
+        ]
+        if len(removable) != 1:
+            return None
+
+        working = root.copy()
+        cleaned_moves: List[engine.Move] = []
+        cleaned_priority = 0.0
+        for index, original_move in enumerate(candidate.moves):
+            if index == removable[0]:
+                continue
+            if working.turn != mover or working.is_game_over():
+                return None
+            replay_move = next(
+                (
+                    move
+                    for move in working.generate_legal_moves()
+                    if move.uci() == original_move.uci()
+                ),
+                None,
+            )
+            if replay_move is None:
+                return None
+            cleaned_priority += self.move_priority(working, replay_move)
+            cleaned_moves.append(replay_move)
+            working.push(replay_move)
+        if working.turn != mover or working.is_game_over():
+            return None
+        skip = next(
+            (move for move in working.generate_legal_moves() if move.name == "Skip"),
+            None,
+        )
+        if skip is None:
+            return None
+        cleaned_priority += self.move_priority(working, skip)
+        cleaned_moves.append(skip)
+        working.push(skip)
+
+        action_purposes = self.action_purpose_labels(root, cleaned_moves, mover)
+        voluntary_purposes = [
+            purpose
+            for move, purpose in zip(cleaned_moves, action_purposes)
+            if move.name not in ("AutoCapture", "Skip")
+        ]
+        if len(voluntary_purposes) != 2 or any(
+            "no_new_effect" in purpose["roles"] for purpose in voluntary_purposes
+        ):
+            return None
+        purpose = self.turn_purpose_breakdown(
+            root, working, cleaned_moves, mover
+        )
+        if purpose["paratrooper_mission_penalty"] > 0.0:
+            return None
+        if self.turn_number <= EARLY_GAME_LAST_TURN and not self.early_structure_allowed(
+            root,
+            working,
+            cleaned_moves,
+            mover,
+            action_purposes,
+        ):
+            return None
+        safety = self.assess_turn_safety(root, working, mover)
+        terminal = self.terminal_score(working, 0)
+        return TurnCandidate(
+            cleaned_moves,
+            working,
+            cleaned_priority,
+            self.heuristic_score(working) if terminal is None else terminal,
+            max(0.0, safety.new_risk_value - safety.compensation_value),
+            safety.tactically_safe,
+            purpose["net_purpose_penalty"],
+            purpose["paratrooper_mission_penalty"],
+            action_purposes,
+            self.early_plan_score(action_purposes),
+            purpose["stagnation_progress"],
+            purpose["backfills"] + purpose["reversals"],
+            1.0,
+        )
+
     def generate_turn_candidates(self, board: engine.BaseBoard) -> List[TurnCandidate]:
         """Generate, deduplicate, then prune complete player turns.
 
@@ -2617,6 +2727,24 @@ class Searcher:
             )
             if not safety.tactically_safe:
                 self.tactically_unsafe_turns += 1
+
+        cleaned_by_position: Dict[str, TurnCandidate] = {}
+        for candidate in list(candidates):
+            self.check_time(False)
+            cleaned = self.trim_filler_action(board, candidate, original_turn)
+            if cleaned is None:
+                continue
+            key = cleaned.board.serialize()
+            incumbent = cleaned_by_position.get(key)
+            if incumbent is None or self.candidate_sort_key(
+                cleaned, original_turn, is_root_generation
+            ) < self.candidate_sort_key(
+                incumbent, original_turn, is_root_generation
+            ):
+                cleaned_by_position[key] = cleaned
+        if cleaned_by_position:
+            candidates.extend(cleaned_by_position.values())
+            self.purposeful_early_stops_generated += len(cleaned_by_position)
         candidates.sort(
             key=lambda item: self.candidate_sort_key(
                 item, original_turn, is_root_generation
@@ -3572,6 +3700,7 @@ def search(
             "complete_turns_generated": searcher.complete_turns_generated,
             "complete_turns_deduplicated": searcher.complete_turns_deduplicated,
             "complete_turns_pruned": searcher.complete_turns_pruned,
+            "purposeful_early_stops_generated": searcher.purposeful_early_stops_generated,
             "tactically_unsafe_turns": searcher.tactically_unsafe_turns,
             "rotation_quota_pruned": searcher.rotation_quota_pruned,
             "purpose_filtered_turns": searcher.purpose_filtered_turns,
