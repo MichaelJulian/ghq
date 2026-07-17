@@ -1,5 +1,9 @@
 import { GHQ_STARTING_FEN } from "@/game/analysis/types";
-import type { GhqCandidateTurn, PersonalityId } from "@/game/analysis/types";
+import type {
+  GhqCandidateTurn,
+  GhqTurnPurpose,
+  PersonalityId,
+} from "@/game/analysis/types";
 import type { Player } from "@/game/engine-v2";
 import { FENtoBoardState } from "@/game/notation";
 import { extractValueFeatures } from "@/game/value-model/features";
@@ -50,6 +54,10 @@ export interface DurableSelfPlayDecision {
   agentId: string;
   opponentId: string;
   selectedMoves: string[];
+  /** Exact purpose labels for the selected turn, including personality reranks. */
+  selectedActionPurposes?: Array<{ move: string; roles: string[] }>;
+  /** Exact aggregate purpose telemetry for the selected turn. */
+  selectedPurpose?: GhqTurnPurpose;
   selectedRank: number;
   candidateTurns: GhqCandidateTurn[];
   currentPlayerScore: number;
@@ -183,6 +191,8 @@ async function playDurableTurn(
     agentId: input.competitor.id,
     opponentId: input.opponentId,
     selectedMoves: [...analysis.search.best_turn.all_moves],
+    selectedActionPurposes: analysis.search.best_turn.action_purposes,
+    selectedPurpose: analysis.search.best_turn.purpose,
     selectedRank: analysis.search.exploration?.selectedRank ?? 1,
     candidateTurns: analysis.search.candidate_turns ?? [],
     currentPlayerScore: analysis.search.score.current_player,

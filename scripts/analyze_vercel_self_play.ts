@@ -61,6 +61,13 @@ function increment(counts: Record<string, number>, key: string, amount = 1) {
   counts[key] = (counts[key] ?? 0) + amount;
 }
 
+function sameMoves(left: string[], right: string[]): boolean {
+  return (
+    left.length === right.length &&
+    left.every((move, index) => move === right[index])
+  );
+}
+
 function percentile(values: number[], fraction: number): number {
   if (!values.length) return 0;
   const sorted = [...values].sort((left, right) => left - right);
@@ -102,6 +109,30 @@ async function main() {
     score: number;
   }> = [];
   const historyAvoidanceByTurn: Record<string, number> = {};
+  const purposeTelemetry = {
+    decisions: 0,
+    decisionsWithNoNewEffect: 0,
+    noNewEffectActions: 0,
+    unpurposedActions: 0,
+    reversals: 0,
+    pureRotations: 0,
+    paratrooperMissionPenaltyDecisions: 0,
+    totalParatrooperMissionPenalty: 0,
+    totalNetPurposePenalty: 0,
+  };
+  const purposeExamples: Array<{
+    gameId: string;
+    turn: number;
+    player: string;
+    fen: string;
+    moves: string[];
+    actionPurposes: Array<{ move: string; roles: string[] }>;
+    unpurposedActions: number;
+    reversals: number;
+    pureRotations: number;
+    paratrooperMissionPenalty: number;
+    netPurposePenalty: number;
+  }> = [];
   const depthByColor: Record<string, number> = {};
   const trainingRejectionReasons: Record<string, number> = {};
   const personalities: Record<
@@ -252,6 +283,56 @@ async function main() {
       }
       if (decision.recommendationLabel === "history avoidance") {
         increment(historyAvoidanceByTurn, String(decision.turnNumber));
+      }
+      const selectedCandidate =
+        decision.candidateTurns?.find((candidate) =>
+          sameMoves(candidate.all_moves, decision.selectedMoves)
+        );
+      const selectedPurpose =
+        decision.selectedPurpose ?? selectedCandidate?.purpose;
+      const selectedActionPurposes =
+        decision.selectedActionPurposes ?? selectedCandidate?.action_purposes;
+      if (selectedPurpose && selectedActionPurposes) {
+        const purpose = selectedPurpose;
+        const noNewEffectActions = selectedActionPurposes.filter(
+          (action) => action.roles.includes("no_new_effect")
+        ).length;
+        purposeTelemetry.decisions++;
+        purposeTelemetry.noNewEffectActions += noNewEffectActions;
+        purposeTelemetry.unpurposedActions += purpose.unpurposed_actions;
+        purposeTelemetry.reversals += purpose.reversals;
+        purposeTelemetry.pureRotations += purpose.pure_rotations;
+        purposeTelemetry.totalParatrooperMissionPenalty +=
+          purpose.paratrooper_mission_penalty;
+        purposeTelemetry.totalNetPurposePenalty += purpose.net_purpose_penalty;
+        if (noNewEffectActions) {
+          purposeTelemetry.decisionsWithNoNewEffect++;
+        }
+        if (purpose.paratrooper_mission_penalty > 0) {
+          purposeTelemetry.paratrooperMissionPenaltyDecisions++;
+        }
+        if (
+          purposeExamples.length < 40 &&
+          (noNewEffectActions > 0 ||
+            purpose.unpurposed_actions > 0 ||
+            purpose.reversals > 0 ||
+            purpose.pure_rotations > 0 ||
+            purpose.paratrooper_mission_penalty > 0)
+        ) {
+          purposeExamples.push({
+            gameId: game.gameId,
+            turn: decision.turnNumber,
+            player: decision.player,
+            fen: decision.fen,
+            moves: decision.selectedMoves,
+            actionPurposes: selectedActionPurposes,
+            unpurposedActions: purpose.unpurposed_actions,
+            reversals: purpose.reversals,
+            pureRotations: purpose.pure_rotations,
+            paratrooperMissionPenalty: purpose.paratrooper_mission_penalty,
+            netPurposePenalty: purpose.net_purpose_penalty,
+          });
+        }
       }
       if (!decision.completedTurn) incompleteTurnDecisions++;
       if (
@@ -426,6 +507,31 @@ async function main() {
         fallbackByTurn,
         fallbackExamples,
         historyAvoidanceByTurn,
+        purposeTelemetry: {
+          ...purposeTelemetry,
+          coverageRate: Number(
+            (purposeTelemetry.decisions / decisions).toFixed(4)
+          ),
+          decisionsWithNoNewEffectRate: Number(
+            (
+              purposeTelemetry.decisionsWithNoNewEffect /
+              Math.max(1, purposeTelemetry.decisions)
+            ).toFixed(4)
+          ),
+          noNewEffectActionsPerDecision: Number(
+            (
+              purposeTelemetry.noNewEffectActions /
+              Math.max(1, purposeTelemetry.decisions)
+            ).toFixed(4)
+          ),
+          unpurposedActionsPerDecision: Number(
+            (
+              purposeTelemetry.unpurposedActions /
+              Math.max(1, purposeTelemetry.decisions)
+            ).toFixed(4)
+          ),
+        },
+        purposeExamples,
         fallbackDecisions,
         fallbackRate: Number((fallbackDecisions / decisions).toFixed(4)),
         verifiedFallbackDecisions,
