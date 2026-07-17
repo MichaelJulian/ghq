@@ -100,6 +100,38 @@ describe("value-model arena promotion gate", () => {
     expect(summary.promotionGate.reasons).toContain("incomplete-color-pair");
   });
 
+  it("rejects a color pair that does not share one random seed", () => {
+    const games = Array.from({ length: 100 }, (_, index) =>
+      game(index, index < 70)
+    );
+    games[1].seed++;
+    const summary = summarizeValueModelArena(games, 500)!;
+    expect(summary.promotionGate.passed).toBe(false);
+    expect(summary.promotionGate.reasons).toContain("mismatched-pair-seed");
+  });
+
+  it("rejects a color pair that changes the competing personality", () => {
+    const games = Array.from({ length: 100 }, (_, index) =>
+      game(index, index < 70)
+    );
+    games[1].redAgentId = "mobile-incumbent-a3";
+    const summary = summarizeValueModelArena(games, 500)!;
+    expect(summary.promotionGate.passed).toBe(false);
+    expect(summary.promotionGate.reasons).toContain(
+      "mismatched-pair-competitor"
+    );
+  });
+
+  it("rejects an arena pair with asymmetric action rules", () => {
+    const games = Array.from({ length: 100 }, (_, index) =>
+      game(index, index < 70)
+    );
+    games[1].redMaxActions = 2;
+    const summary = summarizeValueModelArena(games, 500)!;
+    expect(summary.promotionGate.passed).toBe(false);
+    expect(summary.promotionGate.reasons).toContain("mismatched-pair-rules");
+  });
+
   it("rejects mixed model checkpoints even when the challenger wins", () => {
     const games = Array.from({ length: 100 }, (_, index) =>
       game(index, index < 70)

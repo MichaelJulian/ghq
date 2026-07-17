@@ -45,6 +45,10 @@ function modelFromAgent(agentId: string, recorded?: string): string {
   return agentId.includes("-challenger-") ? "challenger" : "incumbent";
 }
 
+function competitorIdentity(agentId: string): string {
+  return agentId.replace(/-(?:challenger|incumbent)-a[23]$/, "");
+}
+
 function challengerResult(game: DurableSelfPlayGameResult):
   | {
       color: Player;
@@ -131,20 +135,52 @@ export function summarizeValueModelArena(
   }
 
   const pairScores: number[] = [];
-  const byPair = new Map<number, typeof scored>();
+  const byPair = new Map<string, typeof scored>();
   for (const entry of scored) {
     const suffix = /-(\d+)$/.exec(entry.game.gameId);
     if (!suffix) continue;
     const pair = Math.floor((Number(suffix[1]) - 1) / 2);
-    const members = byPair.get(pair) ?? [];
+    const pairKey = `${entry.game.generationId}:${pair}`;
+    const members = byPair.get(pairKey) ?? [];
     members.push(entry);
-    byPair.set(pair, members);
+    byPair.set(pairKey, members);
   }
+  let mismatchedPairSeed = false;
+  let mismatchedPairCompetitor = false;
+  let mismatchedPairRules = false;
   for (const members of byPair.values()) {
     if (
       members.length !== 2 ||
       members[0].result.color === members[1].result.color
     ) {
+      continue;
+    }
+    if (members[0].game.seed !== members[1].game.seed) {
+      mismatchedPairSeed = true;
+      continue;
+    }
+    const competitors = new Set(
+      members.flatMap(({ game }) => [
+        competitorIdentity(game.redAgentId),
+        competitorIdentity(game.blueAgentId),
+      ])
+    );
+    if (competitors.size !== 1) {
+      mismatchedPairCompetitor = true;
+      continue;
+    }
+    const rules = new Set(
+      members.map(
+        ({ game }) => `${game.redMaxActions}:${game.blueMaxActions}`
+      )
+    );
+    if (
+      rules.size !== 1 ||
+      members.some(
+        ({ game }) => game.redMaxActions !== game.blueMaxActions
+      )
+    ) {
+      mismatchedPairRules = true;
       continue;
     }
     pairScores.push((members[0].result.score + members[1].result.score) / 2);
@@ -233,6 +269,9 @@ export function summarizeValueModelArena(
   if (scored.length < 100) reasons.push("fewer-than-100-games");
   if (unverifiedFallbackRate > 0.05)
     reasons.push("excessive-unverified-search-rate");
+  if (mismatchedPairSeed) reasons.push("mismatched-pair-seed");
+  if (mismatchedPairCompetitor) reasons.push("mismatched-pair-competitor");
+  if (mismatchedPairRules) reasons.push("mismatched-pair-rules");
   if (pairScores.length * 2 !== scored.length)
     reasons.push("incomplete-color-pair");
   if (scoreRate <= 0.5) reasons.push("challenger-did-not-outscore-incumbent");
