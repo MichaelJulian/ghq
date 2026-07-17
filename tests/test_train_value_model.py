@@ -2,10 +2,58 @@ import unittest
 
 import numpy as np
 
-from scripts.train_value_model import game_balanced_weights
+from scripts.train_value_model import (
+    game_balanced_weights,
+    validate_self_play_code_version,
+)
 
 
 class ValueModelWeightTests(unittest.TestCase):
+    def test_requires_one_exact_self_play_search_revision(self):
+        rows = [
+            {"source": "human", "game_id": "human"},
+            {
+                "source": "vercel_self_play",
+                "game_id": "self-play",
+                "code_version": "commit-a",
+            },
+        ]
+        self.assertEqual(
+            validate_self_play_code_version(rows, "commit-a"), "commit-a"
+        )
+
+    def test_rejects_missing_mixed_or_unexpected_search_revisions(self):
+        with self.assertRaisesRegex(ValueError, "exact code_version"):
+            validate_self_play_code_version(
+                [{"source": "vercel_self_play", "game_id": "missing"}]
+            )
+        with self.assertRaisesRegex(ValueError, "mix search revisions"):
+            validate_self_play_code_version(
+                [
+                    {
+                        "source": "vercel_self_play",
+                        "game_id": "a",
+                        "code_version": "commit-a",
+                    },
+                    {
+                        "source": "vercel_self_play",
+                        "game_id": "b",
+                        "code_version": "commit-b",
+                    },
+                ]
+            )
+        with self.assertRaisesRegex(ValueError, "code version mismatch"):
+            validate_self_play_code_version(
+                [
+                    {
+                        "source": "vercel_self_play",
+                        "game_id": "a",
+                        "code_version": "commit-a",
+                    }
+                ],
+                "commit-b",
+            )
+
     def test_balances_red_and_blue_winning_games_within_each_source(self):
         rows = []
         for game, red_wins, positions in (

@@ -25,6 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--report", required=True, type=Path)
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--self-play-train-share", type=float, default=0.5)
+    parser.add_argument("--self-play-code-version")
     parser.add_argument("--random-state", type=int, default=42)
     return parser.parse_args()
 
@@ -58,6 +59,34 @@ def load_dataset(path: Path) -> Tuple[List[str], List[Dict[str, Any]], np.ndarra
 
 def data_source(row: Dict[str, Any]) -> str:
     return str(row.get("source") or ("vercel_self_play" if row.get("generation_id") else "human"))
+
+
+def validate_self_play_code_version(
+    rows: List[Dict[str, Any]], required: Optional[str] = None
+) -> Optional[str]:
+    """Require one exact search revision for every self-play training row."""
+    versions: set[str] = set()
+    for row in rows:
+        if data_source(row) != "vercel_self_play":
+            continue
+        version = str(row.get("code_version") or "").strip()
+        if not version or version == "unknown":
+            raise ValueError(
+                "self-play rows require exact code_version provenance"
+            )
+        versions.add(version)
+    if not versions:
+        return None
+    if len(versions) != 1:
+        raise ValueError(
+            f"self-play rows mix search revisions: {sorted(versions)}"
+        )
+    observed = next(iter(versions))
+    if required is not None and observed != required:
+        raise ValueError(
+            f"self-play code version mismatch: expected {required}, received {observed}"
+        )
+    return observed
 
 
 def chronological_split(rows: List[Dict[str, Any]]) -> Dict[str, np.ndarray]:
@@ -427,6 +456,9 @@ def main() -> None:
     if not 0.0 < args.self_play_train_share < 1.0:
         raise ValueError("self-play-train-share must be between zero and one")
     feature_names, rows, vectors, labels = load_dataset(args.dataset)
+    self_play_code_version = validate_self_play_code_version(
+        rows, args.self_play_code_version
+    )
     splits = chronological_split(rows)
     weights = {name: game_balanced_weights(rows, indices) for name, indices in splits.items()}
     fit_weights = {
@@ -558,6 +590,7 @@ def main() -> None:
             "split": "source-stratified chronological 70/15/15 by whole game",
             "hyperparameters": best_parameters,
             "self_play_train_share": args.self_play_train_share,
+            "self_play_code_version": self_play_code_version,
             "metrics": split_metrics,
             "feature_importance": [
                 {"feature": name, "importance": round(float(importance), 8)}
@@ -592,6 +625,7 @@ def main() -> None:
         ),
         "samples": len(rows),
         "self_play_train_share": args.self_play_train_share,
+        "self_play_code_version": self_play_code_version,
         "sources": dict(Counter(data_source(row) for row in rows)),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

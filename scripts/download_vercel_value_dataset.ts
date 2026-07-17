@@ -15,6 +15,7 @@ interface DurableTrainingSample {
   player: "RED" | "BLUE";
   outcomeValue: number;
   features: number[];
+  codeVersion: string;
 }
 
 function argument(name: string): string {
@@ -46,8 +47,13 @@ async function selectedBlobs(generationPrefix: string) {
   return blobs.sort((a, b) => a.pathname.localeCompare(b.pathname));
 }
 
-async function readBlob(blob: ListBlobResultBlob): Promise<DurableTrainingSample[]> {
-  const result = await get(blob.pathname, { access: "private", useCache: false });
+async function readBlob(
+  blob: ListBlobResultBlob
+): Promise<DurableTrainingSample[]> {
+  const result = await get(blob.pathname, {
+    access: "private",
+    useCache: false,
+  });
   if (!result?.stream || result.statusCode !== 200) {
     throw new Error(`Unable to read ${blob.pathname}`);
   }
@@ -60,6 +66,7 @@ async function readBlob(blob: ListBlobResultBlob): Promise<DurableTrainingSample
 
 async function main() {
   const generationPrefix = argument("--generation-prefix");
+  const codeVersion = argument("--code-version");
   const outputPath = argument("--output");
   const blobs = await selectedBlobs(generationPrefix);
   if (!blobs.length) throw new Error("No matching training artifacts found");
@@ -73,6 +80,7 @@ async function main() {
       ruleset: "three-actions",
       source: "vercel-self-play",
       generation_prefix: generationPrefix,
+      code_version: codeVersion,
     })}\n`
   );
 
@@ -85,6 +93,15 @@ async function main() {
     for (let offset = 0; offset < batch.length; offset++) {
       const createdAt = batch[offset].uploadedAt.toISOString();
       for (const sample of records[offset]) {
+        if (sample.codeVersion !== codeVersion) {
+          throw new Error(
+            `Search provenance mismatch in ${
+              sample.gameId
+            }: expected ${codeVersion}, received ${
+              sample.codeVersion || "missing"
+            }`
+          );
+        }
         if (sample.features.length !== VALUE_FEATURE_NAMES.length) {
           throw new Error(`Feature mismatch in ${sample.gameId}`);
         }
@@ -94,6 +111,7 @@ async function main() {
             game_id: sample.gameId,
             generation_id: sample.generationId,
             source: "vercel_self_play",
+            code_version: sample.codeVersion,
             created_at: createdAt,
             outcome_reason: "hq-capture",
             turn: sample.turnNumber,
@@ -115,6 +133,7 @@ async function main() {
   process.stderr.write(
     `${JSON.stringify({
       generationPrefix,
+      codeVersion,
       generations: generations.size,
       artifacts: blobs.length,
       games: games.size,
