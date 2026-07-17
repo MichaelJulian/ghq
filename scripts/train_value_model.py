@@ -520,7 +520,7 @@ def export_tree(tree: Any) -> Dict[str, Any]:
     }
 
 
-def exported_probabilities(artifact: Dict[str, Any], vectors: np.ndarray) -> np.ndarray:
+def exported_raw_scores(artifact: Dict[str, Any], vectors: np.ndarray) -> np.ndarray:
     raw = np.full(len(vectors), artifact["base_raw_score"], dtype=np.float64)
     for tree in artifact["trees"]:
         values = np.empty(len(vectors), dtype=np.float64)
@@ -535,6 +535,11 @@ def exported_probabilities(artifact: Dict[str, Any], vectors: np.ndarray) -> np.
                 )
             values[row_index] = tree["value"][node]
         raw += artifact["learning_rate"] * values
+    return raw
+
+
+def exported_probabilities(artifact: Dict[str, Any], vectors: np.ndarray) -> np.ndarray:
+    raw = exported_raw_scores(artifact, vectors)
     calibration = artifact["calibration"]
     return sigmoid(calibration["scale"] * raw + calibration["intercept"])
 

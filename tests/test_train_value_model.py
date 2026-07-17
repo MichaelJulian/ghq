@@ -12,6 +12,8 @@ import numpy as np
 from scripts.train_value_model import (
     chronological_split,
     evaluation_unit,
+    exported_probabilities,
+    exported_raw_scores,
     game_balanced_weights,
     requested_self_play_shares,
     main as train_main,
@@ -21,6 +23,20 @@ from scripts.train_value_model import (
 
 
 class ValueModelWeightTests(unittest.TestCase):
+    def test_exported_raw_scores_reproduce_calibrated_probabilities(self):
+        artifact = {
+            "base_raw_score": 0.4,
+            "learning_rate": 0.1,
+            "trees": [],
+            "calibration": {"scale": 0.75, "intercept": -0.2},
+        }
+        vectors = np.asarray([[0.0], [1.0]])
+        raw = exported_raw_scores(artifact, vectors)
+        expected = 1.0 / (1.0 + np.exp(-(0.75 * raw - 0.2)))
+        np.testing.assert_allclose(
+            exported_probabilities(artifact, vectors), expected
+        )
+
     def test_validation_selection_gates_preserve_human_and_improve_self_play(self):
         def sources(human, self_play, human_red=None, human_blue=None):
             return {
