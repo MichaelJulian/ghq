@@ -153,7 +153,7 @@ export function SelfPlayRuns() {
           beamWidth: beam,
           maxTurns: 160,
           repetitionLimit: 3,
-          noProgressTurns: 24,
+          noProgressTurns: 36,
           redMaxActions: 3,
           blueMaxActions: 3,
           seed: Date.now() >>> 0,

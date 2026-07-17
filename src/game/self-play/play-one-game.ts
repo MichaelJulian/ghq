@@ -67,7 +67,7 @@ export interface PlayOneGameConfig {
   maxDecisions?: number;
   /** Exact position occurrence that ends the game as a draw. Defaults to threefold. */
   repetitionLimit?: number;
-  /** Completed turns without material or a new strategic landmark. Defaults to 24. */
+  /** Completed turns without material or a new strategic landmark. Defaults to 36. */
   noProgressTurns?: number;
   /** Unsigned 32-bit seed. The generated seed is returned when omitted. */
   seed?: number;
@@ -91,7 +91,7 @@ export interface SelfPlayGameResult {
 
 const DEFAULT_MAX_TURNS = 400;
 const DEFAULT_REPETITION_LIMIT = 3;
-const DEFAULT_NO_PROGRESS_TURNS = 24;
+const DEFAULT_NO_PROGRESS_TURNS = 36;
 
 function playerToMove(board: PythonBoard): Player {
   return board.is_red_turn() ? "RED" : "BLUE";

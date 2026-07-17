@@ -312,7 +312,7 @@ export async function playDurableSelfPlayGame(
   const initialFen = config.initialFen ?? GHQ_STARTING_FEN;
   const maxTurns = config.maxTurns ?? 160;
   const repetitionLimit = config.repetitionLimit ?? 3;
-  const noProgressTurns = config.noProgressTurns ?? 24;
+  const noProgressTurns = config.noProgressTurns ?? 36;
   const decisions: DurableSelfPlayDecision[] = [];
   const positionOccurrences: Record<string, number> = { [initialFen]: 1 };
   const positionHistory: string[] = [initialFen];

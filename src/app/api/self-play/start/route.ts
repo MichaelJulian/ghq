@@ -66,7 +66,7 @@ export async function POST(request: Request) {
     );
     const noProgressTurns = integer(
       input.noProgressTurns,
-      24,
+      36,
       4,
       100,
       "noProgressTurns"
