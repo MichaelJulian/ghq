@@ -27,6 +27,7 @@ from train_value_model import (
     metrics_by_source,
     paired_game_bootstrap,
     requested_self_play_shares,
+    select_validation_candidate,
     sigmoid,
     validate_self_play_code_version,
     validation_selection_gates,
@@ -132,13 +133,19 @@ def main() -> None:
             )
         )
 
-    feasible = [
-        candidate
+    selectable = [
+        {
+            **candidate,
+            "share": candidate["self_play_train_share"],
+            "score": candidate["validation_log_loss"],
+            "constraints_passed": candidate["validation_constraints_passed"],
+        }
         for candidate in candidates
-        if candidate["validation_constraints_passed"]
     ]
-    selected = min(feasible or candidates, key=lambda item: item["validation_log_loss"])
-    validation_constraints_passed = bool(feasible)
+    selected, validation_constraints_passed = select_validation_candidate(
+        selectable,
+        baseline_constrained=True,
+    )
 
     artifact = copy.deepcopy(baseline)
     artifact["generated_at"] = datetime.now(timezone.utc).isoformat()
@@ -150,7 +157,7 @@ def main() -> None:
     metadata = dict(artifact.get("metadata") or {})
     metadata.update(
         {
-            "model_selection": "validation-only calibration of fixed incumbent trees",
+            "model_selection": "validation-only calibration of fixed incumbent trees; smallest feasible self-play share",
             "validation_constraints": "require human retention and self-play improvement overall and by color",
             "validation_constraints_passed": validation_constraints_passed,
             "self_play_train_share": selected["self_play_train_share"],

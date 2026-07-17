@@ -399,6 +399,40 @@ def validation_selection_gates(
     return gates
 
 
+def select_validation_candidate(
+    candidates: List[Dict[str, Any]],
+    *,
+    baseline_constrained: bool,
+    share_key: str = "share",
+    score_key: str = "score",
+) -> Tuple[Dict[str, Any], bool]:
+    """Select a candidate without spending avoidable human-data tolerance.
+
+    Once a baseline exists, a self-play share is a risk budget rather than an
+    ordinary hyperparameter: larger shares permit more distribution shift away
+    from observed human play.  Prefer the smallest share that clears every
+    validation constraint, then use validation loss only to choose among model
+    shapes at that share.  If no candidate clears the constraints, return the
+    best diagnostic candidate but mark the selection infeasible so promotion
+    remains impossible.
+
+    Unconstrained first-time training still minimizes validation loss normally.
+    """
+    if not candidates:
+        raise ValueError("candidate selection requires at least one candidate")
+    feasible = [item for item in candidates if item["constraints_passed"]]
+    if baseline_constrained and feasible:
+        minimum_share = min(float(item[share_key]) for item in feasible)
+        least_shifted = [
+            item
+            for item in feasible
+            if float(item[share_key]) == minimum_share
+        ]
+        return min(least_shifted, key=lambda item: item[score_key]), True
+    selection_pool = feasible if feasible else candidates
+    return min(selection_pool, key=lambda item: item[score_key]), bool(feasible)
+
+
 def paired_game_bootstrap(
     rows: List[Dict[str, Any]],
     indices: np.ndarray,
@@ -673,13 +707,16 @@ def main() -> None:
                     "constraints_passed": constraints_passed,
                 }
             )
-    feasible = [item for item in trained if item["constraints_passed"]]
-    selection_pool = feasible if feasible else trained
-    selected = min(selection_pool, key=lambda item: item["score"])
+    selected, feasible_selection = select_validation_candidate(
+        trained,
+        baseline_constrained=baseline_artifact is not None,
+    )
     selected_self_play_train_share = selected["share"]
     best_parameters = selected["parameters"]
     model = selected["model"]
-    validation_constraints_passed = bool(feasible) or baseline_artifact is None
+    validation_constraints_passed = (
+        feasible_selection or baseline_artifact is None
+    )
 
     validation_raw_probability = model.predict_proba(vectors[validation_indices])[:, 1]
     calibrator = LogisticRegression(random_state=args.random_state)
@@ -764,7 +801,7 @@ def main() -> None:
             "self_play_train_share": selected_self_play_train_share,
             "self_play_train_share_candidates": self_play_train_shares,
             "model_selection": "validation-only; fixed 50/50 source-balanced validation weights when comparing multiple self-play shares",
-            "validation_constraints": "require human retention and self-play improvement overall and by color before minimizing aggregate validation loss",
+            "validation_constraints": "require human retention and self-play improvement overall and by color; choose the smallest feasible self-play share before minimizing validation loss",
             "validation_constraints_passed": validation_constraints_passed,
             "candidate_validation": candidate_validation,
             "self_play_code_version": self_play_code_version,

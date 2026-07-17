@@ -16,6 +16,7 @@ from scripts.train_value_model import (
     exported_raw_scores,
     game_balanced_weights,
     requested_self_play_shares,
+    select_validation_candidate,
     main as train_main,
     validation_selection_gates,
     validate_self_play_code_version,
@@ -23,6 +24,42 @@ from scripts.train_value_model import (
 
 
 class ValueModelWeightTests(unittest.TestCase):
+    def test_constrained_selection_uses_smallest_feasible_self_play_share(self):
+        candidates = [
+            {"share": 0.12, "score": 0.55, "constraints_passed": True},
+            {"share": 0.08, "score": 0.62, "constraints_passed": True},
+            {"share": 0.08, "score": 0.60, "constraints_passed": True},
+            {"share": 0.04, "score": 0.58, "constraints_passed": False},
+        ]
+        selected, feasible = select_validation_candidate(
+            candidates, baseline_constrained=True
+        )
+        self.assertTrue(feasible)
+        self.assertEqual(selected["share"], 0.08)
+        self.assertEqual(selected["score"], 0.60)
+
+    def test_unconstrained_selection_still_minimizes_validation_loss(self):
+        candidates = [
+            {"share": 0.02, "score": 0.70, "constraints_passed": True},
+            {"share": 0.12, "score": 0.55, "constraints_passed": True},
+        ]
+        selected, feasible = select_validation_candidate(
+            candidates, baseline_constrained=False
+        )
+        self.assertTrue(feasible)
+        self.assertEqual(selected["share"], 0.12)
+
+    def test_infeasible_selection_cannot_clear_promotion(self):
+        candidates = [
+            {"share": 0.02, "score": 0.70, "constraints_passed": False},
+            {"share": 0.12, "score": 0.55, "constraints_passed": False},
+        ]
+        selected, feasible = select_validation_candidate(
+            candidates, baseline_constrained=True
+        )
+        self.assertFalse(feasible)
+        self.assertEqual(selected["share"], 0.12)
+
     def test_exported_raw_scores_reproduce_calibrated_probabilities(self):
         artifact = {
             "base_raw_score": 0.4,
