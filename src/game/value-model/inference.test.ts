@@ -7,6 +7,7 @@ import {
   predictWinProbability,
   predictZeroSumWinProbability,
   TWO_ACTION_VALUE_MODEL_METADATA,
+  valueModelCheckpointId,
 } from "./inference";
 
 const position = {
@@ -65,6 +66,14 @@ describe("gradient-boosted value model", () => {
     expect(challenger).toBeLessThan(1);
     expect(challenger).not.toBe(incumbent);
     expect(CHALLENGER_VALUE_MODEL_METADATA).toBeDefined();
+  });
+
+  it("exposes distinct persistent checkpoint fingerprints", () => {
+    const incumbent = valueModelCheckpointId("three-actions", "incumbent");
+    const challenger = valueModelCheckpointId("three-actions", "challenger");
+    expect(incumbent).toMatch(/^three-actions:incumbent:[0-9a-f]{16}:/);
+    expect(challenger).toMatch(/^three-actions:challenger:[0-9a-f]{16}:/);
+    expect(challenger).not.toBe(incumbent);
   });
 
   it("evaluates an exported tree vector directly", () => {

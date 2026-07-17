@@ -25,6 +25,7 @@ export interface DurableSelfPlayCompetitor {
   explorationTemperature: number;
   maxActions?: 2 | 3;
   valueModel?: ValueModelVersion;
+  valueModelCheckpoint?: string;
 }
 
 export interface DurableSelfPlayGameConfig {
@@ -37,6 +38,7 @@ export interface DurableSelfPlayGameConfig {
   maxTurns?: number;
   repetitionLimit?: number;
   noProgressTurns?: number;
+  codeVersion?: string;
 }
 
 export interface DurableSelfPlayDecision {
@@ -101,6 +103,9 @@ export interface DurableSelfPlayGameResult {
   blueMaxActions: number;
   redValueModel: ValueModelVersion;
   blueValueModel: ValueModelVersion;
+  redValueModelCheckpoint: string;
+  blueValueModelCheckpoint: string;
+  codeVersion: string;
   initialFen: string;
   finalFen: string;
   decisions: DurableSelfPlayDecision[];
@@ -140,6 +145,9 @@ interface DurableTrainingSample {
   winner: Player;
   selectedMoves: string[];
   completedDepth: number;
+  valueModel: ValueModelVersion;
+  valueModelCheckpoint: string;
+  codeVersion: string;
 }
 
 async function playDurableTurn(
@@ -412,6 +420,12 @@ export async function playDurableSelfPlayGame(
         winner: outcome.winner!,
         selectedMoves: decision.selectedMoves,
         completedDepth: decision.completedDepth,
+        valueModel: decision.valueModel ?? "incumbent",
+        valueModelCheckpoint:
+          decision.player === "RED"
+            ? config.red.valueModelCheckpoint ?? "unknown"
+            : config.blue.valueModelCheckpoint ?? "unknown",
+        codeVersion: config.codeVersion ?? "unknown",
       }))
     : [];
   const result: Omit<DurableSelfPlayGameResult, "storage"> = {
@@ -424,6 +438,9 @@ export async function playDurableSelfPlayGame(
     blueMaxActions: config.blue.maxActions ?? 3,
     redValueModel: config.red.valueModel ?? "incumbent",
     blueValueModel: config.blue.valueModel ?? "incumbent",
+    redValueModelCheckpoint: config.red.valueModelCheckpoint ?? "unknown",
+    blueValueModelCheckpoint: config.blue.valueModelCheckpoint ?? "unknown",
+    codeVersion: config.codeVersion ?? "unknown",
     initialFen,
     finalFen: fen ?? initialFen,
     decisions,

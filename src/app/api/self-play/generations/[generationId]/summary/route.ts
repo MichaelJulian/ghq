@@ -25,6 +25,8 @@ export async function GET(
     let decisions = 0;
     let fallbackDecisions = 0;
     let unverifiedFallbackDecisions = 0;
+    const codeVersions = new Set<string>();
+    const valueModelCheckpoints = new Set<string>();
     for (const game of games) {
       increment(outcomes, game.outcome.winner ?? "DRAW");
       increment(terminations, game.outcome.termination);
@@ -37,6 +39,17 @@ export async function GET(
             decision.fallback === "seeded" ||
             (decision.fallback !== "none" && decision.completedDepth < 2)
         ).length;
+      if (game.codeVersion && game.codeVersion !== "unknown") {
+        codeVersions.add(game.codeVersion);
+      }
+      for (const checkpoint of [
+        game.redValueModelCheckpoint,
+        game.blueValueModelCheckpoint,
+      ]) {
+        if (checkpoint && checkpoint !== "unknown") {
+          valueModelCheckpoints.add(checkpoint);
+        }
+      }
     }
     return NextResponse.json({
       generationId,
@@ -48,6 +61,10 @@ export async function GET(
       unverifiedFallbackRate: decisions
         ? unverifiedFallbackDecisions / decisions
         : 0,
+      provenance: {
+        codeVersions: [...codeVersions].sort(),
+        valueModelCheckpoints: [...valueModelCheckpoints].sort(),
+      },
       valueModelArena: summarizeValueModelArena(games),
     });
   } catch (error) {

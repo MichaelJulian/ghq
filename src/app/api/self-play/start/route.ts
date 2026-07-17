@@ -141,6 +141,7 @@ export async function POST(request: Request) {
             maxTurns,
             repetitionLimit,
             noProgressTurns,
+            codeVersion: process.env.VERCEL_GIT_COMMIT_SHA ?? "local",
           },
         ]);
         return { gameId, runId: run.runId, red: red.id, blue: blue.id };

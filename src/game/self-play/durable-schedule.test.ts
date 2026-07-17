@@ -38,6 +38,18 @@ describe("durable self-play scheduling", () => {
     expect(first.blue.valueModel).toBe("incumbent");
     expect(second.red.valueModel).toBe("incumbent");
     expect(second.blue.valueModel).toBe("challenger");
+    expect(first.red.valueModelCheckpoint).toContain(
+      "three-actions:challenger:"
+    );
+    expect(first.blue.valueModelCheckpoint).toContain(
+      "three-actions:incumbent:"
+    );
+    expect(second.red.valueModelCheckpoint).toBe(
+      first.blue.valueModelCheckpoint
+    );
+    expect(second.blue.valueModelCheckpoint).toBe(
+      first.red.valueModelCheckpoint
+    );
   });
 
   it("keeps the normal personality matchup on the incumbent", () => {

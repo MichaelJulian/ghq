@@ -1,4 +1,5 @@
 import type { DurableSelfPlayCompetitor } from "@/workflows/self-play-game";
+import { valueModelCheckpointId } from "@/game/value-model/inference";
 
 export interface DurableScheduleInput {
   index: number;
@@ -47,12 +48,20 @@ export function scheduleDurableCompetitors({
       id: `${redBase.personality}-${redValueModel}-a${redMaxActions}`,
       maxActions: redMaxActions,
       valueModel: redValueModel,
+      valueModelCheckpoint: valueModelCheckpointId(
+        redMaxActions === 2 ? "two-actions" : "three-actions",
+        redValueModel
+      ),
     },
     blue: {
       ...blueBase,
       id: `${blueBase.personality}-${blueValueModel}-a${blueMaxActions}`,
       maxActions: blueMaxActions,
       valueModel: blueValueModel,
+      valueModelCheckpoint: valueModelCheckpointId(
+        blueMaxActions === 2 ? "two-actions" : "three-actions",
+        blueValueModel
+      ),
     },
   };
 }

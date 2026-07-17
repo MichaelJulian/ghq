@@ -18,6 +18,7 @@ interface ExportedTree {
 
 export interface ValueModelArtifact {
   format: "ghq-gradient-boosted-value-v1";
+  generated_at?: string;
   feature_names: string[];
   base_raw_score: number;
   learning_rate: number;
@@ -44,6 +45,19 @@ function modelForRuleset(
 ): ValueModelArtifact {
   if (ruleset === "two-actions") return twoActionModel;
   return version === "challenger" ? challengerModel : model;
+}
+
+/** Stable, human-readable provenance for persisted arena results. */
+export function valueModelCheckpointId(
+  ruleset: ValueModelRuleset = "three-actions",
+  version: ValueModelVersion = "incumbent"
+): string {
+  const artifact = modelForRuleset(ruleset, version);
+  const datasetHash = artifact.metadata.dataset_sha256;
+  const fingerprint =
+    typeof datasetHash === "string" ? datasetHash.slice(0, 16) : "unknown";
+  const generated = artifact.generated_at ?? "unknown";
+  return `${ruleset}:${version}:${fingerprint}:${generated}`;
 }
 
 function sigmoid(value: number): number {

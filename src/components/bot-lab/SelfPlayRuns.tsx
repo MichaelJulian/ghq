@@ -61,6 +61,10 @@ interface GenerationSummary {
   terminations: Record<string, number>;
   fallbackRate: number;
   unverifiedFallbackRate: number;
+  provenance?: {
+    codeVersions: string[];
+    valueModelCheckpoints: string[];
+  };
   valueModelArena?: {
     challenger: {
       scoreRate: number;
@@ -426,6 +430,18 @@ export function SelfPlayRuns() {
                 unverified{" "}
                 {(100 * generationSummary.unverifiedFallbackRate).toFixed(1)}%
               </div>
+              {generationSummary.provenance &&
+                (generationSummary.provenance.codeVersions.length > 0 ||
+                  generationSummary.provenance.valueModelCheckpoints.length >
+                    0) && (
+                  <div className="mt-1 break-all font-mono text-[10px] text-slate-500">
+                    code {generationSummary.provenance.codeVersions.join(", ")} ·
+                    models{" "}
+                    {generationSummary.provenance.valueModelCheckpoints.join(
+                      ", "
+                    )}
+                  </div>
+                )}
               {generationSummary.valueModelArena && (
                 <div className="mt-2 font-semibold text-indigo-900">
                   Challenger{" "}
