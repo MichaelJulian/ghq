@@ -2428,12 +2428,14 @@ class Searcher:
                     completed.append(partial)
                     continue
                 forced = all(move.name == "AutoCapture" for _, move in actions)
+                forced_end = all(move.name == "Skip" for _, move in actions)
                 for priority, move in actions:
                     self.check_time(False)
                     if (
                         move.name == "Skip"
                         and partial.board.turn_moves < min(2, self.max_actions)
                         and not forced
+                        and not forced_end
                     ):
                         continue
                     if (

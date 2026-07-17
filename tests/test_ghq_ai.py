@@ -54,6 +54,7 @@ TURN_6_FEN = (
 )
 SELF_PLAY_HQ_UNLOCK_FEN = "8/2q3i1/2I4i/6f1/2F5/8/1F4I1/I1I2I1Q I - b"
 SELF_PLAY_HQ_ENGAGEMENT_FEN = "q7/i5i1/3I1i2/2I5/8/1I5I/I1I5/3I3Q - - b"
+SELF_PLAY_FORCED_SKIP_MATE_FEN = "8/8/5q2/4F3/5I2/8/1I6/I2Q4 - - b"
 
 
 class EvaluationTests(unittest.TestCase):
@@ -996,6 +997,21 @@ class SearchTests(unittest.TestCase):
                 for candidate in candidates
             )
         )
+
+    def test_forced_one_action_turn_is_verified_against_hq_mate(self):
+        board = engine.BaseBoard(SELF_PLAY_FORCED_SKIP_MATE_FEN)
+        result = ghq_ai.search(
+            board,
+            "tactical_gambler",
+            time_ms=4_000,
+            max_depth=2,
+            beam_width=6,
+            turn_number=86,
+        )
+        self.assertEqual(result["best_turn"]["actions"], ["f6g5", "skip"])
+        self.assertLessEqual(result["score"]["current_player"], -ghq_ai.MATE_SCORE)
+        self.assertEqual(result["search"]["completed_depth_in_turns"], 2)
+        self.assertEqual(result["search"]["fallback_used"], "none")
 
 
 if __name__ == "__main__":
