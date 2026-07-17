@@ -109,7 +109,13 @@ async function main() {
   > = {};
   const valueModels: Record<
     string,
-    { games: number; wins: number; losses: number; draws: number; points: number }
+    {
+      games: number;
+      wins: number;
+      losses: number;
+      draws: number;
+      points: number;
+    }
   > = {};
   const rejected: Array<{
     gameId: string;

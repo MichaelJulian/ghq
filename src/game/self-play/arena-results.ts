@@ -8,7 +8,10 @@ export interface ValueModelArenaSummary {
     points: number;
     scoreRate: number;
     eloDifference: number;
-    byColor: Record<Player, { games: number; points: number; scoreRate: number }>;
+    byColor: Record<
+      Player,
+      { games: number; points: number; scoreRate: number }
+    >;
   };
   pairedOutcomes: { wins: number; ties: number; losses: number };
   pairBootstrap: {
@@ -24,21 +27,19 @@ function modelFromAgent(agentId: string, recorded?: string): string {
   return agentId.includes("-challenger-") ? "challenger" : "incumbent";
 }
 
-function challengerResult(game: DurableSelfPlayGameResult): {
-  color: Player;
-  score: number;
-} | undefined {
+function challengerResult(game: DurableSelfPlayGameResult):
+  | {
+      color: Player;
+      score: number;
+    }
+  | undefined {
   const red = modelFromAgent(game.redAgentId, game.redValueModel);
   const blue = modelFromAgent(game.blueAgentId, game.blueValueModel);
   if (red === blue) return undefined;
   const color: Player = red === "challenger" ? "RED" : "BLUE";
   return {
     color,
-    score: !game.outcome.winner
-      ? 0.5
-      : game.outcome.winner === color
-      ? 1
-      : 0,
+    score: !game.outcome.winner ? 0.5 : game.outcome.winner === color ? 1 : 0,
   };
 }
 
@@ -63,7 +64,9 @@ export function summarizeValueModelArena(
   const scored = games
     .map((game) => ({ game, result: challengerResult(game) }))
     .filter(
-      (entry): entry is {
+      (
+        entry
+      ): entry is {
         game: DurableSelfPlayGameResult;
         result: { color: Player; score: number };
       } => Boolean(entry.result)
@@ -102,9 +105,7 @@ export function summarizeValueModelArena(
     ) {
       continue;
     }
-    pairScores.push(
-      (members[0].result.score + members[1].result.score) / 2
-    );
+    pairScores.push((members[0].result.score + members[1].result.score) / 2);
   }
   const pairedOutcomes = { wins: 0, ties: 0, losses: 0 };
   for (const score of pairScores) {
@@ -133,11 +134,13 @@ export function summarizeValueModelArena(
   const ci95High = percentile(draws, 0.975);
   const reasons: string[] = [];
   if (scored.length < 100) reasons.push("fewer-than-100-games");
-  if (pairScores.length * 2 !== scored.length) reasons.push("incomplete-color-pair");
+  if (pairScores.length * 2 !== scored.length)
+    reasons.push("incomplete-color-pair");
   if (scoreRate <= 0.5) reasons.push("challenger-did-not-outscore-incumbent");
   if (ci95Low <= 0.5) reasons.push("paired-ci-does-not-clear-50-percent");
   for (const color of ["RED", "BLUE"] as const) {
-    if (byColor[color].games < 25) reasons.push(`insufficient-${color.toLowerCase()}-games`);
+    if (byColor[color].games < 25)
+      reasons.push(`insufficient-${color.toLowerCase()}-games`);
     if (byColor[color].scoreRate < 0.45) {
       reasons.push(`challenger-regresses-as-${color.toLowerCase()}`);
     }
@@ -149,7 +152,9 @@ export function summarizeValueModelArena(
     challenger: {
       points,
       scoreRate: Number(scoreRate.toFixed(4)),
-      eloDifference: Number((400 * Math.log10(clamped / (1 - clamped))).toFixed(1)),
+      eloDifference: Number(
+        (400 * Math.log10(clamped / (1 - clamped))).toFixed(1)
+      ),
       byColor: Object.fromEntries(
         Object.entries(byColor).map(([color, record]) => [
           color,

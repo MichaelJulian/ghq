@@ -39,7 +39,9 @@ describe("persistent early search cache", () => {
     expect(shouldPersistSearch({ ...key, turnNumber: 17 }, result())).toBe(
       false
     );
-    expect(shouldPersistSearch({ ...key, turnNumber: 4 }, result())).toBe(false);
+    expect(shouldPersistSearch({ ...key, turnNumber: 4 }, result())).toBe(
+      false
+    );
   });
 
   it("keeps checkpoints separated in the cache key", () => {

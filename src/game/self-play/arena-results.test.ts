@@ -4,14 +4,21 @@ import { describe, expect, it } from "@jest/globals";
 import type { DurableSelfPlayGameResult } from "@/workflows/self-play-game";
 import { summarizeValueModelArena } from "./arena-results";
 
-function game(index: number, challengerWins: boolean): DurableSelfPlayGameResult {
+function game(
+  index: number,
+  challengerWins: boolean
+): DurableSelfPlayGameResult {
   const challengerRed = index % 2 === 0;
   return {
     generationId: "arena",
     gameId: `arena-${String(index + 1).padStart(4, "0")}`,
     seed: Math.floor(index / 2),
-    redAgentId: challengerRed ? "balanced-challenger-a3" : "balanced-incumbent-a3",
-    blueAgentId: challengerRed ? "balanced-incumbent-a3" : "balanced-challenger-a3",
+    redAgentId: challengerRed
+      ? "balanced-challenger-a3"
+      : "balanced-incumbent-a3",
+    blueAgentId: challengerRed
+      ? "balanced-incumbent-a3"
+      : "balanced-challenger-a3",
     redMaxActions: 3,
     blueMaxActions: 3,
     redValueModel: challengerRed ? "challenger" : "incumbent",
@@ -65,7 +72,9 @@ describe("value-model arena promotion gate", () => {
   });
 
   it("rejects an incomplete or statistically uncertain arena", () => {
-    const games = Array.from({ length: 40 }, (_, index) => game(index, index < 22));
+    const games = Array.from({ length: 40 }, (_, index) =>
+      game(index, index < 22)
+    );
     const summary = summarizeValueModelArena(games, 500)!;
     expect(summary.promotionGate.passed).toBe(false);
     expect(summary.promotionGate.reasons).toContain("fewer-than-100-games");

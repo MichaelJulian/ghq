@@ -54,6 +54,24 @@ interface StartResponse {
   error?: string;
 }
 
+interface GenerationSummary {
+  generationId: string;
+  games: number;
+  outcomes: Record<string, number>;
+  terminations: Record<string, number>;
+  fallbackRate: number;
+  unverifiedFallbackRate: number;
+  valueModelArena?: {
+    challenger: {
+      scoreRate: number;
+      eloDifference: number;
+      byColor: Record<string, { scoreRate: number }>;
+    };
+    pairBootstrap: { ci95Low: number; ci95High: number };
+    promotionGate: { passed: boolean; reasons: string[] };
+  };
+}
+
 function loadBatches(): StoredBatch[] {
   try {
     const value = window.localStorage.getItem(STORAGE_KEY);
@@ -76,6 +94,8 @@ export function SelfPlayRuns() {
     PersistedGeneration[]
   >([]);
   const [storageConfigured, setStorageConfigured] = useState<boolean>();
+  const [generationSummary, setGenerationSummary] =
+    useState<GenerationSummary>();
 
   useEffect(() => {
     setBatches(loadBatches());
@@ -152,6 +172,25 @@ export function SelfPlayRuns() {
       setMessage(
         error instanceof Error ? error.message : "Batch launch failed"
       );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const summarizeGeneration = async (generationId: string) => {
+    setBusy(true);
+    setMessage(undefined);
+    try {
+      const response = await fetch(
+        `/api/self-play/generations/${encodeURIComponent(generationId)}/summary`
+      );
+      const body = (await response.json()) as GenerationSummary & {
+        error?: string;
+      };
+      if (!response.ok) throw new Error(body.error ?? "Summary failed");
+      setGenerationSummary(body);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Summary failed");
     } finally {
       setBusy(false);
     }
@@ -345,9 +384,14 @@ export function SelfPlayRuns() {
           ) : savedGenerations.length ? (
             <div className="mt-2 max-h-40 space-y-1 overflow-y-auto">
               {savedGenerations.slice(0, 12).map((generation) => (
-                <div
+                <button
+                  type="button"
                   key={generation.generationId}
-                  className="grid gap-1 rounded bg-white px-2 py-2 text-xs md:grid-cols-[1fr_auto]"
+                  onClick={() =>
+                    void summarizeGeneration(generation.generationId)
+                  }
+                  disabled={busy}
+                  className="grid w-full gap-1 rounded bg-white px-2 py-2 text-left text-xs hover:bg-indigo-50 disabled:opacity-60 md:grid-cols-[1fr_auto]"
                 >
                   <span className="font-mono text-slate-600">
                     {generation.generationId}
@@ -357,7 +401,7 @@ export function SelfPlayRuns() {
                     {generation.trainingArtifacts} training files ·{" "}
                     {(generation.bytes / 1_000_000).toFixed(1)} MB
                   </span>
-                </div>
+                </button>
               ))}
             </div>
           ) : (
@@ -366,6 +410,58 @@ export function SelfPlayRuns() {
                 ? "No completed Vercel games have been saved yet."
                 : "Checking storage…"}
             </p>
+          )}
+          {generationSummary && (
+            <div className="mt-3 rounded border border-indigo-200 bg-indigo-50 p-3 text-xs text-slate-700">
+              <div className="font-mono font-bold">
+                {generationSummary.generationId}
+              </div>
+              <div className="mt-1">
+                {generationSummary.games} games · outcomes{" "}
+                {JSON.stringify(generationSummary.outcomes)} · terminations{" "}
+                {JSON.stringify(generationSummary.terminations)}
+              </div>
+              <div className="mt-1">
+                fallback {(100 * generationSummary.fallbackRate).toFixed(1)}% ·
+                unverified{" "}
+                {(100 * generationSummary.unverifiedFallbackRate).toFixed(1)}%
+              </div>
+              {generationSummary.valueModelArena && (
+                <div className="mt-2 font-semibold text-indigo-900">
+                  Challenger{" "}
+                  {(
+                    100 * generationSummary.valueModelArena.challenger.scoreRate
+                  ).toFixed(1)}
+                  % (
+                  {generationSummary.valueModelArena.challenger.eloDifference >=
+                  0
+                    ? "+"
+                    : ""}
+                  {generationSummary.valueModelArena.challenger.eloDifference}{" "}
+                  Elo) · paired 95% CI{" "}
+                  {(
+                    100 *
+                    generationSummary.valueModelArena.pairBootstrap.ci95Low
+                  ).toFixed(1)}
+                  –
+                  {(
+                    100 *
+                    generationSummary.valueModelArena.pairBootstrap.ci95High
+                  ).toFixed(1)}
+                  % · promotion{" "}
+                  {generationSummary.valueModelArena.promotionGate.passed
+                    ? "PASS"
+                    : "HOLD"}
+                  {!generationSummary.valueModelArena.promotionGate.passed && (
+                    <span className="mt-1 block font-normal text-slate-600">
+                      {generationSummary.valueModelArena.promotionGate.reasons.join(
+                        ", "
+                      )}
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
           )}
         </div>
       </CardContent>

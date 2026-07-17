@@ -20,9 +20,7 @@ export interface SearchCacheKey {
 }
 
 function pathname(key: SearchCacheKey): string {
-  const digest = createHash("sha256")
-    .update(JSON.stringify(key))
-    .digest("hex");
+  const digest = createHash("sha256").update(JSON.stringify(key)).digest("hex");
   return `${SEARCH_CACHE_PREFIX}${digest}.json`;
 }
 

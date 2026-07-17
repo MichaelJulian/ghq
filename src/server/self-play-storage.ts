@@ -1,4 +1,4 @@
-import { list, put, type ListBlobResultBlob } from "@vercel/blob";
+import { get, list, put, type ListBlobResultBlob } from "@vercel/blob";
 
 export const SELF_PLAY_BLOB_PREFIX = "self-play/generations/";
 
@@ -94,6 +94,9 @@ export async function listPersistedSelfPlayGenerations(): Promise<
   const generations = new Map<string, PersistedSelfPlayGeneration>();
   for (const blob of blobs) {
     const remainder = blob.pathname.slice(SELF_PLAY_BLOB_PREFIX.length);
+    if (!remainder.includes("/games/") && !remainder.includes("/training/")) {
+      continue;
+    }
     const generationId = remainder.split("/", 1)[0];
     if (!generationId) continue;
     const current = generations.get(generationId) ?? {
@@ -115,4 +118,38 @@ export async function listPersistedSelfPlayGenerations(): Promise<
   return [...generations.values()].sort((a, b) =>
     b.updatedAt.localeCompare(a.updatedAt)
   );
+}
+
+export async function readPersistedSelfPlayGames<T>(
+  requestedGenerationId: string
+): Promise<T[]> {
+  if (!selfPlayStorageConfigured()) return [];
+  const generationId = safeSegment(requestedGenerationId);
+  const blobs: ListBlobResultBlob[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await list({
+      prefix: `${SELF_PLAY_BLOB_PREFIX}${generationId}/games/`,
+      cursor,
+      limit: 1000,
+    });
+    blobs.push(...page.blobs.filter((blob) => blob.pathname.endsWith(".json")));
+    cursor = page.hasMore ? page.cursor : undefined;
+  } while (cursor);
+
+  const games: T[] = [];
+  for (let index = 0; index < blobs.length; index += 12) {
+    const chunk = await Promise.all(
+      blobs.slice(index, index + 12).map(async (blob) => {
+        const response = await get(blob.pathname, {
+          access: "private",
+          useCache: false,
+        });
+        if (!response?.stream || response.statusCode !== 200) return undefined;
+        return (await new Response(response.stream).json()) as T;
+      })
+    );
+    games.push(...chunk.filter((game): game is T => game !== undefined));
+  }
+  return games;
 }
