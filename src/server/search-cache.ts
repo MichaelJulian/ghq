@@ -4,11 +4,13 @@ import type { GhqSearchResult, PersonalityId } from "@/game/analysis/types";
 import type { ValueModelVersion } from "@/game/value-model/inference";
 import { selfPlayStorageConfigured } from "@/server/self-play-storage";
 
-const SEARCH_CACHE_VERSION = "early-depth-v2";
+const SEARCH_CACHE_VERSION = "early-depth-v3";
 const SEARCH_CACHE_PREFIX = `self-play/search-cache/${SEARCH_CACHE_VERSION}/`;
 
 export interface SearchCacheKey {
   serializedPosition: string;
+  /** Exact deployed search implementation; prevents cross-code reuse. */
+  searchCodeVersion: string;
   personality: PersonalityId;
   turnNumber: number;
   timeMs: number;

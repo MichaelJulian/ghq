@@ -10,6 +10,7 @@ import {
 
 const key: SearchCacheKey = {
   serializedPosition: "position",
+  searchCodeVersion: "commit-a",
   personality: "balanced",
   turnNumber: 12,
   timeMs: 20_000,
@@ -39,6 +40,12 @@ describe("persistent early search cache", () => {
         ...key,
         valueModelCheckpoint: "three-actions:incumbent:replacement",
       })
+    );
+  });
+
+  it("isolates cached searches produced by different code revisions", () => {
+    expect(searchCachePathname(key)).not.toBe(
+      searchCachePathname({ ...key, searchCodeVersion: "commit-b" })
     );
   });
 

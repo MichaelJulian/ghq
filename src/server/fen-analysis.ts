@@ -453,6 +453,8 @@ export async function analyzeFen(
     const sideToMove = playerToMove(board);
     const searchCacheKey: SearchCacheKey = {
       serializedPosition: board.serialize(),
+      searchCodeVersion:
+        process.env.VERCEL_GIT_COMMIT_SHA ?? "local-unversioned-search",
       personality,
       turnNumber,
       timeMs,
