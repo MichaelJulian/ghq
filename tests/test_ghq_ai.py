@@ -48,9 +48,83 @@ TURN_12_SLOW_REPLY_FEN = (
     "q1ir↓fffp/iir↙h↓r→3/2it→4/8/5R↖2/4R←I2/3II1II/"
     "FR↑IH↑PIT↑Q IFF iiii b"
 )
+TURN_6_FEN = (
+    "qr↓1r↓1i2/iiiii3/8/8/8/5T↑2/4H↑III/"
+    "PFR↑FF1R↑Q IIIIIR iifffprth b"
+)
 
 
 class EvaluationTests(unittest.TestCase):
+    def test_mirror_clears_empty_orientation_bits_and_reinforces_forward(self):
+        board = engine.BaseBoard(TURN_6_FEN)
+        mirrored = board.mirror()
+        reinforce = next(
+            move
+            for move in mirrored.generate_legal_moves()
+            if move.uci() == "rrb1"
+        )
+        mirrored.push(reinforce)
+        self.assertEqual(mirrored.get_orientation(engine.B1), engine.ORIENT_N)
+
+        # Replaying a normalized color-swapped turn must produce the exact
+        # mirror of the original resulting state, including orientations.
+        original = board.copy()
+        original_moves = []
+        for uci in ("rrg8", "rhe8", "rfh8"):
+            move = next(
+                candidate
+                for candidate in original.generate_legal_moves()
+                if candidate.uci() == uci
+            )
+            original_moves.append(move)
+            original.push(move)
+
+        replay = board.mirror()
+        for move in original_moves:
+            normalized = ghq_ai.normalized_move_uci(move, engine.BLUE)
+            replay.push(
+                next(
+                    candidate
+                    for candidate in replay.generate_legal_moves()
+                    if candidate.uci() == normalized
+                )
+            )
+        self.assertEqual(original.mirror().serialize(), replay.serialize())
+
+    def test_set_orientation_replaces_all_old_direction_bits(self):
+        board = engine.BaseBoard()
+        board.set_orientation(engine.G1, engine.ORIENT_NW)
+        board.set_orientation(engine.G1, engine.ORIENT_N)
+        self.assertEqual(board.get_orientation(engine.G1), engine.ORIENT_N)
+
+    def test_early_turn_candidate_beam_is_color_symmetric(self):
+        original = engine.BaseBoard(TURN_6_FEN)
+        mirrored = original.mirror()
+        beams = []
+        for board in (original, mirrored):
+            searcher = ghq_ai.Searcher(
+                "fortress", time_ms=60_000, beam_width=6, turn_number=6
+            )
+            searcher.root_key = board.serialize()
+            candidates = searcher.generate_turn_candidates(board)
+            beams.append(
+                [
+                    (
+                        ghq_ai.normalized_turn_key(candidate.moves, board.turn),
+                        round(
+                            candidate.static_score
+                            if board.turn == engine.RED
+                            else -candidate.static_score,
+                            6,
+                        ),
+                        candidate.tactically_safe,
+                        round(candidate.safety_penalty, 6),
+                    )
+                    for candidate in candidates
+                ]
+            )
+        self.assertEqual(beams[0], beams[1])
+
     def test_starting_position_is_symmetric(self):
         breakdown = ghq_ai.evaluation_breakdown(engine.BaseBoard())
         self.assertAlmostEqual(breakdown["total_red"], 0.0)

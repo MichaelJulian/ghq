@@ -1304,7 +1304,14 @@ class BaseBoard:
         bit2 = self.orientation_bit2 & pieces_with_orientation
 
         # Apply the transform to each bit
-        self.orientation_bit0, self.orientation_bit1, self.orientation_bit2 = f(bit0, bit1, bit2)
+        bit0, bit1, bit2 = f(bit0, bit1, bit2)
+        # Orientation transforms such as a 180-degree rotation complement one
+        # bit plane. Mask the result back to actual artillery squares so empty
+        # squares cannot retain latent orientation bits that affect a later
+        # reinforcement.
+        self.orientation_bit0 = bit0 & pieces_with_orientation
+        self.orientation_bit1 = bit1 & pieces_with_orientation
+        self.orientation_bit2 = bit2 & pieces_with_orientation
 
     def transform(self, f: Callable[[Bitboard], Bitboard]) -> "BaseBoard":
         """
@@ -1445,11 +1452,12 @@ class BaseBoard:
         """Set the orientation of a piece at a given square."""
         mask = BB_SQUARES[square] & BB_ALL
 
+        # Replace, rather than OR with, the old three-bit value. This also
+        # removes any stale bits left on a formerly occupied square.
+        self.orientation_bit0 &= ~mask
+        self.orientation_bit1 &= ~mask
+        self.orientation_bit2 &= ~mask
         if orientation is None:
-            # Clear orientation bits
-            self.orientation_bit0 &= ~mask
-            self.orientation_bit1 &= ~mask
-            self.orientation_bit2 &= ~mask
             return
 
         # Set individual orientation bits
