@@ -44,6 +44,10 @@ TURN_23_COMPLEX_ROOT_FEN = (
     "qr↓4ii/ii4i1/3f1f1r↓/8/6fh↓/2F5/2R←2I1I/"
     "IIF1FR↖R↑Q III ii r"
 )
+TURN_12_SLOW_REPLY_FEN = (
+    "q1ir↓fffp/iir↙h↓r→3/2it→4/8/5R↖2/4R←I2/3II1II/"
+    "FR↑IH↑PIT↑Q IFF iiii b"
+)
 
 
 class EvaluationTests(unittest.TestCase):
@@ -699,6 +703,19 @@ class SearchTests(unittest.TestCase):
             result["best_turn"]["all_moves"],
             [turn["all_moves"] for turn in candidates],
         )
+
+    def test_verification_finishes_reply_before_spending_budget_on_breadth(self):
+        result = ghq_ai.search(
+            engine.BaseBoard(TURN_12_SLOW_REPLY_FEN),
+            "fortress",
+            time_ms=2000,
+            max_depth=2,
+            beam_width=6,
+            turn_number=12,
+            value_function=lambda _fen, _turn: 0.5,
+        )
+        self.assertEqual(result["search"]["completed_depth_in_turns"], 2)
+        self.assertNotEqual(result["search"]["fallback_used"], "seeded")
 
     def test_stagnation_keeps_a_noncycling_root_alternative(self):
         board = engine.BaseBoard(STALL_CONVEYOR_FEN)

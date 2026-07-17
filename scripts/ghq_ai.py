@@ -2288,16 +2288,20 @@ class Searcher:
             # The verification pass is deliberately small: its job is to
             # finish one complete opponent reply before the clock expires.
             # The later improvement pass is responsible for breadth.
-            partial_width = max(10, self.beam_width * 2)
-            evaluation_pool_width = max(8, self.beam_width + 2)
+            partial_width = max(8, self.beam_width)
+            evaluation_pool_width = max(6, self.beam_width)
             if self.stagnation_factor() >= 0.20:
                 partial_width = max(partial_width, self.beam_width * 4)
                 evaluation_pool_width = max(
                     evaluation_pool_width, self.beam_width * 3
                 )
         elif self.verification_mode:
-            partial_width = max(6, self.beam_width)
-            evaluation_pool_width = max(6, self.beam_width)
+            # The first reply is a tactical floor, not the final beam. One
+            # statically strongest safe reply must finish before breadth is
+            # useful; protected forcing/escape plans can still replace the
+            # generic slot below.
+            partial_width = 4
+            evaluation_pool_width = 4
         elif self.time_ms < 1000:
             partial_width = max(12, self.beam_width * 2)
             evaluation_pool_width = max(16, self.beam_width * 3)
@@ -2314,12 +2318,8 @@ class Searcher:
             partial_width = max(16, self.beam_width * 2)
             evaluation_pool_width = max(24, self.beam_width * 3)
         if self.verification_mode:
-            turn_width = (
-                max(2, min(3, (self.beam_width + 1) // 2))
-                if is_root_generation
-                else 2
-            )
-            turn_capacity = turn_width + 1
+            turn_width = 2 if is_root_generation else 1
+            turn_capacity = turn_width
             if is_root_generation and self.stagnation_factor() >= 0.20:
                 turn_width = max(turn_width, min(5, self.beam_width))
                 turn_capacity = turn_width + 2
@@ -3199,7 +3199,7 @@ def search(
                 searcher.verification_mode = True
                 searcher.deadline = min(
                     final_deadline,
-                    started + max(0.05, time_ms / 1000.0 * 0.18),
+                    started + max(0.05, time_ms / 1000.0 * 0.12),
                 )
                 try:
                     reply = searcher.alphabeta(
@@ -3228,7 +3228,7 @@ def search(
                     # transposition. Reuse it when the narrow root pass reaches
                     # that same child instead of paying for the reply twice.
 
-            # Reserve the first 65% of the budget for a narrow but complete
+            # Reserve the first 90% of the budget for a narrow but complete
             # depth-two pass. Depth two means our complete turn plus one full
             # opponent reply. A later broad pass may improve it, but may never
             # erase this tactically verified result merely by timing out.
@@ -3237,7 +3237,7 @@ def search(
             searcher.root_ranked_turns = []
             searcher.deadline = min(
                 final_deadline,
-                started + max(0.05, time_ms / 1000.0 * 0.65),
+                started + max(0.05, time_ms / 1000.0 * 0.90),
             )
             try:
                 best = searcher.alphabeta(board, 2, -math.inf, math.inf)
