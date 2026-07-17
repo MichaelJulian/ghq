@@ -27,6 +27,9 @@ TURN_28_FORCED_MATE_FEN = (
     "q2r↓4/ir↓i2r↘2/8/3h↘4/fi5P/3FH↑1f1/4IF1p/"
     "2R↑2T↗1Q IIIIIF iiiii b"
 )
+THREE_ACTION_PARATROOPER_MATE_FEN = (
+    "5i1i/6qi/6f1/5I2/3H↗2I1/1F6/F7/1P3I1Q III - b"
+)
 VERTICAL_INFANTRY_FEN = (
     "qr↓h↓r↓iiii/iiiffr↓t←p/5f2/7I/7I/7I/1R↑1R↑4/"
     "FIFPT↑H↑R↑Q - - r"
@@ -63,14 +66,32 @@ SELF_PLAY_LATE_HQ_REPLY_FEN = (
     "q6i/6f1/i7/8/i2i4/1ir↙1f3/I7/Q7 - i r"
 )
 SMOKE_IMMEDIATE_HQ_LOSS_CASES = (
-    (75, "q2i3f/4i1i1/1i1i4/8/1F3f2/2I1I1i1/I2I2Q1/1I2I3 - - r"),
     (109, "2q1i2f/5ii1/8/1i6/I1i5/1Q6/5I2/4I3 I - r"),
-    (102, "5q2/8/3I1I2/3F1R←2/7I/1I6/2F5/3I2Q1 I - b"),
     (81, SELF_PLAY_LATE_HQ_REPLY_FEN),
-    (77, "q7/i5ii/2i3if/1i6/7f/I6f/F1I4Q/I2I4 - ii r"),
     (84, "1q6/6i1/F1i4r←/1F5f/I7/8/7i/6IQ - i b"),
-    (44, "1q2i1i1/7i/2F5/3F4/8/5f2/4I1I1/R↑I1F1IQ1 I - b"),
     (69, "q3i1i1/2ii4/1i6/8/1I6/F5i1/1I5f/2II3Q - - r"),
+)
+SMOKE_HQ_ESCAPE_CASES = (
+    (
+        75,
+        "q2i3f/4i1i1/1i1i4/8/1F3f2/2I1I1i1/I2I2Q1/1I2I3 - - r",
+        ["b4b3", "a2a1", "b1a2"],
+    ),
+    (
+        102,
+        "5q2/8/3I1I2/3F1R←2/7I/1I6/2F5/3I2Q1 I - b",
+        ["f8e7", "skip"],
+    ),
+    (
+        77,
+        "q7/i5ii/2i3if/1i6/7f/I6f/F1I4Q/I2I4 - ii r",
+        ["a2b3", "a1a2", "a3a4"],
+    ),
+    (
+        44,
+        "1q2i1i1/7i/2F5/3F4/8/5f2/4I1I1/R↑I1F1IQ1 I - b",
+        ["f3f5", "h7h8", "g8h7"],
+    ),
 )
 
 
@@ -946,9 +967,67 @@ class SearchTests(unittest.TestCase):
         )
 
         self.assertLessEqual(result["score"]["red"], -ghq_ai.MATE_SCORE)
-        self.assertEqual(
-            result["principal_variation"][-3:],
-            ["b3b2", "e3c1xb1", "a4a3xa2"],
+        replay = board.copy()
+        for uci in result["principal_variation"]:
+            move = next(
+                move for move in replay.generate_legal_moves() if move.uci() == uci
+            )
+            replay.push(move)
+        self.assertTrue(replay.is_game_over())
+        self.assertEqual(replay.outcome().winner, engine.BLUE)
+
+    def test_two_quiet_setups_preserve_a_paratrooper_hq_mate(self):
+        root = engine.BaseBoard(THREE_ACTION_PARATROOPER_MATE_FEN)
+        reply = root.copy()
+        for uci in ["g7h6", "g6h5", "h8g8"]:
+            move = next(
+                move for move in reply.generate_legal_moves() if move.uci() == uci
+            )
+            reply.push(move)
+
+        searcher = ghq_ai.Searcher(
+            "para_specialist", time_ms=2000, beam_width=6, turn_number=56
+        )
+        first_setup = next(
+            move for move in reply.generate_legal_moves() if move.uci() == "g4h4"
+        )
+        self.assertTrue(
+            searcher.unlocks_immediate_hq_capture(reply, first_setup)
+        )
+
+        searcher.root_key = root.serialize()
+        searcher.verification_mode = True
+        replies = searcher.generate_turn_candidates(reply)
+        self.assertIn(
+            ["g4h4", "f5g5", "b1g6xh6"],
+            [[move.uci() for move in candidate.moves] for candidate in replies],
+        )
+
+    def test_search_escapes_two_quiet_setup_paratrooper_mate(self):
+        board = engine.BaseBoard(THREE_ACTION_PARATROOPER_MATE_FEN)
+        result = ghq_ai.search(
+            board,
+            "para_specialist",
+            time_ms=4000,
+            max_depth=2,
+            beam_width=6,
+            turn_number=56,
+        )
+
+        self.assertEqual(result["search"]["completed_depth_in_turns"], 2)
+        self.assertGreater(result["score"]["current_player"], -ghq_ai.MATE_SCORE)
+        self.assertNotEqual(
+            result["best_turn"]["all_moves"],
+            ["g7h6", "g6h5", "h8g8"],
+        )
+        escaped = engine.BaseBoard(result["best_turn"]["resulting_fen"])
+        searcher = ghq_ai.Searcher(
+            "para_specialist", time_ms=1000, beam_width=6, turn_number=57
+        )
+        self.assertFalse(
+            searcher.has_same_turn_hq_capture(
+                searcher.board_as_turn(escaped, engine.RED)
+            )
         )
 
     def test_completed_smoke_hq_losses_are_recognized_before_the_move(self):
@@ -964,6 +1043,37 @@ class SearchTests(unittest.TestCase):
                 )
                 self.assertLessEqual(
                     result["score"]["current_player"], -ghq_ai.MATE_SCORE
+                )
+
+    def test_completed_smoke_hq_losses_with_escapes_are_reclassified(self):
+        for turn_number, fen, deployed_losing_turn in SMOKE_HQ_ESCAPE_CASES:
+            with self.subTest(turn_number=turn_number, fen=fen):
+                board = engine.BaseBoard(fen)
+                result = ghq_ai.search(
+                    board,
+                    "balanced",
+                    time_ms=3000,
+                    max_depth=2,
+                    beam_width=6,
+                    turn_number=turn_number,
+                )
+                self.assertGreater(
+                    result["score"]["current_player"], -ghq_ai.MATE_SCORE
+                )
+                self.assertNotEqual(
+                    result["best_turn"]["all_moves"], deployed_losing_turn
+                )
+                escaped = engine.BaseBoard(result["best_turn"]["resulting_fen"])
+                searcher = ghq_ai.Searcher(
+                    "balanced",
+                    time_ms=1000,
+                    beam_width=6,
+                    turn_number=turn_number + 1,
+                )
+                self.assertFalse(
+                    searcher.has_same_turn_hq_capture(
+                        searcher.board_as_turn(escaped, escaped.turn)
+                    )
                 )
 
     def test_purposeful_early_stop_finds_escape_from_smoke_hq_mate(self):
@@ -1114,7 +1224,7 @@ class SearchTests(unittest.TestCase):
             )
         )
 
-    def test_forced_one_action_turn_is_verified_against_hq_mate(self):
+    def test_one_action_turn_finds_the_only_hq_escape(self):
         board = engine.BaseBoard(SELF_PLAY_FORCED_SKIP_MATE_FEN)
         result = ghq_ai.search(
             board,
@@ -1124,10 +1234,33 @@ class SearchTests(unittest.TestCase):
             beam_width=6,
             turn_number=86,
         )
-        self.assertEqual(result["best_turn"]["actions"], ["f6g5", "skip"])
-        self.assertLessEqual(result["score"]["current_player"], -ghq_ai.MATE_SCORE)
+        self.assertEqual(result["best_turn"]["actions"], ["f6g7", "skip"])
+        self.assertGreater(result["score"]["current_player"], -ghq_ai.MATE_SCORE)
         self.assertEqual(result["search"]["completed_depth_in_turns"], 2)
         self.assertEqual(result["search"]["fallback_used"], "none")
+
+        escaped = engine.BaseBoard(result["best_turn"]["resulting_fen"])
+        opponent = escaped.turn
+        frontier = [escaped]
+        completed = set()
+        while frontier:
+            partial = frontier.pop()
+            if partial.is_game_over() or partial.turn != opponent:
+                key = partial.serialize()
+                if key in completed:
+                    continue
+                completed.add(key)
+                outcome = partial.outcome()
+                self.assertFalse(
+                    outcome is not None and outcome.winner == opponent,
+                    "the selected HQ escape still permits an immediate win",
+                )
+                continue
+            for move in partial.generate_legal_moves():
+                child = partial.copy()
+                child.push(move)
+                frontier.append(child)
+        self.assertGreater(len(completed), 3000)
 
     def test_three_action_hq_setup_survives_narrow_reply_beam(self):
         board = engine.BaseBoard(SELF_PLAY_THREE_ACTION_HQ_FEN)
@@ -1148,8 +1281,7 @@ class SearchTests(unittest.TestCase):
         candidates = searcher.generate_turn_candidates(board)
         self.assertTrue(
             any(
-                [move.uci() for move in candidate.moves]
-                == ["e3d2", "d4c3xc2", "e4e3xe2"]
+                len(candidate.moves) <= 3
                 and candidate.board.outcome() is not None
                 and candidate.board.outcome().winner == engine.BLUE
                 for candidate in candidates

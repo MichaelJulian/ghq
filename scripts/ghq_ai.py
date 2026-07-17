@@ -850,6 +850,7 @@ class Searcher:
         self.value_cache: Dict[str, float] = {}
         self.safety_cache: Dict[Tuple[str, bool], Tuple[float, float, float]] = {}
         self.immediate_hq_capture_cache: Dict[str, bool] = {}
+        self.same_turn_hq_capture_cache: Dict[str, bool] = {}
         self.root_key: Optional[str] = None
         self.root_fallback: Optional[TurnCandidate] = None
         self.root_ranked_turns: List[Tuple[float, TurnCandidate]] = []
@@ -1506,9 +1507,16 @@ class Searcher:
         )
         max_direct_critical = 0.0
         max_other_hanging = 0.0
+        same_turn_hq_loss = False
         friendly_non_hq = own & ~board.hq
         for position, _ in action_positions[:12]:
             self.check_time(False)
+            if self.has_same_turn_hq_capture(position):
+                # A three-action HQ combination is just as forced as a direct
+                # capture.  Feeding it into the ordinary critical-risk path
+                # makes complete-turn selection retain an HQ escape instead
+                # of trusting a superficially quiet position.
+                same_turn_hq_loss = True
             for move in position.generate_legal_captures():
                 target = move.capture_preference
                 if target is None or not (engine.BB_SQUARES[target] & own):
@@ -1546,6 +1554,8 @@ class Searcher:
                         PIECE_VALUES.get(board.piece_type_at(target), 0.0),
                     )
 
+        if same_turn_hq_loss:
+            forced_value = max(forced_value, PIECE_VALUES[engine.HQ])
         risk = forced_value + max_direct_critical + max_other_hanging
         result = (risk, forced_value, forced_value + max_direct_critical)
         self.safety_cache[cache_key] = result
@@ -1562,6 +1572,12 @@ class Searcher:
         baseline, _, _ = self.tactical_risk(before, mover)
         risk, forced, critical = self.tactical_risk(after, mover)
         opponent = not mover
+        opponent_turn = (
+            after
+            if after.turn == opponent and after.turn_moves == 0
+            else self.board_as_turn(after, opponent)
+        )
+        loses_hq_this_turn = self.has_same_turn_hq_capture(opponent_turn)
         compensation = max(
             0.0,
             board_material_for(before, opponent) - board_material_for(after, opponent),
@@ -1570,8 +1586,27 @@ class Searcher:
         uncovered = max(0.0, new_risk - compensation)
         # Tactics are objective. Personalities may choose among safe turns but
         # cannot spend an exposed gun/para without verified material return.
-        safe = uncovered <= 0.75 and forced <= compensation + 0.75
-        return TacticalSafety(risk, new_risk, compensation, forced, critical, safe)
+        # An existing mate threat is not a baseline risk the mover may simply
+        # preserve. If the completed turn still permits an HQ capture, it is
+        # objectively unsafe regardless of material compensation.
+        safe = (
+            not loses_hq_this_turn
+            and uncovered <= 0.75
+            and forced <= compensation + 0.75
+        )
+        forced_loss = max(
+            forced,
+            PIECE_VALUES[engine.HQ] if loses_hq_this_turn else 0.0,
+        )
+        critical_loss = max(critical, forced_loss)
+        return TacticalSafety(
+            risk,
+            new_risk,
+            compensation,
+            forced_loss,
+            critical_loss,
+            safe,
+        )
 
     @staticmethod
     def points_toward_home(color: bool, orientation: Optional[int]) -> bool:
@@ -1743,6 +1778,33 @@ class Searcher:
         self.immediate_hq_capture_cache[key] = False
         return False
 
+    def has_same_turn_hq_capture(self, board: engine.BaseBoard) -> bool:
+        """Whether the side to act can force an HQ capture this turn.
+
+        This is deliberately narrower than complete turn enumeration.  The
+        unlock detector examines only setup actions geometrically close to the
+        target HQ, including the two quiet setups needed by a paratrooper mate.
+        It is therefore cheap enough for turn-safety checks while covering the
+        tactical combinations that an atomic-action beam is most likely to
+        discard.
+        """
+        key = board.serialize()
+        cached = self.same_turn_hq_capture_cache.get(key)
+        if cached is not None:
+            return cached
+        if self.has_immediate_hq_capture(board):
+            self.same_turn_hq_capture_cache[key] = True
+            return True
+        if board.turn_moves >= self.max_actions - 1:
+            self.same_turn_hq_capture_cache[key] = False
+            return False
+        for move in board.generate_legal_moves():
+            if self.unlocks_immediate_hq_capture(board, move):
+                self.same_turn_hq_capture_cache[key] = True
+                return True
+        self.same_turn_hq_capture_cache[key] = False
+        return False
+
     def unlocks_immediate_hq_capture(
         self, board: engine.BaseBoard, move: engine.Move
     ) -> bool:
@@ -1763,9 +1825,11 @@ class Searcher:
         ):
             return False
         enemy_hqs = board.pieces(engine.HQ, not board.turn)
+        actions_remaining = self.max_actions - board.turn_moves
+        setup_radius = 2 if actions_remaining >= 3 else 1
         if not any(
-            chebyshev(move.from_square, hq_square) == 1
-            or chebyshev(move.to_square, hq_square) == 1
+            chebyshev(move.from_square, hq_square) <= setup_radius
+            or chebyshev(move.to_square, hq_square) <= setup_radius
             for hq_square in enemy_hqs
         ):
             # HQ-capture setup happens immediately around the target. This
@@ -1784,15 +1848,27 @@ class Searcher:
         if self.has_immediate_hq_capture(child):
             return True
 
-        # Some three-action mates need one more forcing capture before the HQ
-        # capture becomes legal. Example: move an infantry beside the HQ,
-        # capture the defender engaging that infantry, then take the HQ. Only
-        # inspect capture follow-ups and only when two counted actions remain,
-        # keeping this tactical extension narrow and deterministic.
+        # Some three-action mates need one more setup before the HQ capture
+        # becomes legal. That setup is often a capture, but it can also be a
+        # quiet move beside the HQ that opens a paratrooper lane or supplies
+        # the second engagement. Inspect only captures and moves immediately
+        # around the target HQ, and only when two counted actions remain, so
+        # this tactical extension stays narrow and deterministic.
         if child.turn_moves >= self.max_actions - 1:
             return False
         for follow_up in child.generate_legal_moves():
-            if follow_up.capture_preference is None:
+            if follow_up.name in ("AutoCapture", "Skip"):
+                continue
+            near_hq = (
+                follow_up.from_square is not None
+                and follow_up.to_square is not None
+                and any(
+                    chebyshev(follow_up.from_square, hq_square) == 1
+                    or chebyshev(follow_up.to_square, hq_square) == 1
+                    for hq_square in enemy_hqs
+                )
+            )
+            if follow_up.capture_preference is None and not near_hq:
                 continue
             grandchild = child.copy()
             grandchild.push(follow_up)
