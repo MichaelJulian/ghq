@@ -74,6 +74,12 @@ describe("gradient-boosted value model", () => {
     expect(incumbent).toMatch(/^three-actions:incumbent:[0-9a-f]{16}:/);
     expect(challenger).toMatch(/^three-actions:challenger:[0-9a-f]{16}:/);
     expect(challenger).not.toBe(incumbent);
+    const calibrationDataset =
+      CHALLENGER_VALUE_MODEL_METADATA.calibration_dataset_sha256;
+    expect(typeof calibrationDataset).toBe("string");
+    expect(challenger).toContain(
+      `:${(calibrationDataset as string).slice(0, 16)}:`
+    );
   });
 
   it("evaluates an exported tree vector directly", () => {

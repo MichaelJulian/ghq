@@ -16,6 +16,8 @@ interface DurableTrainingSample {
   outcomeValue: number;
   features: number[];
   codeVersion: string;
+  valueModel?: "incumbent" | "challenger";
+  valueModelCheckpoint?: string;
 }
 
 function pairedGameNumber(gameId: string): number {
@@ -191,6 +193,9 @@ async function main() {
           pair_id: record.pairId,
           source: "vercel_self_play",
           code_version: sample.codeVersion,
+          behavior_value_model: sample.valueModel ?? "unknown",
+          behavior_value_model_checkpoint:
+            sample.valueModelCheckpoint ?? "unknown",
           created_at: record.createdAt,
           outcome_reason: "hq-capture",
           turn: sample.turnNumber,

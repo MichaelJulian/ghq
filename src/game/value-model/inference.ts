@@ -53,7 +53,13 @@ export function valueModelCheckpointId(
   version: ValueModelVersion = "incumbent"
 ): string {
   const artifact = modelForRuleset(ruleset, version);
-  const datasetHash = artifact.metadata.dataset_sha256;
+  // Calibration-only challengers intentionally retain the incumbent trees,
+  // so `dataset_sha256` still names the incumbent's original human dataset.
+  // Prefer the calibration dataset hash when present; otherwise distinct
+  // recalibrations can look like the same checkpoint apart from a timestamp.
+  const datasetHash =
+    artifact.metadata.calibration_dataset_sha256 ??
+    artifact.metadata.dataset_sha256;
   const fingerprint =
     typeof datasetHash === "string" ? datasetHash.slice(0, 16) : "unknown";
   const generated = artifact.generated_at ?? "unknown";

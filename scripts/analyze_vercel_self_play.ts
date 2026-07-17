@@ -157,6 +157,8 @@ async function main() {
     loserDecision: {
       turn: number;
       player: string;
+      personality: string;
+      agentId: string;
       fen: string;
       moves: string[];
       score: number;
@@ -287,6 +289,8 @@ async function main() {
         tail: game.decisions.slice(-24).map((decision) => ({
           turn: decision.turnNumber,
           player: decision.player,
+          personality: decision.personality,
+          agentId: decision.agentId,
           fen: decision.fen,
           moves: decision.selectedMoves,
           score: decision.currentPlayerScore,
