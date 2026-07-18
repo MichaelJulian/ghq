@@ -24,6 +24,7 @@ STARTING_FEN = (
 )
 AVOIDABLE_IMMEDIATE_HQ_LOSSES = (
     (59, "qi1i4/i1i3i1/1i3i2/8/F5f1/1FF1f1r↓1/I2I1f2/1I4Q1 - - r"),
+    (76, "3q4/4i1i1/3I4/4F2i/3R↗2II/2I5/1I1I4/I1I1P2Q - - b"),
     (80, "5q2/8/3FI1I1/5I2/2II4/1I6/8/7Q - - b"),
     (90, "7q/8/7F/6F1/4II1I/7I/1I6/I6Q - - b"),
     (85, "1q6/2i5/Fi1i4/2i1ii2/8/6f1/3I2fi/4I1Q1 - - r"),
@@ -112,7 +113,7 @@ class NativeSearchContractTest(unittest.TestCase):
                 )
                 self.assertFalse(
                     verifier.exact_same_turn_hq_capture(
-                        escaped, escaped.turn, [100_000]
+                        escaped, escaped.turn, [500_000]
                     ),
                     result["search"]["best_turn"]["all_moves"],
                 )

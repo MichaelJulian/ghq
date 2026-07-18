@@ -850,6 +850,7 @@ class Searcher:
         self.value_cache: Dict[str, float] = {}
         self.safety_cache: Dict[Tuple[str, bool], Tuple[float, float, float]] = {}
         self.immediate_hq_capture_cache: Dict[str, bool] = {}
+        self.exact_same_turn_hq_capture_cache: Dict[Tuple[str, bool], bool] = {}
         self.hq_survival_probe_nodes = 0
         self.hq_survival_reply_nodes = 0
         self.same_turn_hq_capture_cache: Dict[str, bool] = {}
@@ -2310,6 +2311,10 @@ class Searcher:
         tradeoff: it may call this bounded complete-turn enumeration, but it
         must never certify safety from an incomplete probe.
         """
+        cache_key = (board.serialize(), attacker)
+        cached = self.exact_same_turn_hq_capture_cache.get(cache_key)
+        if cached is not None:
+            return cached
         mover = board.turn
         frontier = [board.copy()]
         seen: set[str] = set()
@@ -2326,6 +2331,7 @@ class Searcher:
             outcome = current.outcome()
             if outcome is not None:
                 if outcome.winner == attacker:
+                    self.exact_same_turn_hq_capture_cache[cache_key] = True
                     return True
                 continue
             if current.turn != mover:
@@ -2341,6 +2347,7 @@ class Searcher:
                 child = current.copy()
                 child.push(move)
                 frontier.append(child)
+        self.exact_same_turn_hq_capture_cache[cache_key] = False
         return False
 
     @staticmethod
@@ -2421,7 +2428,7 @@ class Searcher:
         self,
         root: engine.BaseBoard,
         max_probe_nodes: int = 20_000,
-        max_reply_nodes: int = 100_000,
+        max_reply_nodes: int = 500_000,
     ) -> Optional[Tuple[List[engine.Move], engine.BaseBoard]]:
         """Find and exactly verify a nearby turn that avoids immediate HQ loss.
 
