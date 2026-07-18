@@ -188,6 +188,18 @@ MISSIONLESS_PARA_SURVIVAL_OVERRIDE_FEN = (
     "p5i1/r↓q3i1f/1i1if3/2it↓r↓fi1/1Q3r↓2/IFR↑5/"
     "1H↑1R↑1I2/2P1I3 - - r"
 )
+AVOIDABLE_HQ_LOSS_REGRESSIONS = (
+    (
+        71,
+        "para_specialist",
+        "p5i1/r↓q1i1i2/4f1i1/5f1f/1QF2r↓2/1H↑1R↑4/3R↑I3/8 - - r",
+    ),
+    (
+        107,
+        "tactical_gambler",
+        "q5pr↓/i1i5/1i6/8/3f4/t↓1r↓1i3/QT↑2h←3/8 - - r",
+    ),
+)
 LIVE_MATE_DELAY_REPLY_CASES = (
     (
         99,
@@ -1959,6 +1971,24 @@ class SearchTests(unittest.TestCase):
             ),
             0.0,
         )
+
+    def test_hq_survival_floor_recovers_newly_audited_avoidable_losses(self):
+        for turn_number, personality, fen in AVOIDABLE_HQ_LOSS_REGRESSIONS:
+            with self.subTest(turn_number=turn_number):
+                board = engine.BaseBoard(fen)
+                searcher = ghq_ai.Searcher(
+                    personality,
+                    time_ms=60_000,
+                    beam_width=6,
+                    turn_number=turn_number,
+                )
+
+                survival = searcher.find_hq_survival_turn(board)
+
+                self.assertIsNotNone(survival)
+                moves, escaped = survival
+                self.assertTrue(moves)
+                self.assertFalse(searcher.has_same_turn_hq_capture(escaped))
 
     def test_deterministic_policy_floor_never_moves_a_paratrooper(self):
         board = engine.BaseBoard(MISSIONLESS_PARA_SURVIVAL_OVERRIDE_FEN)

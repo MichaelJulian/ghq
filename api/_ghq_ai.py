@@ -2845,7 +2845,6 @@ class Searcher:
         ]
         seen: set[BoardKey] = set()
         completed: Dict[BoardKey, Tuple[engine.BaseBoard, List[engine.Move]]] = {}
-        reply_budget = [max_reply_nodes]
         probe_nodes = 0
         while frontier and probe_nodes < max_probe_nodes:
             board, line = frontier.pop()
@@ -2915,7 +2914,63 @@ class Searcher:
                 normalized_turn_key(item[1], mover),
             ),
         )
+
+        # Preserve a small, separately verified survival floor before a
+        # complicated top-ranked reply can consume the whole exact budget.
+        # This mattered in a live position where Skip was provably safe in
+        # 15k nodes, while the strongest quick-score candidate remained
+        # inconclusive after 100k. We still search the ranked defenses first;
+        # the minimal line is returned only when those proofs run out of room.
+        certified_minimal: Optional[
+            Tuple[List[engine.Move], engine.BaseBoard]
+        ] = None
+        minimal_moves, minimal_board = deterministic_skip_turn(root)
+        minimal_outcome = minimal_board.outcome()
+        reserved_nodes = min(25_000, max(0, max_reply_nodes // 4))
+        minimal_used = 0
+        if minimal_outcome is not None:
+            if minimal_outcome.winner != (not mover):
+                certified_minimal = (minimal_moves, minimal_board)
+        elif not self.has_same_turn_hq_capture(minimal_board) and reserved_nodes:
+            minimal_budget = [reserved_nodes]
+            minimal_capture = self.exact_same_turn_hq_capture(
+                minimal_board, not mover, minimal_budget
+            )
+            minimal_used = reserved_nodes - minimal_budget[0]
+            if minimal_capture is False:
+                certified_minimal = (minimal_moves, minimal_board)
+
+        reply_budget = [max(0, max_reply_nodes - minimal_used)]
+        certified_minimal_key = (
+            board_key(certified_minimal[1])
+            if certified_minimal is not None
+            else None
+        )
+        certified_minimal_score = (
+            (
+                self.quick_score(certified_minimal[1])
+                if mover == engine.RED
+                else -self.quick_score(certified_minimal[1])
+            )
+            if certified_minimal is not None
+            else -math.inf
+        )
         for board, line in ranked:
+            if (
+                certified_minimal_key is not None
+                and board_key(board) == certified_minimal_key
+            ):
+                continue
+            candidate_score = (
+                self.quick_score(board)
+                if mover == engine.RED
+                else -self.quick_score(board)
+            )
+            if (
+                certified_minimal is not None
+                and candidate_score < certified_minimal_score - 1e-9
+            ):
+                continue
             purpose = self.deadline_safe_turn_purpose_breakdown(
                 root,
                 board,
@@ -2937,8 +2992,8 @@ class Searcher:
             if capture is False:
                 return line, board
             if capture is None:
-                return None
-        return None
+                return certified_minimal
+        return certified_minimal
 
     def unlocks_immediate_hq_capture(
         self, board: engine.BaseBoard, move: engine.Move
