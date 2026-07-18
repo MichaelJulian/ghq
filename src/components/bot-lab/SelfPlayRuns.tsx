@@ -45,6 +45,7 @@ interface RunStatus {
   status: string;
   completedAt?: string;
   result?: GameResult;
+  failure?: { name: string; message: string };
 }
 
 interface StartResponse {
@@ -386,7 +387,9 @@ export function SelfPlayRuns() {
                         ? `${result.outcome.winner ?? "DRAW"} · ${
                             result.outcome.termination
                           } · ${result.decisions.length} turns`
-                        : status?.status ?? "not refreshed"}
+                        : status?.failure
+                          ? `${status.status} · ${status.failure.message}`
+                          : status?.status ?? "not refreshed"}
                     </span>
                   </div>
                 );
