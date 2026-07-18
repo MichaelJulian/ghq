@@ -55,6 +55,58 @@ class NativeValueModelTest(unittest.TestCase):
             "challenger",
         )
 
+    def test_v2_formation_features_match_typescript_fixtures(self) -> None:
+        def position(infantry_squares: list[str]) -> engine.BaseBoard:
+            board = engine.BaseBoard(None)
+            board.clear_board()
+            board.set_piece_at(
+                engine.parse_square("h1"), engine.Piece(engine.HQ, engine.RED)
+            )
+            board.set_piece_at(
+                engine.parse_square("a8"), engine.Piece(engine.HQ, engine.BLUE)
+            )
+            for square in infantry_squares:
+                board.set_piece_at(
+                    engine.parse_square(square),
+                    engine.Piece(engine.INFANTRY, engine.RED),
+                )
+            return board
+
+        vertical = value_model._side_features(
+            position(["f3", "f4", "f5"]), engine.RED
+        )
+        staggered = value_model._side_features(
+            position(["f3", "g4", "h3"]), engine.RED
+        )
+        # These are the same board fixtures and expectations asserted by
+        # src/game/value-model/features.test.ts. Together, the two suites
+        # protect the append-only native/TypeScript inference boundary.
+        expected = {
+            "infantry_vertical_adjacent_pairs": (2.0, 0.0),
+            "infantry_diagonal_adjacent_pairs": (0.0, 2.0),
+            "infantry_same_file_run_excess": (1.0, 0.0),
+            "infantry_distinct_files": (1.0, 3.0),
+            "infantry_frontier_count": (1.0, 1.0),
+        }
+        for name, (vertical_value, staggered_value) in expected.items():
+            self.assertEqual(vertical[name], vertical_value, name)
+            self.assertEqual(staggered[name], staggered_value, name)
+
+        appended_names = {
+            "infantry_vertical_adjacent_pairs",
+            "infantry_diagonal_adjacent_pairs",
+            "infantry_same_file_run_excess",
+            "infantry_isolated_count",
+            "infantry_distinct_files",
+            "infantry_file_span",
+            "infantry_rank_span",
+            "infantry_frontier_count",
+            "material_pair_distance_mean",
+            "material_file_span",
+            "material_rank_span",
+        }
+        self.assertTrue(appended_names.issubset(vertical))
+
 
 if __name__ == "__main__":
     unittest.main()
