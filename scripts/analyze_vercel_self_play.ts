@@ -4,9 +4,17 @@
 import "dotenv/config";
 import { get, list, type ListBlobResultBlob } from "@vercel/blob";
 
-import type { DurableSelfPlayGameResult } from "../src/workflows/self-play-game";
+import {
+  actionMadeProgress,
+  type DurableSelfPlayGameResult,
+} from "../src/workflows/self-play-game";
 import { summarizeValueModelArena } from "../src/game/self-play/arena-results";
 import { partitionColorSwapPairs } from "../src/game/self-play/color-pairs";
+import {
+  extendsStrategicBest,
+  mergeStrategicBest,
+  strategicProgress,
+} from "../src/game/self-play/strategic-progress";
 
 function argumentsFor(name: string): string[] {
   const values: string[] = [];
@@ -116,6 +124,8 @@ async function main() {
     gameId: string;
     turn: number;
     player: string;
+    personality: string;
+    turnsWithoutProgress: number;
     fen: string;
     moves: string[];
     fallback: string;
@@ -126,6 +136,9 @@ async function main() {
     elapsedMs?: number;
     completeTurnsGenerated?: number;
     beamPrunedActions?: number;
+    hqSurvivalProbeNodes?: number;
+    hqSurvivalReplyNodes?: number;
+    recommendation?: string;
   }> = [];
   const historyAvoidanceByTurn: Record<string, number> = {};
   const purposeTelemetry = {
@@ -247,6 +260,11 @@ async function main() {
   let qualityEligibleGames = 0;
 
   for (const game of games) {
+    let turnsWithoutProgress = 0;
+    const strategicBest = {
+      RED: strategicProgress(game.initialFen, "RED"),
+      BLUE: strategicProgress(game.initialFen, "BLUE"),
+    };
     increment(outcomes, game.outcome.winner ?? "DRAW");
     increment(terminations, game.outcome.termination);
     lengths.push(
@@ -319,6 +337,8 @@ async function main() {
             gameId: game.gameId,
             turn: decision.turnNumber,
             player: decision.player,
+            personality: decision.personality,
+            turnsWithoutProgress,
             fen: decision.fen,
             moves: decision.selectedMoves,
             fallback: decision.fallback,
@@ -330,6 +350,11 @@ async function main() {
             completeTurnsGenerated:
               decision.searchTelemetry?.completeTurnsGenerated,
             beamPrunedActions: decision.searchTelemetry?.beamPrunedActions,
+            hqSurvivalProbeNodes:
+              decision.searchTelemetry?.hqSurvivalProbeNodes,
+            hqSurvivalReplyNodes:
+              decision.searchTelemetry?.hqSurvivalReplyNodes,
+            recommendation: decision.recommendationLabel,
           });
         }
       }
@@ -410,6 +435,26 @@ async function main() {
         }
       }
       if (!decision.completedTurn) incompleteTurnDecisions++;
+
+      if (decision.completedTurn) {
+        const currentProgress = strategicProgress(
+          decision.resultingFen,
+          decision.player
+        );
+        const madeStrategicProgress = extendsStrategicBest(
+          strategicBest[decision.player],
+          currentProgress
+        );
+        strategicBest[decision.player] = mergeStrategicBest(
+          strategicBest[decision.player],
+          currentProgress
+        );
+        turnsWithoutProgress =
+          madeStrategicProgress ||
+          decision.selectedMoves.some(actionMadeProgress)
+            ? 0
+            : turnsWithoutProgress + 1;
+      }
       if (
         decision.selectedMoves.filter((move) => !move.startsWith("s")).length >
           3 &&
