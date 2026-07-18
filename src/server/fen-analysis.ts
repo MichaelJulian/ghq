@@ -286,7 +286,15 @@ export function applyHistoryAvoidance(
   const bestScore = candidates[0].score;
   // Early in a quiet spell, preserve normal search quality. As the draw clock
   // grows, permit a larger controlled score sacrifice to break a proven loop.
-  const qualityWindow = 1.25 + 4.75 * stagnation;
+  // A three-action undo cycle is already strong evidence on its first repeat,
+  // so let measured cycle pressure widen the window before the quiet clock is
+  // nearly exhausted. The cap prevents history policy from discarding a large
+  // tactical advantage merely to look different.
+  const cyclePressureWindow = Math.min(
+    3,
+    Math.max(0, selectedPenalty - 1) * 0.5
+  );
+  const qualityWindow = 1.25 + 4.75 * stagnation + cyclePressureWindow;
   const replacement = candidates
     .filter((candidate) => candidate.score >= bestScore - qualityWindow)
     .sort(

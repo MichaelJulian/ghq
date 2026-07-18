@@ -163,6 +163,65 @@ describe("production FEN analysis", () => {
     expect(result.score.current_player).toBe(5.5);
   });
 
+  it("widens early when an entire turn reverses the previous turn", () => {
+    const cycling = {
+      rank: 1,
+      actions: ["d6d7", "a6a7", "f7f6"],
+      all_moves: ["d6d7", "a6a7", "f7f6"],
+      automatic_captures: [],
+      resulting_fen: "cycled-position",
+      score: 18.3915,
+      action_purposes: [],
+      purpose: {
+        backfills: 0,
+        reversals: 0,
+        forcing_gain: 0.79,
+        purposeful_actions: 3,
+        stagnation_progress: 0,
+      },
+    } as unknown as GhqCandidateTurn;
+    const breaker = {
+      ...cycling,
+      rank: 2,
+      actions: ["d6e5", "c7d8↓", "skip"],
+      all_moves: ["d6e5", "c7d8↓", "skip"],
+      resulting_fen: "cycle-breaker",
+      score: 16.4362,
+      purpose: {
+        backfills: 0,
+        reversals: 0,
+        forcing_gain: 2.0375,
+        purposeful_actions: 2,
+        stagnation_progress: 1,
+      },
+    } as unknown as GhqCandidateTurn;
+    const result = {
+      recommendation_label: "best found",
+      best_turn: cycling,
+      principal_variation: cycling.all_moves,
+      candidate_turns: [cycling, breaker],
+      score: { current_player: cycling.score, red: -cycling.score },
+      search: { opening_book_used: false, fallback_used: "none" },
+      exploration: {
+        temperature: 0,
+        seed: 1,
+        selectedRank: 1,
+        candidateCount: 2,
+      },
+    } as unknown as GhqSearchResult;
+
+    applyHistoryAvoidance(
+      result,
+      "BLUE",
+      [],
+      [["d7d6", "a7a6", "f6f7"]],
+      5
+    );
+
+    expect(result.best_turn.resulting_fen).toBe("cycle-breaker");
+    expect(result.recommendation_label).toBe("history avoidance");
+  });
+
   it("rejects cosmetically purposeful shuffles with no durable progress", () => {
     const shuffle = {
       rank: 1,
