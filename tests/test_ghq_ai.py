@@ -1361,6 +1361,94 @@ class SearchTests(unittest.TestCase):
         self.assertTrue(escapes)
         self.assertTrue(any(candidate.tactically_safe for candidate in escapes))
 
+    def test_nonadjacent_interposition_unlocks_a_safe_hq_evacuation(self):
+        board = engine.BaseBoard(
+            "1q6/FF2i1ii/5i1i/8/8/8/1I5Q/I1I1II2 - - b"
+        )
+        searcher = ghq_ai.Searcher(
+            "battery_commander",
+            time_ms=60_000,
+            beam_width=6,
+            turn_number=104,
+        )
+        interpose = next(
+            move for move in board.generate_legal_moves() if move.uci() == "e7d7"
+        )
+        self.assertTrue(searcher.unlocks_hq_escape(board, interpose))
+        self.assertGreater(searcher.move_priority(board, interpose), 8000.0)
+
+        searcher.root_key = board.serialize()
+        searcher.verification_mode = True
+        candidates = searcher.generate_turn_candidates(board)
+        escapes = [
+            candidate
+            for candidate in candidates
+            if "e7d7" in [move.uci() for move in candidate.moves]
+            and "b8c8" in [move.uci() for move in candidate.moves]
+        ]
+        self.assertTrue(escapes)
+        self.assertTrue(all(candidate.tactically_safe for candidate in escapes))
+
+    def test_nonadjacent_infantry_move_unlocks_a_second_hq_evacuation(self):
+        board = engine.BaseBoard(
+            "2Fq3i/2F4i/6i1/8/6i1/1I6/2I4f/2I4Q I - b"
+        )
+        searcher = ghq_ai.Searcher(
+            "battery_commander",
+            time_ms=60_000,
+            beam_width=6,
+            turn_number=98,
+        )
+        setup = next(
+            move for move in board.generate_legal_moves() if move.uci() == "g6f7"
+        )
+        self.assertTrue(searcher.unlocks_hq_escape(board, setup))
+        self.assertGreater(searcher.move_priority(board, setup), 8000.0)
+
+        searcher.root_key = board.serialize()
+        searcher.verification_mode = True
+        candidates = searcher.generate_turn_candidates(board)
+        escapes = [
+            candidate
+            for candidate in candidates
+            if "g6f7" in [move.uci() for move in candidate.moves]
+            and "d8e8" in [move.uci() for move in candidate.moves]
+        ]
+        self.assertTrue(escapes)
+        self.assertTrue(all(candidate.tactically_safe for candidate in escapes))
+
+    def test_stagnation_beam_preserves_multi_piece_hq_encirclement(self):
+        board = engine.BaseBoard(
+            "8/8/5Iq1/8/2I5/1F2I2I/F4I2/7Q - - r"
+        )
+        searcher = ghq_ai.Searcher(
+            "para_specialist",
+            time_ms=60_000,
+            beam_width=6,
+            turn_number=131,
+            stagnation_turns=23,
+        )
+        searcher.root_key = board.serialize()
+        searcher.verification_mode = True
+
+        candidates = searcher.generate_turn_candidates(board)
+
+        self.assertTrue(candidates)
+        self.assertGreaterEqual(
+            max(candidate.progress_score for candidate in candidates), 3.0
+        )
+        self.assertTrue(
+            any(
+                candidate.conveyor_actions == 0
+                and candidate.skip_actions == 0
+                and any(
+                    "advance" in action["roles"]
+                    for action in candidate.action_purposes
+                )
+                for candidate in candidates
+            )
+        )
+
     def test_purpose_filter_cannot_delete_a_quiet_hq_escape(self):
         board = engine.BaseBoard(
             "q2i1i2/3ii3/4f3/8/8/1F6/IF1I1f2/1P2f1Q1 II i r"

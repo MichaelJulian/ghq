@@ -4,10 +4,14 @@ import { FENtoBoardState } from "@/game/notation";
 export interface StrategicProgress {
   frontierRank: number;
   enemyHqDistance: number;
+  enemyHqPressure: number;
 }
 
 /** Monotonic landmarks used to distinguish an approach from a quiet cycle. */
-export function strategicProgress(fen: string, player: Player): StrategicProgress {
+export function strategicProgress(
+  fen: string,
+  player: Player
+): StrategicProgress {
   const { board } = FENtoBoardState(fen);
   const own: Array<[number, number]> = [];
   let enemyHq: [number, number] | undefined;
@@ -36,7 +40,31 @@ export function strategicProgress(fen: string, player: Player): StrategicProgres
           )
         )
       : 8;
-  return { frontierRank, enemyHqDistance };
+  const infantry = own.filter(([row, column]) => {
+    const type = board[row][column]?.type;
+    return (
+      type === "INFANTRY" ||
+      type === "ARMORED_INFANTRY" ||
+      type === "AIRBORNE_INFANTRY"
+    );
+  });
+  const pursuers = infantry.length ? infantry : own;
+  const enemyHqPressure = enemyHq
+    ? pursuers.reduce(
+        (total, [row, column]) =>
+          total +
+          Math.max(
+            0,
+            5 -
+              Math.max(
+                Math.abs(row - enemyHq![0]),
+                Math.abs(column - enemyHq![1])
+              )
+          ),
+        0
+      )
+    : 0;
+  return { frontierRank, enemyHqDistance, enemyHqPressure };
 }
 
 export function extendsStrategicBest(
@@ -45,7 +73,8 @@ export function extendsStrategicBest(
 ): boolean {
   return (
     current.frontierRank > best.frontierRank ||
-    current.enemyHqDistance < best.enemyHqDistance
+    current.enemyHqDistance < best.enemyHqDistance ||
+    current.enemyHqPressure > best.enemyHqPressure
   );
 }
 
@@ -56,5 +85,6 @@ export function mergeStrategicBest(
   return {
     frontierRank: Math.max(best.frontierRank, current.frontierRank),
     enemyHqDistance: Math.min(best.enemyHqDistance, current.enemyHqDistance),
+    enemyHqPressure: Math.max(best.enemyHqPressure, current.enemyHqPressure),
   };
 }

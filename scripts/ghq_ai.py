@@ -852,6 +852,7 @@ class Searcher:
         self.immediate_hq_capture_cache: Dict[str, bool] = {}
         self.same_turn_hq_capture_cache: Dict[str, bool] = {}
         self.hq_defense_move_cache: Dict[Tuple[str, str], bool] = {}
+        self.hq_escape_unlock_move_cache: Dict[Tuple[str, str], bool] = {}
         self.capture_setup_move_cache: Dict[Tuple[str, str], bool] = {}
         self.root_key: Optional[str] = None
         self.root_fallback: Optional[TurnCandidate] = None
@@ -1188,6 +1189,10 @@ class Searcher:
             hq_approach_gain = self.approach_distance(
                 working, mover, hq_only=True
             ) - self.approach_distance(child, mover, hq_only=True)
+            hq_encirclement_gain = (
+                self.hq_encirclement_pressure(child, mover)
+                - self.hq_encirclement_pressure(working, mover)
+            )
             if pressure_gain > 0.05:
                 roles.append("threat")
             if protection_gain > 0.25:
@@ -1198,7 +1203,7 @@ class Searcher:
                 roles.append("mobilize")
             if (
                 self.turn_number > EARLY_GAME_LAST_TURN
-                and max(contact_gain, hq_approach_gain) > 0.0
+                and max(contact_gain, hq_approach_gain, hq_encirclement_gain) > 0.0
             ):
                 roles.append("advance")
             if move.name == "Skip":
@@ -1420,6 +1425,11 @@ class Searcher:
             self.approach_distance(before, mover, hq_only=True)
             - self.approach_distance(after, mover, hq_only=True),
         )
+        hq_encirclement_gain = max(
+            0.0,
+            self.hq_encirclement_pressure(after, mover)
+            - self.hq_encirclement_pressure(before, mover),
+        )
         frontier_gain = max(
             0.0,
             structure_metrics(after, mover)["frontier_rank"]
@@ -1452,6 +1462,7 @@ class Searcher:
             + 0.75 * optionality_gain
             + 0.8 * contact_gain
             + 0.6 * hq_approach_gain
+            + 0.6 * hq_encirclement_gain
         )
         # Formation and optionality can oscillate forever. Only material,
         # tactical pressure, safety, and objective-closing movement count as
@@ -1462,6 +1473,7 @@ class Searcher:
             + 1.0 * protection_gain
             + 2.0 * contact_gain
             + 3.0 * hq_approach_gain
+            + 1.5 * hq_encirclement_gain
             + 1.5 * frontier_gain
         )
         waste = (
@@ -1497,6 +1509,7 @@ class Searcher:
             "optionality_gain": optionality_gain,
             "contact_gain": contact_gain,
             "hq_approach_gain": hq_approach_gain,
+            "hq_encirclement_gain": hq_encirclement_gain,
             "frontier_gain": frontier_gain,
             "congestion_increase": congestion_increase,
             "immobile_units": optionality_metrics(after, mover)["immobile_units"],
@@ -1828,6 +1841,38 @@ class Searcher:
             )
         )
 
+    @staticmethod
+    def hq_encirclement_pressure(board: engine.BaseBoard, color: bool) -> float:
+        """Reward several infantry closing on the opposing HQ, not only the nearest.
+
+        Nearest-piece distance saturates as soon as one infantry reaches the HQ.
+        A winning pursuit still needs the rest of the formation to close the net,
+        especially while a lone HQ is retreating.  Only pieces within four squares
+        contribute, so remote shuffles cannot masquerade as objective progress.
+        """
+        targets = board.occupied_co[not color] & board.hq
+        if not targets:
+            return 0.0
+        own_non_hq = board.occupied_co[color] & ~board.hq
+        pursuers = own_non_hq & (
+            board.infantry | board.armored_infantry | board.airborne_infantry
+        )
+        if not pursuers:
+            pursuers = own_non_hq
+        return float(
+            sum(
+                max(
+                    0,
+                    5
+                    - min(
+                        chebyshev(source, target)
+                        for target in squares(targets)
+                    ),
+                )
+                for source in squares(pursuers)
+            )
+        )
+
     def artillery_target_bonus(self, board: engine.BaseBoard, move: engine.Move) -> float:
         piece_type = self.move_piece_type(board, move)
         if piece_type not in ARTILLERY_TYPES or move.name != "MoveAndOrient":
@@ -1943,47 +1988,73 @@ class Searcher:
     def unlocks_hq_escape(
         self, board: engine.BaseBoard, move: engine.Move
     ) -> bool:
-        """Whether vacating a neighboring square creates an HQ escape.
+        """Whether a quiet action makes a later HQ evacuation safe.
 
-        A direct HQ move already receives forcing priority.  This covers the
-        preceding action when a friendly blocker must first clear the only
-        safe destination, as in ``b7-b6, HQ a8-b7`` from production smoke.
+        The setup may vacate the destination, interpose on an attack lane, or
+        remove a defender that made an already-legal HQ move tactically lose.
+        A direct HQ move receives defense priority separately once safe.
         """
         if (
             move.name in ("AutoCapture", "Skip")
-            or move.from_square is None
-            or move.to_square is None
-            or move.from_square == move.to_square
             or board.turn_moves >= self.max_actions - 1
-            or board.piece_type_at(move.from_square) == engine.HQ
+            or self.move_piece_type(board, move) == engine.HQ
+            or (
+                move.from_square is not None
+                and move.to_square is not None
+                and move.from_square == move.to_square
+            )
         ):
             return False
+        cache_key = (board.serialize(), move.uci())
+        cached = self.hq_escape_unlock_move_cache.get(cache_key)
+        if cached is not None:
+            return cached
         own_hqs = board.pieces(engine.HQ, board.turn)
-        if not any(
-            chebyshev(move.from_square, hq_square) == 1
-            for hq_square in own_hqs
-        ):
+        vacates_adjacent_square = bool(
+            move.from_square is not None
+            and any(
+                chebyshev(move.from_square, hq_square) == 1
+                for hq_square in own_hqs
+            )
+        )
+        supports_evacuation = bool(
+            board.turn_moves == 0
+            and move.to_square is not None
+            and any(
+                chebyshev(move.to_square, hq_square) <= 2
+                for hq_square in own_hqs
+            )
+        )
+        if not vacates_adjacent_square and not supports_evacuation:
+            self.hq_escape_unlock_move_cache[cache_key] = False
             return False
         _, baseline_forced, _ = self.tactical_risk(board, board.turn)
         if baseline_forced < PIECE_VALUES[engine.HQ]:
+            self.hq_escape_unlock_move_cache[cache_key] = False
             return False
 
         child = board.copy()
         child.push(move)
         if child.turn != board.turn or child.is_game_over():
+            self.hq_escape_unlock_move_cache[cache_key] = False
             return False
         for hq_move in child.generate_legal_moves():
             if (
                 hq_move.from_square is None
-                or hq_move.to_square != move.from_square
                 or child.piece_type_at(hq_move.from_square) != engine.HQ
+                or (
+                    not supports_evacuation
+                    and hq_move.to_square != move.from_square
+                )
             ):
                 continue
             escaped = child.copy()
             escaped.push(hq_move)
             _, escaped_forced, _ = self.tactical_risk(escaped, board.turn)
             if escaped_forced < PIECE_VALUES[engine.HQ]:
+                self.hq_escape_unlock_move_cache[cache_key] = True
                 return True
+        self.hq_escape_unlock_move_cache[cache_key] = False
         return False
 
     def resolves_hq_threat(
@@ -2239,6 +2310,30 @@ class Searcher:
             priority += 20.0
         elif piece_type in ARTILLERY_TYPES:
             priority += 10.0
+        if (
+            self.stagnation_factor() > 0.0
+            and piece_type in infantry_types
+            and move.from_square is not None
+            and move.to_square is not None
+        ):
+            enemy_hqs = board.occupied_co[not board.turn] & board.hq
+            if enemy_hqs:
+                before_distance = min(
+                    chebyshev(move.from_square, target)
+                    for target in squares(enemy_hqs)
+                )
+                after_distance = min(
+                    chebyshev(move.to_square, target)
+                    for target in squares(enemy_hqs)
+                )
+                # Preserve objective-closing infantry from each source in the
+                # narrow verification beam.  This avoids six equivalent moves
+                # by a remote armored infantry crowding out an HQ encirclement.
+                priority += (
+                    120.0
+                    * self.stagnation_factor()
+                    * max(0, before_distance - after_distance)
+                )
         if move.name == "MoveAndOrient":
             priority += 5.0
         if self.turn_number <= EARLY_GAME_LAST_TURN and move.capture_preference is None:
