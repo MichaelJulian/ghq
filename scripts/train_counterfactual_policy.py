@@ -223,6 +223,11 @@ def load_counterfactual_reports(
         for pair in report.get("pairs", []):
             if not pair.get("confident"):
                 continue
+            # Newer analyzers distinguish raw separation from a trustworthy
+            # training label (replicate agreement, fallback quality, etc.).
+            # Preserve compatibility with older reports that predate the flag.
+            if "trainingEligible" in pair and not pair.get("trainingEligible"):
+                continue
             root_id = str(pair["rootId"])
             if root_id in seen_roots:
                 continue
@@ -542,6 +547,7 @@ def main() -> None:
         "dataset_sha256": dataset_hash,
         "pairs": len(records),
         "source_games": len({record["source_game_id"] for record in records}),
+        "root_ids": sorted({str(record["root_id"]) for record in records}),
         "root_players": dict(root_player_counts),
         "phases": dict(phase_counts),
         "split_pairs": {name: int(len(indices)) for name, indices in splits.items()},
@@ -589,6 +595,7 @@ def main() -> None:
             "counterfactual_selected_feature_count": selected["feature_count"],
             "counterfactual_feature_scope": args.feature_scope,
             "counterfactual_approved_for_arena": approved,
+            "counterfactual_training_root_ids": report["root_ids"],
         },
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)

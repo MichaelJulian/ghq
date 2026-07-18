@@ -460,6 +460,7 @@ def main() -> None:
     )
 
     root_players = Counter(record["root_player"] for record in records)
+    root_ids = sorted({str(record["root_id"]) for record in records})
     phases = Counter(
         "early"
         if record["source_turn_number"] <= 24
@@ -474,6 +475,7 @@ def main() -> None:
         "dataset_sha256": dataset_hash,
         "pairs": len(records),
         "source_games": len({record["source_game_id"] for record in records}),
+        "root_ids": root_ids,
         "terminal_pairs": sum(bool(record["terminal_pair"]) for record in records),
         "root_players": dict(root_players),
         "phases": dict(phases),
@@ -522,6 +524,7 @@ def main() -> None:
             "counterfactual_pairs": len(records),
             "counterfactual_terminal_pairs": report["terminal_pairs"],
             "counterfactual_approved_for_arena": approved,
+            "counterfactual_training_root_ids": root_ids,
         },
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)

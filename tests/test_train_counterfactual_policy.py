@@ -77,6 +77,43 @@ class CounterfactualPolicyTrainingTests(unittest.TestCase):
             _, records, _ = load_counterfactual_reports([path])
         self.assertEqual(records, [])
 
+    def test_analyzer_ineligible_pair_is_not_admitted(self):
+        branches = [
+            {
+                "status": "completed",
+                "candidateRank": rank,
+                "featuresV3": [float(rank), 0.0],
+                "rolloutValue": value,
+                "valueSource": "terminal",
+                "unverifiedFallbackDecisions": 0,
+            }
+            for rank, value in ((1, 1.0), (2, 0.0))
+        ]
+        report = {
+            "format": "ghq-counterfactual-rollout-report-v1",
+            "featureSchema": ["base", "shape"],
+            "expectedBranches": 2,
+            "completedBranches": 2,
+            "missingBranches": 0,
+            "pairs": [
+                {
+                    "confident": True,
+                    "trainingEligible": False,
+                    "trainingExclusion": "replicate-disagreement",
+                    "rootId": "root-1",
+                    "sourceGameId": "game-1",
+                    "rootPlayer": "RED",
+                    "sourceTurnNumber": 12,
+                    "branches": branches,
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "replicate-disagreement.json"
+            path.write_text(json.dumps(report))
+            _, records, _ = load_counterfactual_reports([path])
+        self.assertEqual(records, [])
+
     def test_offset_correction_learns_without_recalibrating_baseline(self):
         vectors = np.asarray([[1.0], [-1.0], [2.0], [-2.0]])
         labels = np.asarray([1.0, 0.0, 1.0, 0.0])

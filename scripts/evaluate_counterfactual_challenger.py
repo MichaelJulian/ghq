@@ -72,6 +72,16 @@ def subset_metrics(
     return binary_metrics(labels, probabilities)
 
 
+def training_root_overlap(
+    records: Sequence[Dict[str, Any]], artifact: Dict[str, Any]
+) -> tuple[bool, List[str]]:
+    raw = artifact.get("metadata", {}).get("counterfactual_training_root_ids")
+    if not isinstance(raw, list) or not all(isinstance(root, str) for root in raw):
+        return False, []
+    evaluation_roots = {str(record["root_id"]) for record in records}
+    return True, sorted(evaluation_roots.intersection(raw))
+
+
 def main() -> None:
     args = parse_args()
     feature_names, records, dataset_hash = load_counterfactual_reports(args.report)
@@ -83,6 +93,9 @@ def main() -> None:
         )
     baseline_raw = json.loads(args.baseline.read_text(encoding="utf-8"))
     challenger_raw = json.loads(args.challenger.read_text(encoding="utf-8"))
+    provenance_available, overlapping_roots = training_root_overlap(
+        records, challenger_raw
+    )
     baseline = align_append_only_baseline_schema(baseline_raw, feature_names)
     challenger = align_append_only_baseline_schema(challenger_raw, feature_names)
     labels = np.asarray([record["label"] for record in records], dtype=np.float64)
@@ -137,6 +150,8 @@ def main() -> None:
             int(changed.sum()) >= 1,
             int(improved.sum()) >= int(worsened.sum()),
             terminal_gate,
+            provenance_available,
+            not overlapping_roots,
             *player_gates.values(),
         ]
     )
@@ -164,7 +179,10 @@ def main() -> None:
         "gates": {
             "root_players": player_gates,
             "terminal_retention": terminal_gate,
+            "training_root_provenance_available": provenance_available,
+            "training_evaluation_roots_disjoint": not overlapping_roots,
         },
+        "training_evaluation_root_overlap": overlapping_roots,
         "approved_for_arena": approved,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

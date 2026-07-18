@@ -4,6 +4,7 @@ import numpy as np
 
 from scripts.evaluate_counterfactual_challenger import (
     artifact_pair_probabilities,
+    training_root_overlap,
 )
 
 
@@ -28,6 +29,21 @@ class CounterfactualChallengerEvaluationTests(unittest.TestCase):
         ]
         probability = artifact_pair_probabilities(records, artifact)
         self.assertAlmostEqual(probability[0], 1.0 / (1.0 + np.exp(-4.0)))
+
+    def test_training_root_overlap_requires_provenance_and_detects_leakage(self):
+        records = [{"root_id": "fresh"}, {"root_id": "leaked"}]
+        self.assertEqual(training_root_overlap(records, {"metadata": {}}), (False, []))
+        self.assertEqual(
+            training_root_overlap(
+                records,
+                {
+                    "metadata": {
+                        "counterfactual_training_root_ids": ["old", "leaked"]
+                    }
+                },
+            ),
+            (True, ["leaked"]),
+        )
 
 
 if __name__ == "__main__":
