@@ -126,6 +126,8 @@ SELF_PLAY_AVOIDABLE_IMMEDIATE_HQ_LOSSES = (
     (90, "7q/8/7F/6F1/4II1I/7I/1I6/I6Q - - b"),
     (85, "1q6/2i5/Fi1i4/2i1ii2/8/6f1/3I2fi/4I1Q1 - - r"),
     (117, "q7/1I6/8/8/2if1i2/4f3/8/4Q3 - - r"),
+    (77, "8/q7/1i6/I1i5/6i1/5i2/5f2/4i2Q - - r"),
+    (57, "8/q1i5/1i6/2i5/2F3i1/1F1I3f/I1I5/1I1I1fQ1 - - r"),
 )
 SELF_PLAY_FORCED_IMMEDIATE_HQ_LOSS = (
     76,
@@ -1371,6 +1373,53 @@ class SearchTests(unittest.TestCase):
                         escaped, not mover, reply_budget
                     )
                 )
+
+    def test_exact_hq_capture_moves_remove_only_irrelevant_artillery_clones(self):
+        board = engine.BaseBoard("q7/8/8/8/8/8/8/R6Q R - r")
+        moves = list(ghq_ai.Searcher.exact_hq_capture_moves(board))
+
+        self.assertNotIn("Skip", {move.name for move in moves})
+        self.assertFalse(
+            any(
+                move.name == "MoveAndOrient"
+                and move.from_square == move.to_square
+                for move in moves
+            )
+        )
+        self.assertFalse(
+            any(
+                move.name == "Reinforce"
+                and move.unit_type is not None
+                and engine.is_artillery(move.unit_type)
+                for move in moves
+            )
+        )
+        relocations = [
+            (move.from_square, move.to_square)
+            for move in moves
+            if move.name == "MoveAndOrient"
+        ]
+        self.assertEqual(len(relocations), len(set(relocations)))
+        self.assertEqual(
+            {move.uci() for move in moves},
+            {"h1h2", "h1g2", "h1g1", "a1b2↑", "a1a2↑", "a1b1↑"},
+        )
+
+    def test_exact_hq_capture_order_checks_the_hq_capture_first(self):
+        board = engine.BaseBoard("q7/FF6/8/8/8/8/8/7Q - - r")
+        moves = list(ghq_ai.Searcher.exact_hq_capture_moves(board))
+        moves.sort(
+            key=lambda move: ghq_ai.Searcher.exact_hq_capture_move_priority(
+                board, move
+            )
+        )
+        self.assertEqual(moves[-1].uci(), "b7b8xa8")
+        searcher = ghq_ai.Searcher(
+            "balanced", time_ms=1000, beam_width=6, turn_number=1
+        )
+        self.assertTrue(
+            searcher.exact_same_turn_hq_capture(board, engine.RED, [2])
+        )
 
     def test_exact_survival_floor_does_not_invent_an_escape_from_forced_mate(self):
         turn_number, fen = SELF_PLAY_FORCED_IMMEDIATE_HQ_LOSS

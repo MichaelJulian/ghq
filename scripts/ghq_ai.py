@@ -15,7 +15,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "public"))
@@ -2319,11 +2319,92 @@ class Searcher:
                 continue
             if current.turn != mover:
                 continue
-            for move in current.generate_legal_moves():
+            moves = list(self.exact_hq_capture_moves(current))
+            moves.sort(
+                key=lambda move: (
+                    self.exact_hq_capture_move_priority(current, move),
+                    normalized_move_uci(move, mover),
+                )
+            )
+            for move in moves:
                 child = current.copy()
                 child.push(move)
                 frontier.append(child)
         return False
+
+    @staticmethod
+    def exact_hq_capture_move_priority(
+        board: engine.BaseBoard, move: engine.Move
+    ) -> Tuple[int, int, int]:
+        """Order exact attack branches without changing their membership."""
+        enemy_hqs = list(board.pieces(engine.HQ, not board.turn))
+        target = move.capture_preference
+        captures_hq = bool(
+            target is not None and board.piece_type_at(target) == engine.HQ
+        )
+        captures_piece = target is not None
+        piece_type = Searcher.move_piece_type(board, move)
+        is_infantry_action = bool(
+            piece_type is not None and engine.is_infantry(piece_type)
+        )
+        destination_distance = min(
+            (
+                chebyshev(move.to_square, hq_square)
+                for hq_square in enemy_hqs
+                if move.to_square is not None
+            ),
+            default=9,
+        )
+        # The DFS pops the greatest key first.  Immediate captures lead, then
+        # other captures and infantry actions closest to the target HQ.
+        return (
+            3 if captures_hq else 2 if captures_piece else 1 if is_infantry_action else 0,
+            -destination_distance,
+            1 if move.name in ("Move", "Reinforce", "AutoCapture") else 0,
+        )
+
+    @staticmethod
+    def exact_hq_capture_moves(
+        board: engine.BaseBoard,
+    ) -> Iterator[engine.Move]:
+        """Yield an exact, equivalence-collapsed HQ-capture action set.
+
+        This is not a tactical heuristic.  It removes only actions that cannot
+        help the mover capture an HQ during the current turn:
+
+        * Skip ends the turn without taking a piece.
+        * A stationary artillery rotation neither vacates nor captures.
+        * Reinforcing non-infantry only occupies a square; it cannot join an
+          infantry capture cluster or remove an enemy.
+        * Artillery relocation orientations are equivalent for this question.
+          Friendly bombardment is not resolved until the mover's next turn,
+          and friendly orientation does not change the mover's legal squares.
+
+        Relocating artillery and HQ pieces remain because vacating a square can
+        unlock a later infantry action.  Infantry capture variants also remain
+        distinct.  The resulting search is therefore complete for same-turn HQ
+        capture while avoiding hundreds of irrelevant orientation branches.
+        """
+        artillery_relocations: set[Tuple[int, int]] = set()
+        for move in board.generate_legal_moves():
+            if move.name == "Skip":
+                continue
+            if (
+                move.name == "Reinforce"
+                and move.unit_type is not None
+                and not engine.is_infantry(move.unit_type)
+            ):
+                continue
+            if move.name == "MoveAndOrient":
+                if move.from_square is None or move.to_square is None:
+                    continue
+                if move.from_square == move.to_square:
+                    continue
+                relocation = (move.from_square, move.to_square)
+                if relocation in artillery_relocations:
+                    continue
+                artillery_relocations.add(relocation)
+            yield move
 
     def find_hq_survival_turn(
         self,

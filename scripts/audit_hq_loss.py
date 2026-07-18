@@ -78,11 +78,75 @@ def same_turn_hq_win(
             continue
         if current.turn != mover:
             continue
-        for move in current.generate_legal_moves():
+        moves_to_try = list(exact_hq_capture_moves(current))
+        moves_to_try.sort(key=lambda move: exact_hq_capture_move_priority(current, move))
+        for move in moves_to_try:
             child = current.copy()
             child.push(move)
             frontier.append((child, (*moves, move.uci())))
     return None
+
+
+def exact_hq_capture_moves(board: engine.BaseBoard) -> Iterator[engine.Move]:
+    """Collapse only actions provably irrelevant to same-turn HQ capture."""
+    artillery_relocations: set[tuple[int, int]] = set()
+    for move in board.generate_legal_moves():
+        if move.name == "Skip":
+            continue
+        if (
+            move.name == "Reinforce"
+            and move.unit_type is not None
+            and not engine.is_infantry(move.unit_type)
+        ):
+            continue
+        if move.name == "MoveAndOrient":
+            if move.from_square is None or move.to_square is None:
+                continue
+            if move.from_square == move.to_square:
+                continue
+            relocation = (move.from_square, move.to_square)
+            if relocation in artillery_relocations:
+                continue
+            artillery_relocations.add(relocation)
+        yield move
+
+
+def exact_hq_capture_move_priority(
+    board: engine.BaseBoard, move: engine.Move
+) -> tuple[int, int, int, str]:
+    enemy_hqs = list(board.pieces(engine.HQ, not board.turn))
+    target = move.capture_preference
+    captures_hq = bool(
+        target is not None and board.piece_type_at(target) == engine.HQ
+    )
+    captures_piece = target is not None
+    piece_type = (
+        move.unit_type
+        if move.name == "Reinforce"
+        else board.piece_type_at(move.from_square)
+        if move.from_square is not None
+        else None
+    )
+    is_infantry_action = bool(
+        piece_type is not None and engine.is_infantry(piece_type)
+    )
+    destination_distance = min(
+        (
+            max(
+                abs(engine.square_file(move.to_square) - engine.square_file(hq_square)),
+                abs(engine.square_rank(move.to_square) - engine.square_rank(hq_square)),
+            )
+            for hq_square in enemy_hqs
+            if move.to_square is not None
+        ),
+        default=9,
+    )
+    return (
+        3 if captures_hq else 2 if captures_piece else 1 if is_infantry_action else 0,
+        -destination_distance,
+        1 if move.name in ("Move", "Reinforce", "AutoCapture") else 0,
+        move.uci(),
+    )
 
 
 def audit_hq_loss(
