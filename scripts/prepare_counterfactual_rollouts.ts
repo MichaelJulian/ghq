@@ -61,6 +61,7 @@ async function main() {
 
   const roots = selectCounterfactualRoots(games, {
     maxRoots: integerArgument("--max-roots", 8, 1, 16),
+    skipRoots: integerArgument("--skip-roots", 0, 0, 10_000),
     maxRootsPerGame: integerArgument("--max-per-game", 2, 1, 8),
     candidatesPerRoot: integerArgument("--candidates", 2, 2, 4),
     maxScoreMargin: numberArgument("--max-margin", 1, 0.000_001, 100),

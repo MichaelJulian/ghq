@@ -32,6 +32,7 @@ export interface CounterfactualRoot {
 
 export interface CounterfactualSelectionOptions {
   maxRoots?: number;
+  skipRoots?: number;
   maxRootsPerGame?: number;
   candidatesPerRoot?: number;
   maxScoreMargin?: number;
@@ -92,18 +93,28 @@ export function selectCounterfactualRoots(
 ): CounterfactualRoot[] {
   const options: Required<CounterfactualSelectionOptions> = {
     maxRoots: rawOptions.maxRoots ?? 8,
+    skipRoots: rawOptions.skipRoots ?? 0,
     maxRootsPerGame: rawOptions.maxRootsPerGame ?? 2,
     candidatesPerRoot: rawOptions.candidatesPerRoot ?? 2,
     maxScoreMargin: rawOptions.maxScoreMargin ?? 1,
     minTurnNumber: rawOptions.minTurnNumber ?? 5,
   };
   for (const [name, value] of Object.entries(options)) {
-    if (!Number.isFinite(value) || value <= 0) {
-      throw new RangeError(`${name} must be positive`);
+    if (
+      !Number.isFinite(value) ||
+      value < 0 ||
+      (name !== "skipRoots" && value === 0)
+    ) {
+      throw new RangeError(
+        `${name} must be ${name === "skipRoots" ? "non-negative" : "positive"}`
+      );
     }
   }
   if (!Number.isSafeInteger(options.maxRoots)) {
     throw new RangeError("maxRoots must be an integer");
+  }
+  if (!Number.isSafeInteger(options.skipRoots)) {
+    throw new RangeError("skipRoots must be an integer");
   }
   if (!Number.isSafeInteger(options.maxRootsPerGame)) {
     throw new RangeError("maxRootsPerGame must be an integer");
@@ -181,8 +192,9 @@ export function selectCounterfactualRoots(
     )
   );
   const selected: CounterfactualRoot[] = [];
+  const selectionLimit = options.skipRoots + options.maxRoots;
   const perGame = new Map<string, number>();
-  while (selected.length < options.maxRoots) {
+  while (selected.length < selectionLimit) {
     let added = false;
     for (const bucket of phaseBuckets) {
       let root: CounterfactualRoot | undefined;
@@ -198,11 +210,11 @@ export function selectCounterfactualRoots(
       selected.push(root);
       perGame.set(root.sourceGameId, (perGame.get(root.sourceGameId) ?? 0) + 1);
       added = true;
-      if (selected.length >= options.maxRoots) break;
+      if (selected.length >= selectionLimit) break;
     }
     if (!added) break;
   }
-  return selected;
+  return selected.slice(options.skipRoots, selectionLimit);
 }
 
 export function counterfactualRootSeed(

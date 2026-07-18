@@ -146,4 +146,26 @@ describe("counterfactual rollout selection", () => {
       "BLUE",
     ]);
   });
+
+  it("pages through the balanced root order without repeating roots", () => {
+    const games = Array.from({ length: 8 }, (_, index) =>
+      game(`game-${index}`, [
+        decision(10 + index, [1, 1.1], index % 2 ? "BLUE" : "RED"),
+      ])
+    );
+    const first = selectCounterfactualRoots(games, {
+      maxRoots: 4,
+      maxRootsPerGame: 1,
+    });
+    const second = selectCounterfactualRoots(games, {
+      maxRoots: 4,
+      skipRoots: 4,
+      maxRootsPerGame: 1,
+    });
+
+    expect(second).toHaveLength(4);
+    expect(new Set([...first, ...second].map((root) => root.rootId)).size).toBe(
+      8
+    );
+  });
 });
