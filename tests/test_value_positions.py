@@ -67,6 +67,30 @@ class ValuePositionReplayTests(unittest.TestCase):
         ]
         self.assertEqual(extractor.committed_turns(log)[1], [])
 
+    def test_resignation_exposes_pending_moves_without_committing_them(self):
+        move = {
+            "type": "Move",
+            "args": [[6, 0], [5, 0]],
+            "playerID": "0",
+        }
+        log = [
+            {
+                "turn": 3,
+                "action": {"type": "MAKE_MOVE", "payload": move},
+            },
+            {
+                "turn": 3,
+                "action": {
+                    "type": "MAKE_MOVE",
+                    "payload": {"type": "Resign", "args": [], "playerID": "0"},
+                },
+            },
+        ]
+        committed, terminal_turn, pending = extractor.resolved_turn_actions(log)
+        self.assertEqual(committed, {})
+        self.assertEqual(terminal_turn, 3)
+        self.assertEqual(pending, [move])
+
 
 if __name__ == "__main__":
     unittest.main()

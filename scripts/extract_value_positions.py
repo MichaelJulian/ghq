@@ -10,7 +10,7 @@ import sys
 from collections import defaultdict
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict, Iterable, List
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
 ELIGIBLE_REASONS = {"by HQ capture", "by resignation"}
@@ -44,11 +44,14 @@ def is_coordinate(value: Any) -> bool:
     )
 
 
-def committed_turns(log: Iterable[Dict[str, Any]]) -> Dict[int, List[Dict[str, Any]]]:
-    """Resolve boardgame.io undo/redo history into the actions committed by Skip."""
+def resolved_turn_actions(
+    log: Iterable[Dict[str, Any]],
+) -> Tuple[Dict[int, List[Dict[str, Any]]], Optional[int], List[Dict[str, Any]]]:
+    """Resolve committed turns plus any moves made before a terminal resign."""
     done: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
     redo: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
     committed: Dict[int, List[Dict[str, Any]]] = {}
+    terminal_turn: Optional[int] = None
     for entry in log:
         turn = entry.get("turn")
         if not isinstance(turn, int):
@@ -58,6 +61,8 @@ def committed_turns(log: Iterable[Dict[str, Any]]) -> Dict[int, List[Dict[str, A
         if action.get("type") == "MAKE_MOVE":
             if payload.get("type") == "Skip":
                 committed[turn] = deepcopy(done[turn])
+            elif payload.get("type") == "Resign":
+                terminal_turn = turn
             elif payload.get("type") not in {"Resign", "AcceptDraw", "OfferDraw"}:
                 done[turn].append(deepcopy(payload))
                 redo[turn].clear()
@@ -67,6 +72,13 @@ def committed_turns(log: Iterable[Dict[str, Any]]) -> Dict[int, List[Dict[str, A
         elif action.get("type") == "REDO":
             if redo[turn]:
                 done[turn].append(redo[turn].pop())
+    pending = deepcopy(done[terminal_turn]) if terminal_turn is not None else []
+    return committed, terminal_turn, pending
+
+
+def committed_turns(log: Iterable[Dict[str, Any]]) -> Dict[int, List[Dict[str, Any]]]:
+    """Resolve boardgame.io undo/redo history into actions committed by Skip."""
+    committed, _, _ = resolved_turn_actions(log)
     return committed
 
 
@@ -163,7 +175,7 @@ def extract_game(row: Dict[str, str], minimum_turns: int) -> List[Dict[str, Any]
             captures_by_turn[turn].append(capture.get("coordinate"))
 
     snapshots: List[Dict[str, Any]] = []
-    turns = committed_turns(log)
+    turns, terminal_turn, terminal_actions = resolved_turn_actions(log)
     for turn, actions in sorted(turns.items()):
         for coordinate in captures_by_turn.get(turn, []):
             remove_at(board, coordinate)
@@ -199,7 +211,24 @@ def extract_game(row: Dict[str, str], minimum_turns: int) -> List[Dict[str, Any]
     # integrity check. HQ-capture games end without a final Skip and therefore
     # intentionally stop one partial turn before the stored final board.
     if reason == "by resignation" and normalized_board(board) != normalized_board(final_g["board"]):
-        raise ReplayError("reconstructed resignation board does not match final board")
+        # A player may resign after moving but before committing with Skip.
+        # Those moves explain the stored terminal board, but are deliberately
+        # excluded from snapshots because they do not form a complete turn.
+        terminal_board = deepcopy(board)
+        terminal_red_reserve = deepcopy(red_reserve)
+        terminal_blue_reserve = deepcopy(blue_reserve)
+        for payload in terminal_actions:
+            apply_move(
+                terminal_board,
+                terminal_red_reserve,
+                terminal_blue_reserve,
+                payload,
+            )
+        if normalized_board(terminal_board) != normalized_board(final_g["board"]):
+            for coordinate in captures_by_turn.get(terminal_turn, []):
+                remove_at(terminal_board, coordinate)
+        if normalized_board(terminal_board) != normalized_board(final_g["board"]):
+            raise ReplayError("reconstructed resignation board does not match final board")
     return snapshots
 
 
