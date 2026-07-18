@@ -173,13 +173,34 @@ describe("gradient-boosted value model", () => {
       policy_correction: {
         feature_indices: [VALUE_FEATURE_NAMES.length],
         coefficients: [0.5],
+        scale: 0.25,
       },
     };
     const features = extractValueFeaturesV2(position, "RED");
     expect(predictFromFeatures(features, base)).toBeCloseTo(0.5, 12);
     expect(policyAdjustmentFromFeatures(features, base)).toBeCloseTo(
-      0.5 * features[VALUE_FEATURE_NAMES.length],
+      0.125 * features[VALUE_FEATURE_NAMES.length],
       12
+    );
+  });
+
+  it("rejects policy correction scales outside the arena-safe range", () => {
+    const artifact: ValueModelArtifact = {
+      format: "ghq-gradient-boosted-value-v1",
+      feature_names: [...VALUE_FEATURE_NAMES_V2],
+      base_raw_score: 0,
+      learning_rate: 0.1,
+      calibration: { kind: "platt", scale: 1, intercept: 0 },
+      trees: [],
+      metadata: {},
+      policy_correction: {
+        feature_indices: [0],
+        coefficients: [1],
+        scale: 1.1,
+      },
+    };
+    expect(() => assertValueModelCompatible(artifact)).toThrow(
+      "policy correction is invalid"
     );
   });
 

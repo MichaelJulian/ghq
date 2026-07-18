@@ -693,11 +693,14 @@ def exported_policy_adjustments(
         return np.zeros(len(vectors), dtype=np.float64)
     indices = np.asarray(correction["feature_indices"], dtype=np.int64)
     coefficients = np.asarray(correction["coefficients"], dtype=np.float64)
+    scale = float(correction.get("scale", 1.0))
     if len(indices) != len(coefficients):
         raise ValueError("policy correction schema mismatch")
     if len(indices) and (indices.min() < 0 or indices.max() >= vectors.shape[1]):
         raise ValueError("policy correction feature index is out of range")
-    return vectors[:, indices] @ coefficients
+    if not np.isfinite(scale) or not 0.0 <= scale <= 1.0:
+        raise ValueError("policy correction scale is invalid")
+    return scale * (vectors[:, indices] @ coefficients)
 
 
 def main() -> None:

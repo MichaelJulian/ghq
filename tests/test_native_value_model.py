@@ -173,12 +173,25 @@ class NativeValueModelTest(unittest.TestCase):
             "policy_correction": {
                 "feature_indices": [0],
                 "coefficients": [0.5],
+                "scale": 0.25,
             },
         }
         self.assertEqual(value_model.predict_from_features([2.0], artifact), 0.5)
         self.assertEqual(
-            value_model.policy_adjustment_from_features([2.0], artifact), 1.0
+            value_model.policy_adjustment_from_features([2.0], artifact), 0.25
         )
+
+    def test_policy_adjustment_rejects_unsafe_scale(self) -> None:
+        artifact = {
+            "feature_names": ["test"],
+            "policy_correction": {
+                "feature_indices": [0],
+                "coefficients": [0.5],
+                "scale": 1.1,
+            },
+        }
+        with self.assertRaisesRegex(ValueError, "scale is invalid"):
+            value_model.policy_adjustment_from_features([2.0], artifact)
 
 
 if __name__ == "__main__":

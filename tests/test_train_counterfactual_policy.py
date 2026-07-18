@@ -193,6 +193,7 @@ class CounterfactualPolicyTrainingTests(unittest.TestCase):
             "dataset",
             {},
             correction_target="policy",
+            policy_scale=0.25,
         )
         vectors = np.asarray([[0.0, 3.0], [0.0, -1.0]])
         expected = 1.0 / (1.0 + np.exp(-(0.8 * 0.4 - 0.2)))
@@ -201,6 +202,7 @@ class CounterfactualPolicyTrainingTests(unittest.TestCase):
         )
         self.assertNotIn("linear_correction", artifact)
         self.assertEqual(artifact["policy_correction"]["feature_indices"], [1])
+        self.assertEqual(artifact["policy_correction"]["scale"], 0.25)
 
     def test_grouped_split_never_leaks_source_games(self):
         records = [

@@ -59,6 +59,12 @@ def parse_args() -> argparse.Namespace:
             "target directly changes calibrated win probabilities."
         ),
     )
+    parser.add_argument(
+        "--policy-scale",
+        type=float,
+        default=1.0,
+        help="Multiplier in [0, 1] applied only to an exported policy head.",
+    )
     parser.add_argument("--require-pass", action="store_true")
     return parser.parse_args()
 
@@ -157,9 +163,12 @@ def export_policy_correction(
     dataset_hash: str,
     metadata: Dict[str, Any],
     correction_target: str = "value",
+    policy_scale: float = 1.0,
 ) -> Dict[str, Any]:
     if correction_target not in ("policy", "value"):
         raise ValueError(f"unsupported correction target: {correction_target}")
+    if correction_target == "policy" and not 0.0 <= policy_scale <= 1.0:
+        raise ValueError("policy scale must be between zero and one")
     correction_key = (
         "policy_correction" if correction_target == "policy" else "linear_correction"
     )
@@ -178,6 +187,8 @@ def export_policy_correction(
         "feature_indices": feature_indices.astype(int).tolist(),
         "coefficients": coefficients.astype(float).tolist(),
     }
+    if correction_target == "policy":
+        artifact[correction_key]["scale"] = float(policy_scale)
     artifact["metadata"] = {
         **baseline.get("metadata", {}),
         **metadata,
@@ -760,6 +771,7 @@ def main() -> None:
             "counterfactual_selected_feature_count": selected["feature_count"],
             "counterfactual_feature_scope": args.feature_scope,
             "counterfactual_correction_target": args.correction_target,
+            "counterfactual_policy_scale": args.policy_scale,
             "counterfactual_approved_for_external_holdout": (
                 ready_for_external_holdout
             ),
@@ -770,6 +782,7 @@ def main() -> None:
             ],
         },
         correction_target=args.correction_target,
+        policy_scale=args.policy_scale,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.training_report.parent.mkdir(parents=True, exist_ok=True)

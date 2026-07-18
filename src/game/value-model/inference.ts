@@ -44,6 +44,8 @@ export interface ValueModelArtifact {
   policy_correction?: {
     feature_indices: number[];
     coefficients: number[];
+    /** Arena-tunable multiplier; omitted historical artifacts mean 1. */
+    scale?: number;
   };
   /** Shallow post-calibration trees trained under a pairwise ranking loss. */
   tree_correction?: {
@@ -158,7 +160,11 @@ export function assertValueModelCompatible(
       ) ||
       policyCorrection.coefficients.some(
         (coefficient) => !Number.isFinite(coefficient)
-      )
+      ) ||
+      (policyCorrection.scale !== undefined &&
+        (!Number.isFinite(policyCorrection.scale) ||
+          policyCorrection.scale < 0 ||
+          policyCorrection.scale > 1))
     ) {
       throw new Error("GHQ value model policy correction is invalid");
     }
@@ -269,7 +275,7 @@ export function policyAdjustmentFromFeatures(
   }
   const correction = artifact.policy_correction;
   if (!correction) return 0;
-  return correction.feature_indices.reduce(
+  return (correction.scale ?? 1) * correction.feature_indices.reduce(
     (score, featureIndex, index) =>
       score + correction.coefficients[index] * features[featureIndex],
     0

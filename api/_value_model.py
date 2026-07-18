@@ -668,6 +668,7 @@ def policy_adjustment_from_features(
         return 0.0
     indices = correction["feature_indices"]
     coefficients = correction["coefficients"]
+    scale = float(correction.get("scale", 1.0))
     if len(indices) != len(coefficients):
         raise ValueError("Native GHQ policy correction schema mismatch")
     if any(
@@ -675,7 +676,9 @@ def policy_adjustment_from_features(
         for index in indices
     ):
         raise ValueError("Native GHQ policy correction feature is out of range")
-    return float(
+    if not math.isfinite(scale) or not 0.0 <= scale <= 1.0:
+        raise ValueError("Native GHQ policy correction scale is invalid")
+    return scale * float(
         sum(
             coefficient * features[index]
             for index, coefficient in zip(indices, coefficients)
