@@ -7,6 +7,7 @@ import type {
 } from "@/game/analysis/types";
 import type { Player } from "@/game/engine";
 import type { ValueModelVersion } from "@/game/value-model/inference";
+import { getVercelOidcTokenSync } from "@vercel/oidc";
 
 interface NativeSearchRequest {
   fen?: string;
@@ -42,18 +43,28 @@ export interface NativeDescriptionResponse {
   evaluation: SearchEvaluationBreakdown;
 }
 
-/** Resolve the native function through the public production project domain. */
+function vercelDeploymentHost(): string | undefined {
+  const deployment = process.env.VERCEL_URL?.trim();
+  return deployment
+    ? deployment.replace(/^https?:\/\//, "").replace(/\/$/, "")
+    : undefined;
+}
+
+/**
+ * Resolve native search through the immutable deployment that owns the
+ * workflow step. This lets a durable run finish on one engine revision even
+ * after a newer deployment takes over the production alias.
+ */
 export function nativeSearchUrl(): string | undefined {
   const configured = process.env.GHQ_NATIVE_SEARCH_URL?.trim();
   if (configured) {
     return configured.endsWith("/") ? configured.slice(0, -1) : configured;
   }
-  // Preview deployments are protected by default, so an internal fetch to
-  // their public hostname is redirected to SSO. Explicit configuration can
-  // still exercise native search in preview. The immutable VERCEL_URL may be
-  // protected in production too, while VERCEL_PROJECT_PRODUCTION_URL is the
-  // stable public project domain and is guaranteed by Vercel at runtime.
+  // Preview workflows still require explicit configuration because their
+  // environment-to-environment Trusted Sources policy is project-specific.
   if (process.env.VERCEL_ENV !== "production") return undefined;
+  const deployment = vercelDeploymentHost();
+  if (deployment) return `https://${deployment}/api/native_search`;
   const production = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
   return production
     ? `https://${production.replace(/^https?:\/\//, "")}/api/native_search`
@@ -61,9 +72,20 @@ export function nativeSearchUrl(): string | undefined {
 }
 
 async function postNative<T>(url: string, body: object): Promise<T> {
+  const deployment = vercelDeploymentHost();
+  const deploymentProtected =
+    process.env.VERCEL_ENV === "production" &&
+    deployment !== undefined &&
+    new URL(url).host === deployment;
+  const headers: Record<string, string> = {
+    "content-type": "application/json",
+  };
+  if (deploymentProtected) {
+    headers["x-vercel-trusted-oidc-idp-token"] = getVercelOidcTokenSync();
+  }
   const response = await fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers,
     body: JSON.stringify(body),
     cache: "no-store",
   });

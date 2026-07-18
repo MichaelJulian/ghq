@@ -9,6 +9,7 @@ const ORIGINAL = {
   deployment: process.env.VERCEL_URL,
   production: process.env.VERCEL_PROJECT_PRODUCTION_URL,
   commit: process.env.VERCEL_GIT_COMMIT_SHA,
+  oidc: process.env.VERCEL_OIDC_TOKEN,
 };
 
 afterEach(() => {
@@ -23,6 +24,8 @@ afterEach(() => {
   else process.env.VERCEL_PROJECT_PRODUCTION_URL = ORIGINAL.production;
   if (ORIGINAL.commit === undefined) delete process.env.VERCEL_GIT_COMMIT_SHA;
   else process.env.VERCEL_GIT_COMMIT_SHA = ORIGINAL.commit;
+  if (ORIGINAL.oidc === undefined) delete process.env.VERCEL_OIDC_TOKEN;
+  else process.env.VERCEL_OIDC_TOKEN = ORIGINAL.oidc;
   jest.restoreAllMocks();
 });
 
@@ -81,21 +84,75 @@ describe("native search endpoint resolution", () => {
     expect(nativeSearchUrl()).toBeUndefined();
   });
 
-  it("targets the public production project domain", () => {
+  it("targets the immutable production deployment", () => {
     delete process.env.GHQ_NATIVE_SEARCH_URL;
     process.env.VERCEL_ENV = "production";
     process.env.VERCEL_URL = "deployment.example.test";
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = "public.example.test";
+    expect(nativeSearchUrl()).toBe(
+      "https://deployment.example.test/api/native_search"
+    );
+  });
+
+  it("falls back to the public project domain without deployment metadata", () => {
+    delete process.env.GHQ_NATIVE_SEARCH_URL;
+    delete process.env.VERCEL_URL;
+    process.env.VERCEL_ENV = "production";
     process.env.VERCEL_PROJECT_PRODUCTION_URL = "public.example.test";
     expect(nativeSearchUrl()).toBe(
       "https://public.example.test/api/native_search"
     );
   });
 
-  it("does not fall back to a protected immutable production domain", () => {
-    delete process.env.GHQ_NATIVE_SEARCH_URL;
-    delete process.env.VERCEL_PROJECT_PRODUCTION_URL;
+  it("authenticates immutable deployment requests with the Vercel OIDC token", async () => {
     process.env.VERCEL_ENV = "production";
-    process.env.VERCEL_URL = "protected.example.test";
-    expect(nativeSearchUrl()).toBeUndefined();
+    process.env.VERCEL_URL = "deployment.example.test";
+    process.env.VERCEL_GIT_COMMIT_SHA = "current-revision";
+    const payload = Buffer.from(
+      JSON.stringify({ exp: Math.floor(Date.now() / 1_000) + 3_600 })
+    ).toString("base64url");
+    process.env.VERCEL_OIDC_TOKEN = `eyJhbGciOiJub25lIn0.${payload}.signature`;
+    const fetchMock = jest.spyOn(global, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          codeVersion: "current-revision",
+          search: {
+            search: {
+              backend: "native-python",
+              value_model_backend: "native-gbdt",
+              value_model_version: "incumbent",
+              code_version: "current-revision",
+            },
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    await searchNatively(
+      nativeSearchUrl()!,
+      { fen: "position" },
+      {
+        personality: "balanced",
+        turnNumber: 1,
+        timeMs: 1_000,
+        maxDepth: 2,
+        beamWidth: 6,
+        openingSeed: 1,
+        maxActions: 3,
+        stagnationTurns: 0,
+        valueModel: "incumbent",
+      }
+    );
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://deployment.example.test/api/native_search",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          "x-vercel-trusted-oidc-idp-token":
+            process.env.VERCEL_OIDC_TOKEN,
+        }),
+      })
+    );
   });
 });
