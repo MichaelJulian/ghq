@@ -11,6 +11,7 @@ import {
 const key: SearchCacheKey = {
   serializedPosition: "position",
   searchCodeVersion: "commit-a",
+  searchBackend: "pyodide",
   personality: "balanced",
   turnNumber: 12,
   timeMs: 20_000,
@@ -46,6 +47,12 @@ describe("persistent early search cache", () => {
   it("isolates cached searches produced by different code revisions", () => {
     expect(searchCachePathname(key)).not.toBe(
       searchCachePathname({ ...key, searchCodeVersion: "commit-b" })
+    );
+  });
+
+  it("never reuses a Pyodide result in the native runtime", () => {
+    expect(searchCachePathname(key)).not.toBe(
+      searchCachePathname({ ...key, searchBackend: "native-python" })
     );
   });
 

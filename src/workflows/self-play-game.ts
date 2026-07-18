@@ -89,6 +89,10 @@ export interface DurableSelfPlayDecision {
   fallback: "none" | "safe" | "seeded";
   /** Missing on historical records created before recommendation telemetry. */
   recommendationLabel?: string;
+  /** Exact runtime used for the behavior search. */
+  searchBackend?: "pyodide" | "native-python";
+  /** Exact value-inference bridge used inside that search. */
+  searchValueModelBackend?: "typescript-callback" | "native-gbdt";
   explorationSeed: number;
   explorationTemperature: number;
   features: number[];
@@ -247,6 +251,8 @@ async function playDurableTurn(
     timedOut: analysis.search.search.timed_out,
     fallback: analysis.search.search.fallback_used,
     recommendationLabel: analysis.search.recommendation_label,
+    searchBackend: analysis.search.search.backend,
+    searchValueModelBackend: analysis.search.search.value_model_backend,
     explorationSeed: input.explorationSeed,
     explorationTemperature: input.competitor.explorationTemperature,
     features: extractValueFeatures(

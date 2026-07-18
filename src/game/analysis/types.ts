@@ -153,6 +153,10 @@ export interface GhqSearchResult {
     hq_survival_reply_nodes?: number;
     /** True when a shared reply-verified early search was reused. */
     persistent_cache_hit?: boolean;
+    /** Runtime provenance for training and production diagnostics. */
+    backend?: "pyodide" | "native-python";
+    value_model_backend?: "typescript-callback" | "native-gbdt";
+    value_model_version?: ValueModelVersion;
   };
   evaluation: {
     before: SearchEvaluationBreakdown;

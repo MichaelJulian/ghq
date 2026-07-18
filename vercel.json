@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/native_search.py": {
+      "maxDuration": 60,
+      "excludeFiles": "{.data/**,.next/**,.venv/**,artifacts/**,docs/**,migrations/**,node_modules/**,pg_track_events/**,tests/**,**/__pycache__/**,**/*.test.*,requirements-train.txt}"
+    }
+  }
+}

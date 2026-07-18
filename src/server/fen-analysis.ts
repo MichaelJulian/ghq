@@ -19,6 +19,11 @@ import { evaluatePersonalityPosition } from "@/game/value-model/styled-evaluatio
 import { PERSONALITIES } from "@/game/value-model/personalities";
 import { loadServerPyodide } from "@/server/pyodide";
 import {
+  describeNatively,
+  nativeSearchUrl,
+  searchNatively,
+} from "@/server/native-search";
+import {
   persistSearch,
   readPersistedSearch,
   type SearchCacheKey,
@@ -398,6 +403,158 @@ function toSearchResult(result: PythonProxy): GhqSearchResult {
 
 export class AnalysisInputError extends Error {}
 
+interface ResolvedAnalysisConfig {
+  personality: PersonalityId;
+  valueModel: ValueModelVersion;
+  turnNumber: number;
+  timeMs: number;
+  maxDepth: number;
+  beamWidth: number;
+  maxActions: 2 | 3;
+  explorationTemperature: number;
+  explorationSeed: number;
+  turnsWithoutProgress: number;
+}
+
+async function analyzeFenNatively(
+  request: FenAnalysisRequest,
+  url: string,
+  config: ResolvedAnalysisConfig
+): Promise<FenAnalysisResponse> {
+  if (config.maxActions !== 3) {
+    throw new AnalysisInputError(
+      "Native production search requires the three-action GHQ ruleset"
+    );
+  }
+  const searchCacheKey: SearchCacheKey = {
+    serializedPosition:
+      request.serializedState ?? `fen:${request.fen as string}`,
+    searchCodeVersion:
+      process.env.VERCEL_GIT_COMMIT_SHA ?? "local-unversioned-search",
+    searchBackend: "native-python",
+    personality: config.personality,
+    turnNumber: config.turnNumber,
+    timeMs: config.timeMs,
+    maxDepth: config.maxDepth,
+    beamWidth: config.beamWidth,
+    maxActions: config.maxActions,
+    stagnationTurns: config.turnsWithoutProgress,
+    valueModel: config.valueModel,
+    valueModelCheckpoint: valueModelCheckpointId(
+      "three-actions",
+      config.valueModel
+    ),
+  };
+  let nativeResponse:
+    | Awaited<ReturnType<typeof searchNatively>>
+    | undefined;
+  let rawSearchResult = await readPersistedSearch(searchCacheKey);
+  if (rawSearchResult) {
+    rawSearchResult = structuredClone(rawSearchResult);
+    rawSearchResult.search.persistent_cache_hit = true;
+  } else {
+    nativeResponse = await searchNatively(url, request, {
+      personality: config.personality,
+      turnNumber: config.turnNumber,
+      timeMs: config.timeMs,
+      maxDepth: config.maxDepth,
+      beamWidth: config.beamWidth,
+      openingSeed: config.explorationSeed,
+      maxActions: 3,
+      stagnationTurns: config.turnsWithoutProgress,
+      valueModel: config.valueModel,
+    });
+    rawSearchResult = nativeResponse.search;
+    await persistSearch(searchCacheKey, rawSearchResult);
+  }
+
+  if (
+    rawSearchResult.search.backend !== "native-python" ||
+    rawSearchResult.search.value_model_backend !== "native-gbdt" ||
+    rawSearchResult.search.value_model_version !== config.valueModel
+  ) {
+    throw new Error("Cached GHQ search failed native runtime provenance");
+  }
+  const fen = rawSearchResult.input_fen;
+  const sideToMove: Player =
+    rawSearchResult.side_to_move === "red" ? "RED" : "BLUE";
+  const searchResult = applyHistoryAvoidance(
+    applyExploration(
+      rawSearchResult,
+      sideToMove,
+      config.explorationTemperature,
+      config.explorationSeed
+    ),
+    sideToMove,
+    (request.recentFens ?? []).filter(
+      (value): value is string => typeof value === "string"
+    ),
+    (request.previousOwnTurns ?? [request.previousOwnTurnMoves ?? []])
+      .filter((turn): turn is string[] => Array.isArray(turn))
+      .map((turn) =>
+        turn.filter((value): value is string => typeof value === "string")
+      ),
+    config.turnsWithoutProgress
+  );
+  const selectedFen = searchResult.best_turn.resulting_fen;
+  const selectedPosition =
+    nativeResponse && nativeResponse.resultingFen === selectedFen
+      ? {
+          fen: nativeResponse.resultingFen,
+          serializedState: nativeResponse.serializedState,
+          outcome: nativeResponse.outcome,
+          evaluation: nativeResponse.afterEvaluation,
+        }
+      : await describeNatively(
+          url,
+          selectedFen,
+          config.personality,
+          config.turnNumber + 1
+        );
+  if (selectedPosition.fen !== selectedFen) {
+    throw new Error("Native GHQ replay did not preserve the selected position");
+  }
+  searchResult.evaluation.after_best_turn = selectedPosition.evaluation;
+
+  return {
+    fen,
+    resultingFen: selectedFen,
+    serializedState: selectedPosition.serializedState,
+    sideToMove,
+    turnNumber: config.turnNumber,
+    personality: config.personality,
+    effectiveConfig: {
+      timeMs: config.timeMs,
+      maxDepth: config.maxDepth,
+      beamWidth: config.beamWidth,
+      explorationTemperature: config.explorationTemperature,
+      explorationSeed: config.explorationSeed,
+      maxActions: config.maxActions,
+      valueModel: config.valueModel,
+    },
+    outcome: selectedPosition.outcome,
+    model: {
+      before: modelOutput(
+        fen,
+        config.turnNumber,
+        sideToMove,
+        config.personality,
+        config.maxActions,
+        config.valueModel
+      ),
+      after: modelOutput(
+        selectedFen,
+        config.turnNumber + 1,
+        sideToMove,
+        config.personality,
+        config.maxActions,
+        config.valueModel
+      ),
+    },
+    search: searchResult,
+  };
+}
+
 export async function analyzeFen(
   request: FenAnalysisRequest
 ): Promise<FenAnalysisResponse> {
@@ -444,6 +601,23 @@ export async function analyzeFen(
     400,
     "turnsWithoutProgress"
   );
+  const resolvedConfig: ResolvedAnalysisConfig = {
+    personality,
+    valueModel,
+    turnNumber,
+    timeMs,
+    maxDepth,
+    beamWidth,
+    maxActions: maxActions as 2 | 3,
+    explorationTemperature,
+    explorationSeed,
+    turnsWithoutProgress,
+  };
+  const nativeUrl = nativeSearchUrl();
+  if (nativeUrl) {
+    return analyzeFenNatively(request, nativeUrl, resolvedConfig);
+  }
+
   const { engine, search } = await loadAnalysisEngine();
   let board: PythonBoard;
   try {
@@ -463,6 +637,7 @@ export async function analyzeFen(
       serializedPosition: board.serialize(),
       searchCodeVersion:
         process.env.VERCEL_GIT_COMMIT_SHA ?? "local-unversioned-search",
+      searchBackend: "pyodide",
       personality,
       turnNumber,
       timeMs,
@@ -496,6 +671,9 @@ export async function analyzeFen(
       );
       try {
         rawSearchResult = toSearchResult(resultProxy);
+        rawSearchResult.search.backend = "pyodide";
+        rawSearchResult.search.value_model_backend = "typescript-callback";
+        rawSearchResult.search.value_model_version = valueModel;
       } finally {
         destroyProxy(resultProxy);
       }

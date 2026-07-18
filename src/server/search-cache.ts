@@ -11,6 +11,7 @@ export interface SearchCacheKey {
   serializedPosition: string;
   /** Exact deployed search implementation; prevents cross-code reuse. */
   searchCodeVersion: string;
+  searchBackend: "pyodide" | "native-python";
   personality: PersonalityId;
   turnNumber: number;
   timeMs: number;
