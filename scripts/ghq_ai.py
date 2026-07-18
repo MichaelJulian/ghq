@@ -852,6 +852,8 @@ class Searcher:
         self.immediate_hq_capture_cache: Dict[str, bool] = {}
         self.same_turn_hq_capture_cache: Dict[str, bool] = {}
         self.hq_defense_move_cache: Dict[Tuple[str, str], bool] = {}
+        self.hq_defense_unlock_move_cache: Dict[Tuple[str, str], bool] = {}
+        self.atomic_hq_defense_cache: Dict[str, bool] = {}
         self.hq_escape_unlock_move_cache: Dict[Tuple[str, str], bool] = {}
         self.capture_setup_move_cache: Dict[Tuple[str, str], bool] = {}
         self.root_key: Optional[str] = None
@@ -1148,8 +1150,13 @@ class Searcher:
                 roles.append("capture_setup")
             if include_tactical_roles and self.unlocks_hq_escape(working, move):
                 roles.append("hq_escape_unlock")
-            if include_tactical_roles and self.resolves_hq_threat(working, move):
+            resolves_hq = (
+                include_tactical_roles and self.resolves_hq_threat(working, move)
+            )
+            if resolves_hq:
                 roles.append("hq_defense")
+            elif include_tactical_roles and self.unlocks_hq_defense(working, move):
+                roles.append("hq_defense_unlock")
             if include_tactical_roles and self.unlocks_immediate_hq_capture(
                 working, move
             ):
@@ -2136,6 +2143,106 @@ class Searcher:
         self.hq_defense_move_cache[cache_key] = resolved
         return resolved
 
+    def unlocks_hq_defense(
+        self, board: engine.BaseBoard, move: engine.Move
+    ) -> bool:
+        """Whether this setup makes a one-action HQ defense available.
+
+        Some GHQ checks cannot be answered by a single atomic action. One
+        defender may first have to interpose, engage an attacker, or open a
+        home-rank reinforcement square before the second action actually
+        removes the forced HQ loss. Detect that pair before the atomic beam
+        discards its quiet first half.
+        """
+        if (
+            move.name in ("AutoCapture", "Skip")
+            or board.turn_moves != 0
+        ):
+            return False
+        cache_key = (board.serialize(), move.uci())
+        cached = self.hq_defense_unlock_move_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        if self.has_atomic_hq_defense(board):
+            # The ordinary check-evasion and HQ-escape paths are both cheaper
+            # and stronger. Do not spend deadline budget looking for a
+            # two-action substitute when an atomic answer already exists.
+            self.hq_defense_unlock_move_cache[cache_key] = False
+            return False
+        own_hqs = board.pieces(engine.HQ, board.turn)
+        if not own_hqs or not any(
+            square is not None
+            and any(chebyshev(square, hq_square) <= 3 for hq_square in own_hqs)
+            for square in (move.from_square, move.to_square)
+        ):
+            # A two-action HQ defense is assembled around the threatened HQ.
+            # This gate avoids an O(actions^2) tactical probe for every remote
+            # shuffle in an otherwise large late-game position.
+            self.hq_defense_unlock_move_cache[cache_key] = False
+            return False
+        _, baseline_forced, _ = self.tactical_risk(board, board.turn)
+        if baseline_forced < PIECE_VALUES[engine.HQ]:
+            self.hq_defense_unlock_move_cache[cache_key] = False
+            return False
+
+        child = board.copy()
+        child.push(move)
+        if child.turn != board.turn or child.is_game_over():
+            self.hq_defense_unlock_move_cache[cache_key] = False
+            return False
+        _, child_forced, _ = self.tactical_risk(child, board.turn)
+        if child_forced < PIECE_VALUES[engine.HQ]:
+            # The action is a direct defense, not merely its setup.
+            self.hq_defense_unlock_move_cache[cache_key] = False
+            return False
+        follow_ups = [
+            follow_up
+            for follow_up in child.generate_legal_moves()
+            if follow_up.name not in ("AutoCapture", "Skip")
+            and any(
+                square is not None
+                and any(
+                    chebyshev(square, hq_square) <= 3
+                    for hq_square in own_hqs
+                )
+                for square in (follow_up.from_square, follow_up.to_square)
+            )
+        ]
+        follow_ups.sort(
+            key=lambda follow_up: (
+                0 if follow_up.capture_preference is not None else 1,
+                0 if follow_up.name == "Reinforce" else 1,
+                min(
+                    chebyshev(square, hq_square)
+                    for square in (follow_up.from_square, follow_up.to_square)
+                    if square is not None
+                    for hq_square in own_hqs
+                ),
+                follow_up.uci(),
+            )
+        )
+        unlocked = any(
+            self.resolves_hq_threat(child, follow_up)
+            for follow_up in follow_ups[:16]
+        )
+        self.hq_defense_unlock_move_cache[cache_key] = unlocked
+        return unlocked
+
+    def has_atomic_hq_defense(self, board: engine.BaseBoard) -> bool:
+        """Whether one legal action resolves the HQ threat or unlocks escape."""
+        key = board.serialize()
+        cached = self.atomic_hq_defense_cache.get(key)
+        if cached is not None:
+            return cached
+        available = any(
+            self.resolves_hq_threat(board, candidate)
+            or self.unlocks_hq_escape(board, candidate)
+            for candidate in board.generate_legal_moves()
+            if candidate.name not in ("AutoCapture", "Skip")
+        )
+        self.atomic_hq_defense_cache[key] = available
+        return available
+
     def has_immediate_hq_capture(self, board: engine.BaseBoard) -> bool:
         """Whether the side to act can take the enemy HQ with one legal action."""
         key = board.serialize()
@@ -2340,10 +2447,15 @@ class Searcher:
             # generic infantry shuffle. It must survive even the narrow
             # verification beam.
             priority += 8200.0
-        if self.resolves_hq_threat(board, move):
+        resolves_hq = self.resolves_hq_threat(board, move)
+        if resolves_hq:
             # Interpositions and engagements that turn off a forced HQ loss
             # are check evasions even when they capture nothing.
             priority += 8500.0
+        elif self.unlocks_hq_defense(board, move):
+            # Preserve the quiet first half of a two-action check evasion.
+            # It is almost as forcing as the direct interposition that follows.
+            priority += 8300.0
         if self.unlocks_immediate_hq_capture(board, move):
             # A quiet action that makes mate legal on the next action is more
             # forcing than ordinary captures and must not be lost to the
@@ -2546,6 +2658,7 @@ class Searcher:
                     in (
                         "hq_escape",
                         "hq_escape_unlock",
+                        "hq_defense_unlock",
                         "hq_defense",
                         "capture_setup",
                         "airborne_extraction",
@@ -2607,6 +2720,7 @@ class Searcher:
         extraction_unlocks: List[str] = []
         capture_setups: List[str] = []
         hq_escape_unlocks: List[str] = []
+        hq_defense_unlocks: List[str] = []
         hq_defenses: List[str] = []
         hq_capture_unlocks: List[str] = []
         for move in moves:
@@ -2617,8 +2731,11 @@ class Searcher:
                 capture_setups.append(move.uci())
             if self.unlocks_hq_escape(working, move):
                 hq_escape_unlocks.append(move.uci())
-            if self.resolves_hq_threat(working, move):
+            resolves_hq = self.resolves_hq_threat(working, move)
+            if resolves_hq:
                 hq_defenses.append(move.uci())
+            elif self.unlocks_hq_defense(working, move):
+                hq_defense_unlocks.append(move.uci())
             if self.unlocks_immediate_hq_capture(working, move):
                 hq_capture_unlocks.append(move.uci())
             if move.from_square is not None and move.to_square is not None:
@@ -2655,6 +2772,7 @@ class Searcher:
         keys.extend(("airborne_unlock", uci) for uci in extraction_unlocks)
         keys.extend(("capture_setup", uci) for uci in capture_setups)
         keys.extend(("hq_escape_unlock", uci) for uci in hq_escape_unlocks)
+        keys.extend(("hq_defense_unlock", uci) for uci in hq_defense_unlocks)
         keys.extend(("hq_defense", uci) for uci in hq_defenses)
         keys.extend(("hq_capture_unlock", uci) for uci in hq_capture_unlocks)
         for unlock in extraction_unlocks:
@@ -3354,6 +3472,17 @@ class Searcher:
         if cleaned_by_position:
             candidates.extend(cleaned_by_position.values())
             self.purposeful_early_stops_generated += len(cleaned_by_position)
+        if is_root_generation and self.root_fallback is not None:
+            fallback_key = self.root_fallback.board.serialize()
+            if not any(
+                candidate.board.serialize() == fallback_key
+                for candidate in candidates
+            ):
+                # The deadline seed is generated before minimax precisely so
+                # a coordinated legal defense survives narrow root pruning.
+                # Make that safety floor an actual minimax branch instead of
+                # using it only when root generation returns nothing at all.
+                candidates.append(self.root_fallback)
         candidates.sort(
             key=lambda item: self.candidate_sort_key(
                 item, original_turn, is_root_generation
@@ -3452,6 +3581,7 @@ class Searcher:
                 in (
                     "hq_escape",
                     "hq_escape_unlock",
+                    "hq_defense_unlock",
                     "hq_defense",
                     "capture_setup",
                     "unlock_and_extract",
@@ -3678,6 +3808,12 @@ def purposeful_complete_turn_seed(
         turn_number=turn_number,
         max_actions=max_actions,
     )
+    _, starting_forced_loss, _ = fallback_rules.tactical_risk(
+        board, original_turn
+    )
+    started_under_hq_threat = (
+        starting_forced_loss >= PIECE_VALUES[engine.HQ]
+    )
     while working.turn == original_turn and not working.is_game_over():
         legal = list(working.generate_legal_moves())
         if not legal:
@@ -3790,11 +3926,26 @@ def purposeful_complete_turn_seed(
                 # completed even one root. Never let ordinary positional gain
                 # displace a move already proven to remove a forced HQ loss.
                 utility += MATE_SCORE
+            elif "hq_defense_unlock" in latest_roles:
+                # A coordinated defense may require a quiet setup before the
+                # interposition or engagement becomes legal. Keep that first
+                # half ahead of every ordinary positional action.
+                utility += 0.95 * MATE_SCORE
             elif "hq_escape_unlock" in latest_roles:
                 # Some checks require vacating/interposing before the HQ can
                 # evacuate later in the same turn. Preserve that setup ahead
                 # of all non-terminal positional preferences.
                 utility += 0.90 * MATE_SCORE
+            if started_under_hq_threat:
+                _, candidate_forced_loss, _ = fallback_rules.tactical_risk(
+                    child, original_turn
+                )
+                if candidate_forced_loss < PIECE_VALUES[engine.HQ]:
+                    # Once the sequence has answered the check, every later
+                    # action must preserve the answer. This prevents a greedy
+                    # third move from reopening an HQ line that the first two
+                    # actions just closed.
+                    utility += MATE_SCORE
             if turn_number <= EARLY_GAME_LAST_TURN:
                 utility += 2.5 * fallback_rules.early_plan_score(
                     candidate_purposes
@@ -4091,6 +4242,9 @@ def search(
     timed_out = False
     fallback_kind = "none"
     emergency_seed: Optional[SearchResult] = None
+    emergency_seed_safe = False
+    seed_moves: List[engine.Move] = []
+    seed_board = board
     verified_seed: Optional[SearchResult] = None
     book_turn = opening_book_turn(board, turn_number, searcher, opening_seed)
     opening_book_used = book_turn is not None
@@ -4137,8 +4291,22 @@ def search(
                     board, seed_board, board.turn
                 )
             except SearchTimeout:
-                seed_safety = None
+                # The seed is built before iterative minimax and remains our
+                # only legal floor if that search expires. Its safety verdict
+                # must not disappear merely because explanatory telemetry used
+                # the main deadline. Recheck with an isolated tactical probe.
+                try:
+                    seed_safety = Searcher(
+                        personality,
+                        time_ms=60_000,
+                        beam_width=max(4, beam_width),
+                        turn_number=turn_number,
+                        max_actions=max_actions,
+                    ).assess_turn_safety(board, seed_board, board.turn)
+                except SearchTimeout:
+                    seed_safety = None
             if seed_safety is not None and seed_safety.tactically_safe:
+                emergency_seed_safe = True
                 seed_action_purposes = searcher.deadline_safe_action_purpose_labels(
                     board,
                     seed_moves,
@@ -4303,6 +4471,30 @@ def search(
             )
             fallback_kind = "seeded"
     first_turn, resulting_board = first_turn_from_pv(board, best.pv)
+    selected_current_player_score = (
+        best.score if board.turn == engine.RED else -best.score
+    )
+    if (
+        emergency_seed is not None
+        and emergency_seed_safe
+        and completed_depth < 2
+        and not resulting_board.is_game_over()
+        and resulting_board.turn != board.turn
+        and (
+            selected_current_player_score <= -MATE_SCORE + 100.0
+            or searcher.has_same_turn_hq_capture(resulting_board)
+        )
+    ):
+        # A partial shallow search can finish with only losing root branches
+        # even though the precomputed safety seed found a coordinated check
+        # evasion. Safety is lexicographic here: never replace a known legal
+        # escape with an immediately losing line merely because the latter
+        # came from an incomplete minimax pass.
+        best = emergency_seed
+        first_turn = list(seed_moves)
+        resulting_board = seed_board
+        completed_depth = 0
+        fallback_kind = "safe"
     if not first_turn and not board.is_game_over():
         fallback = purposeful_complete_turn_seed(
             board, personality, turn_number, max_actions=max_actions

@@ -359,6 +359,10 @@ class SearchTests(unittest.TestCase):
                 "5f2/1q1i2ir↓/8/1R↑6/3F1R↗2/4I3/3IFR↖II/2IP2T↑Q II ii b",
                 36,
             ),
+            (
+                "q1F4i/1F4i1/3ifi2/6i1/2I5/I2I4/5I1Q/8 I i b",
+                86,
+            ),
         )
         for fen, turn_number in positions:
             with self.subTest(turn_number=turn_number):
@@ -378,6 +382,46 @@ class SearchTests(unittest.TestCase):
 
                 self.assertTrue(moves)
                 self.assertFalse(detector.has_same_turn_hq_capture(resulting))
+
+    def test_quiet_setup_is_labeled_when_it_unlocks_an_hq_defense(self):
+        board = engine.BaseBoard(
+            "q1F4i/1F4i1/3ifi2/6i1/2I5/I2I4/5I1Q/8 I i b"
+        )
+        searcher = ghq_ai.Searcher(
+            "balanced", time_ms=5000, beam_width=6, turn_number=86
+        )
+        setup = next(
+            move for move in board.generate_legal_moves() if move.uci() == "rib8"
+        )
+
+        self.assertTrue(searcher.unlocks_hq_defense(board, setup))
+        self.assertIn(
+            "hq_defense_unlock",
+            searcher.action_purpose_labels(
+                board, [setup], board.turn, retrospective=False
+            )[0]["roles"],
+        )
+
+    def test_short_search_keeps_safe_seed_over_an_immediate_hq_loss(self):
+        board = engine.BaseBoard(
+            "q1F4i/1F4i1/3ifi2/6i1/2I5/I2I4/5I1Q/8 I i b"
+        )
+        result = ghq_ai.search(
+            board,
+            "balanced",
+            time_ms=4000,
+            max_depth=2,
+            beam_width=6,
+            turn_number=86,
+            max_actions=3,
+        )
+        resulting = engine.BaseBoard(result["best_turn"]["resulting_fen"])
+        detector = ghq_ai.Searcher(
+            "balanced", time_ms=5000, beam_width=6, turn_number=87
+        )
+
+        self.assertFalse(detector.has_same_turn_hq_capture(resulting))
+        self.assertGreater(result["score"]["current_player"], -ghq_ai.MATE_SCORE)
 
     def test_seed_telemetry_cannot_leak_a_search_timeout(self):
         original = ghq_ai.Searcher.turn_purpose_breakdown
