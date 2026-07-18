@@ -6142,6 +6142,11 @@ def search(
             max_actions=max_actions,
             stagnation_turns=stagnation_turns,
         )
+        # This isolated search begins at an opponent child of the real root.
+        # Preserve that identity so generate_turn_candidates uses the narrow
+        # reply-verification path (with the same atomic tactical beam) instead
+        # of spending the reserve on a second broad root frontier.
+        verifier.root_key = board_key(board)
         verifier.verification_mode = True
         verifier.hq_leaf_extension_enabled = False
         try:
