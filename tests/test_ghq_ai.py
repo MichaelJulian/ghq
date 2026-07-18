@@ -1189,6 +1189,72 @@ class SearchTests(unittest.TestCase):
         self.assertTrue(searcher.artillery_move_allowed(board, engine.Move.from_uci("g1f1↑")))
         self.assertFalse(searcher.artillery_move_allowed(board, engine.Move.from_uci("g1f1↖")))
 
+    def test_edge_facing_artillery_relocation_without_a_target_is_rejected(self):
+        board = engine.BaseBoard(
+            "qr↓1fi1if/i1ir↙h↓f2/1i1t↓4/8/8/III5/"
+            "R↑R↑1H↑1III/2I1I1R↑Q FFFP iiir b"
+        )
+        board.push(engine.Move.from_uci("h8h7"))
+        board.push(engine.Move.from_uci("rrc8"))
+        move = engine.Move.from_uci("b8b7←")
+        searcher = ghq_ai.Searcher(
+            "para_specialist", time_ms=2000, beam_width=16, turn_number=6
+        )
+
+        self.assertIn(move, list(board.generate_legal_moves()))
+        self.assertFalse(searcher.artillery_move_allowed(board, move))
+
+    def test_unprotected_high_value_guns_cannot_advance_into_para_range(self):
+        board = engine.BaseBoard(
+            "q1r↓fi1i1/ir←ir↙h↓f1f/1i1t↓4/8/8/III2II1/"
+            "R↑R↑1H↑2R↑I/2I1I2Q FFFP iii b"
+        )
+        searcher = ghq_ai.Searcher(
+            "para_specialist", time_ms=2000, beam_width=16, turn_number=7
+        )
+
+        self.assertFalse(
+            searcher.artillery_move_allowed(
+                board, engine.Move.from_uci("e7f6↓")
+            )
+        )
+        self.assertFalse(
+            searcher.artillery_move_allowed(
+                board, engine.Move.from_uci("d6c5↓")
+            )
+        )
+
+    def test_threatened_high_value_guns_can_retreat_from_para_range(self):
+        board = engine.BaseBoard(
+            "q1r↓fi1i1/ir←ir↙1f1f/1i3h↓2/2t↓5/3I4/II3II1/"
+            "R↑R↑H↑3R↑I/2I1IP1Q FFF iii b"
+        )
+        board.push(engine.Move.from_uci("sbf3"))
+        searcher = ghq_ai.Searcher(
+            "para_specialist", time_ms=2000, beam_width=16, turn_number=8
+        )
+
+        self.assertFalse(
+            searcher.artillery_move_allowed(
+                board, engine.Move.from_uci("c5b5↓")
+            )
+        )
+        self.assertFalse(
+            searcher.artillery_move_allowed(
+                board, engine.Move.from_uci("f6g5↓")
+            )
+        )
+        self.assertTrue(
+            searcher.artillery_move_allowed(
+                board, engine.Move.from_uci("c5d6↓")
+            )
+        )
+        self.assertTrue(
+            searcher.artillery_move_allowed(
+                board, engine.Move.from_uci("f6e7↓")
+            )
+        )
+
     def test_protected_multi_target_diagonal_artillery_is_allowed(self):
         board = engine.BaseBoard(
             "p6q/8/5r↓2/4r↓3/4I3/2IR↑4/8/7Q - - r"

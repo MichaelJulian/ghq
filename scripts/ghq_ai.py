@@ -2086,6 +2086,47 @@ class Searcher:
         ):
             return False
 
+        if (
+            move.from_square != move.to_square
+            and move.orientation != self.forward_orientation(board.turn)
+            and not enemy_targets
+        ):
+            # A relocated gun should keep the stable forward facing unless a
+            # different cardinal direction creates real pressure. This rules
+            # out edge-facing moves such as b8-b7← (blocked by the infantry
+            # on a7) without suppressing a sideways shot at an actual target.
+            return False
+
+        if (
+            piece_type in (engine.ARMORED_ARTILLERY, engine.HEAVY_ARTILLERY)
+            and move.from_square != move.to_square
+            and self.home_distance(move.to_square, board.turn)
+            >= self.home_distance(move.from_square, board.turn)
+            and self.home_distance(move.to_square, board.turn) >= 2
+        ):
+            enemy = not board.turn
+            enemy_home = (
+                engine.BB_RANK_1 if enemy == engine.RED else engine.BB_RANK_8
+            )
+            enemy_para_ready = bool(
+                board.airborne_infantry
+                & board.occupied_co[enemy]
+                & enemy_home
+            ) or board.get_reserve_count(engine.AIRBORNE_INFANTRY, enemy) > 0
+            if (
+                enemy_para_ready
+                and self.artillery_para_cover_points(
+                    board, move.to_square, board.turn
+                )
+                < 3
+            ):
+                # Do not advance the valuable guns beyond the protected rear
+                # ranks while the enemy para remains available. A nominal
+                # multi-target lane is not compensation if the gun can simply
+                # be taken first. Homeward retreats and adequately protected
+                # escapes remain searchable.
+                return False
+
         if self.is_diagonal_orientation(move.orientation):
             if engine.popcount(enemy_targets) < 2:
                 return False
