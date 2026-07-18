@@ -1043,6 +1043,34 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(result["search"]["completed_depth_in_turns"], 2)
         self.assertNotEqual(result["search"]["fallback_used"], "seeded")
 
+    def test_reserved_final_slice_retries_the_emergency_seed_reply(self):
+        calls = []
+
+        def staged_alphabeta(searcher, board, depth, alpha, beta):
+            calls.append((board.turn, depth))
+            if len(calls) <= 2:
+                raise ghq_ai.SearchTimeout
+            return ghq_ai.SearchResult(ghq_ai.MATE_SCORE + 100.0, [])
+
+        with patch.object(
+            ghq_ai.Searcher,
+            "alphabeta",
+            staged_alphabeta,
+        ):
+            result = ghq_ai.search(
+                engine.BaseBoard(),
+                "balanced",
+                time_ms=1000,
+                max_depth=2,
+                beam_width=6,
+                turn_number=8,
+            )
+
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(result["search"]["completed_depth_in_turns"], 2)
+        self.assertEqual(result["search"]["fallback_used"], "safe")
+        self.assertTrue(result["best_turn"]["actions"])
+
     def test_timeout_keeps_verified_root_development_instead_of_seed_backfill(self):
         result = ghq_ai.search(
             engine.BaseBoard(TURN_FIVE_DEVELOPMENT_FEN),

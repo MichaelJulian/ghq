@@ -4696,6 +4696,27 @@ def search(
         seed_counted_actions = sum(
             move.name not in ("AutoCapture", "Skip") for move in seed_moves
         )
+
+        def scored_verified_seed(reply: SearchResult) -> SearchResult:
+            early_bonus = (
+                0.40 * searcher.early_plan_score(
+                    searcher.action_purpose_labels(
+                        board,
+                        seed_moves,
+                        board.turn,
+                        retrospective=False,
+                    )
+                )
+                if turn_number <= EARLY_GAME_LAST_TURN
+                else 0.0
+            )
+            seed_quality = early_bonus - seed_penalty
+            return SearchResult(
+                reply.score
+                + (seed_quality if board.turn == engine.RED else -seed_quality),
+                list(seed_moves) + list(reply.pv),
+            )
+
         if seed_board.is_game_over() or seed_counted_actions >= searcher.max_actions:
             # Seed construction and safety are a bounded pre-search floor.
             # Running this check on the main Searcher let a complicated
@@ -4765,24 +4786,7 @@ def search(
                     reply = searcher.alphabeta(
                         seed_board, 1, -math.inf, math.inf
                     )
-                    early_bonus = (
-                        0.40 * searcher.early_plan_score(
-                            searcher.action_purpose_labels(
-                                board,
-                                seed_moves,
-                                board.turn,
-                                retrospective=False,
-                            )
-                        )
-                        if turn_number <= EARLY_GAME_LAST_TURN
-                        else 0.0
-                    )
-                    seed_quality = early_bonus - seed_penalty
-                    verified_seed = SearchResult(
-                        reply.score
-                        + (seed_quality if board.turn == engine.RED else -seed_quality),
-                        list(seed_moves) + list(reply.pv),
-                    )
+                    verified_seed = scored_verified_seed(reply)
                 except SearchTimeout:
                     timed_out = True
                 finally:
@@ -4835,6 +4839,26 @@ def search(
                     if abs(iteration.score) >= MATE_SCORE:
                         break
             elif completed_depth < 2:
+                if (
+                    verified_seed is None
+                    and not seed_board.is_game_over()
+                    and seed_board.turn != board.turn
+                ):
+                    # The narrow root pass owns the first 90% of the absolute
+                    # deadline. If it cannot finish one reply, spend the
+                    # reserved final slice completing the already-started
+                    # emergency-seed reply instead of restarting a shallow
+                    # root search. Partial transposition entries from the
+                    # first seed probe are reusable here, so difficult Vercel
+                    # positions can still return a reply-verified floor.
+                    searcher.verification_mode = True
+                    try:
+                        reply = searcher.alphabeta(
+                            seed_board, 1, -math.inf, math.inf
+                        )
+                        verified_seed = scored_verified_seed(reply)
+                    except SearchTimeout:
+                        timed_out = True
                 if verified_seed is not None:
                     best = verified_seed
                     completed_depth = 2
