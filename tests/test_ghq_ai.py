@@ -121,6 +121,16 @@ SMOKE_HQ_ESCAPE_CASES = (
         ["f3f5", "h7h8", "g8h7"],
     ),
 )
+SELF_PLAY_AVOIDABLE_IMMEDIATE_HQ_LOSSES = (
+    (80, "5q2/8/3FI1I1/5I2/2II4/1I6/8/7Q - - b"),
+    (90, "7q/8/7F/6F1/4II1I/7I/1I6/I6Q - - b"),
+    (85, "1q6/2i5/Fi1i4/2i1ii2/8/6f1/3I2fi/4I1Q1 - - r"),
+    (117, "q7/1I6/8/8/2if1i2/4f3/8/4Q3 - - r"),
+)
+SELF_PLAY_FORCED_IMMEDIATE_HQ_LOSS = (
+    76,
+    "qI2f3/2F2i2/2I5/8/6I1/5I2/6I1/7Q - - b",
+)
 
 
 class EvaluationTests(unittest.TestCase):
@@ -1342,6 +1352,58 @@ class SearchTests(unittest.TestCase):
                         searcher.board_as_turn(escaped, escaped.turn)
                     )
                 )
+
+    def test_exact_survival_floor_recovers_all_avoidable_batch_hq_losses(self):
+        for turn_number, fen in SELF_PLAY_AVOIDABLE_IMMEDIATE_HQ_LOSSES:
+            with self.subTest(turn_number=turn_number):
+                board = engine.BaseBoard(fen)
+                mover = board.turn
+                searcher = ghq_ai.Searcher(
+                    "balanced", time_ms=60_000, beam_width=6, turn_number=turn_number
+                )
+                survival = searcher.find_hq_survival_turn(board)
+                self.assertIsNotNone(survival)
+                moves, escaped = survival
+                self.assertTrue(moves)
+                reply_budget = [100_000]
+                self.assertFalse(
+                    searcher.exact_same_turn_hq_capture(
+                        escaped, not mover, reply_budget
+                    )
+                )
+
+    def test_exact_survival_floor_does_not_invent_an_escape_from_forced_mate(self):
+        turn_number, fen = SELF_PLAY_FORCED_IMMEDIATE_HQ_LOSS
+        searcher = ghq_ai.Searcher(
+            "balanced", time_ms=60_000, beam_width=6, turn_number=turn_number
+        )
+        self.assertIsNone(
+            searcher.find_hq_survival_turn(engine.BaseBoard(fen))
+        )
+
+    def test_search_delays_mate_instead_of_walking_hq_onto_capture(self):
+        turn_number, fen = SELF_PLAY_AVOIDABLE_IMMEDIATE_HQ_LOSSES[0]
+        board = engine.BaseBoard(fen)
+        mover = board.turn
+        result = ghq_ai.search(
+            board,
+            "balanced",
+            time_ms=1_000,
+            max_depth=2,
+            beam_width=6,
+            turn_number=turn_number,
+        )
+        escaped = engine.BaseBoard(result["best_turn"]["resulting_fen"])
+        verifier = ghq_ai.Searcher(
+            "balanced", time_ms=60_000, beam_width=6, turn_number=turn_number
+        )
+        self.assertFalse(
+            verifier.exact_same_turn_hq_capture(
+                escaped, not mover, [100_000]
+            )
+        )
+        self.assertEqual(result["search"]["fallback_used"], "safe")
+        self.assertGreater(result["search"]["hq_survival_reply_nodes"], 0)
 
     def test_newly_reclassified_smoke_escapes_survive_every_immediate_reply(self):
         cases = (

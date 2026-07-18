@@ -147,6 +147,10 @@ export interface GhqSearchResult {
     value_model_evaluations: number;
     turn_cache_hits: number;
     transposition_hits: number;
+    /** Bounded post-search candidates inspected to avoid an immediate HQ loss. */
+    hq_survival_probe_nodes?: number;
+    /** Exact opponent-turn nodes used to certify an HQ survival fallback. */
+    hq_survival_reply_nodes?: number;
     /** True when a shared reply-verified early search was reused. */
     persistent_cache_hit?: boolean;
   };

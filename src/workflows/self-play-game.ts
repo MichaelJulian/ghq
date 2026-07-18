@@ -81,6 +81,8 @@ export interface DurableSelfPlayDecision {
     valueModelEvaluations: number;
     turnCacheHits: number;
     transpositionHits: number;
+    hqSurvivalProbeNodes?: number;
+    hqSurvivalReplyNodes?: number;
   };
   persistentCacheHit?: boolean;
   timedOut: boolean;
@@ -238,6 +240,8 @@ async function playDurableTurn(
       valueModelEvaluations: analysis.search.search.value_model_evaluations,
       turnCacheHits: analysis.search.search.turn_cache_hits,
       transpositionHits: analysis.search.search.transposition_hits,
+      hqSurvivalProbeNodes: analysis.search.search.hq_survival_probe_nodes ?? 0,
+      hqSurvivalReplyNodes: analysis.search.search.hq_survival_reply_nodes ?? 0,
     },
     persistentCacheHit: analysis.search.search.persistent_cache_hit === true,
     timedOut: analysis.search.search.timed_out,

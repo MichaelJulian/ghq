@@ -850,6 +850,8 @@ class Searcher:
         self.value_cache: Dict[str, float] = {}
         self.safety_cache: Dict[Tuple[str, bool], Tuple[float, float, float]] = {}
         self.immediate_hq_capture_cache: Dict[str, bool] = {}
+        self.hq_survival_probe_nodes = 0
+        self.hq_survival_reply_nodes = 0
         self.same_turn_hq_capture_cache: Dict[str, bool] = {}
         self.hq_defense_move_cache: Dict[Tuple[str, str], bool] = {}
         self.hq_defense_unlock_move_cache: Dict[Tuple[str, str], bool] = {}
@@ -2283,6 +2285,121 @@ class Searcher:
                 return True
         self.same_turn_hq_capture_cache[key] = False
         return False
+
+    def exact_same_turn_hq_capture(
+        self,
+        board: engine.BaseBoard,
+        attacker: bool,
+        remaining_nodes: List[int],
+    ) -> Optional[bool]:
+        """Prove whether the side to act can capture the HQ this turn.
+
+        The ordinary detector is intentionally geometric and cheap enough for
+        every candidate.  A last-chance survival override needs the opposite
+        tradeoff: it may call this bounded complete-turn enumeration, but it
+        must never certify safety from an incomplete probe.
+        """
+        mover = board.turn
+        frontier = [board.copy()]
+        seen: set[str] = set()
+        while frontier:
+            if remaining_nodes[0] <= 0:
+                return None
+            remaining_nodes[0] -= 1
+            self.hq_survival_reply_nodes += 1
+            current = frontier.pop()
+            key = current.serialize()
+            if key in seen:
+                continue
+            seen.add(key)
+            outcome = current.outcome()
+            if outcome is not None:
+                if outcome.winner == attacker:
+                    return True
+                continue
+            if current.turn != mover:
+                continue
+            for move in current.generate_legal_moves():
+                child = current.copy()
+                child.push(move)
+                frontier.append(child)
+        return False
+
+    def find_hq_survival_turn(
+        self,
+        root: engine.BaseBoard,
+        max_probe_nodes: int = 5_000,
+        max_reply_nodes: int = 100_000,
+    ) -> Optional[Tuple[List[engine.Move], engine.BaseBoard]]:
+        """Find and exactly verify a nearby turn that avoids immediate HQ loss.
+
+        This is a bounded mate-delay floor, not another positional search. It
+        runs only after minimax selected an immediately losing turn. Candidate
+        actions stay near the HQ (plus captures and Skip), which covers
+        interpositions, engagements, coordinated evacuations, and the vital
+        option of declining to walk the HQ onto a losing square.
+        """
+        mover = root.turn
+        frontier: List[Tuple[engine.BaseBoard, List[engine.Move]]] = [
+            (root.copy(), [])
+        ]
+        seen: set[str] = set()
+        reply_budget = [max_reply_nodes]
+        probe_nodes = 0
+        while frontier and probe_nodes < max_probe_nodes:
+            board, line = frontier.pop()
+            probe_nodes += 1
+            self.hq_survival_probe_nodes += 1
+            key = board.serialize()
+            if key in seen:
+                continue
+            seen.add(key)
+            outcome = board.outcome()
+            if outcome is not None or board.turn != mover:
+                if outcome is not None and outcome.winner == mover:
+                    return line, board
+                capture = self.exact_same_turn_hq_capture(
+                    board, not mover, reply_budget
+                )
+                if capture is False:
+                    return line, board
+                if capture is None:
+                    return None
+                continue
+
+            hq_squares = list(board.pieces(engine.HQ, mover))
+            if not hq_squares:
+                return None
+            hq_square = hq_squares[0]
+            actions: List[Tuple[float, str, engine.Move]] = []
+            for move in board.generate_legal_moves():
+                piece_type = self.move_piece_type(board, move)
+                distances = [
+                    chebyshev(square, hq_square)
+                    for square in (move.from_square, move.to_square)
+                    if square is not None
+                ]
+                if move.name == "AutoCapture":
+                    priority = 20_000.0
+                elif move.name == "Skip":
+                    priority = 10_000.0
+                elif piece_type == engine.HQ:
+                    priority = 5_000.0 - 100.0 * min(distances or [9])
+                elif move.capture_preference is not None:
+                    priority = 2_500.0 - 100.0 * min(distances or [9])
+                elif distances and min(distances) <= 3:
+                    priority = -100.0 * min(distances)
+                else:
+                    continue
+                actions.append(
+                    (priority, normalized_move_uci(move, mover), move)
+                )
+            actions.sort(key=lambda item: (item[0], item[1]))
+            for _, _, move in actions:
+                child = board.copy()
+                child.push(move)
+                frontier.append((child, [*line, move]))
+        return None
 
     def unlocks_immediate_hq_capture(
         self, board: engine.BaseBoard, move: engine.Move
@@ -4504,6 +4621,29 @@ def search(
         resulting_board = seed_board
         completed_depth = 0
         fallback_kind = "safe"
+    selected_current_player_score = (
+        best.score if board.turn == engine.RED else -best.score
+    )
+    if (
+        not resulting_board.is_game_over()
+        and resulting_board.turn != board.turn
+        and (
+            selected_current_player_score <= -MATE_SCORE + 100.0
+            or searcher.has_same_turn_hq_capture(resulting_board)
+        )
+    ):
+        survival = searcher.find_hq_survival_turn(board)
+        if survival is not None:
+            # Minimax can correctly decide that every line is eventually
+            # losing yet still use purpose terms to choose a line that loses
+            # the HQ immediately. Exact one-turn verification is the final
+            # lexicographic floor: survive now and force the opponent to prove
+            # the longer win. The result remains a labelled fallback because
+            # it deliberately overrides the approximate horizon ordering.
+            first_turn, resulting_board = survival
+            best = SearchResult(searcher.quick_score(resulting_board), first_turn)
+            completed_depth = 0
+            fallback_kind = "safe"
     if not first_turn and not board.is_game_over():
         fallback = purposeful_complete_turn_seed(
             board, personality, turn_number, max_actions=max_actions
@@ -4721,6 +4861,8 @@ def search(
             "value_model_evaluations": searcher.value_model_evaluations,
             "turn_cache_hits": searcher.turn_cache_hits,
             "transposition_hits": searcher.transposition_hits,
+            "hq_survival_probe_nodes": searcher.hq_survival_probe_nodes,
+            "hq_survival_reply_nodes": searcher.hq_survival_reply_nodes,
         },
         "evaluation": {
             "before": root_eval,

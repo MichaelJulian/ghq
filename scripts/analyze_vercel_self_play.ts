@@ -233,6 +233,8 @@ async function main() {
   const searchElapsedMs: number[] = [];
   const searchNodes: number[] = [];
   const completeTurnsGenerated: number[] = [];
+  const hqSurvivalProbeNodes: number[] = [];
+  const hqSurvivalReplyNodes: number[] = [];
   const fallbackElapsedMs: number[] = [];
   let decisions = 0;
   let trainingPositions = 0;
@@ -286,6 +288,12 @@ async function main() {
         completeTurnsGenerated.push(
           decision.searchTelemetry.completeTurnsGenerated
         );
+        hqSurvivalProbeNodes.push(
+          decision.searchTelemetry.hqSurvivalProbeNodes ?? 0
+        );
+        hqSurvivalReplyNodes.push(
+          decision.searchTelemetry.hqSurvivalReplyNodes ?? 0
+        );
         if (decision.fallback !== "none") {
           fallbackElapsedMs.push(decision.searchTelemetry.elapsedMs);
         }
@@ -328,21 +336,20 @@ async function main() {
       if (decision.recommendationLabel === "history avoidance") {
         increment(historyAvoidanceByTurn, String(decision.turnNumber));
       }
-      const selectedCandidate =
-        decision.candidateTurns?.find((candidate) =>
-          sameMoves(candidate.all_moves, decision.selectedMoves)
-        );
+      const selectedCandidate = decision.candidateTurns?.find((candidate) =>
+        sameMoves(candidate.all_moves, decision.selectedMoves)
+      );
       const selectedPurpose =
         decision.selectedPurpose ?? selectedCandidate?.purpose;
       const selectedActionPurposes =
         decision.selectedActionPurposes ?? selectedCandidate?.action_purposes;
       if (selectedPurpose && selectedActionPurposes) {
         const purpose = selectedPurpose;
-        const noNewEffectActions = selectedActionPurposes.filter(
-          (action) => action.roles.includes("no_new_effect")
+        const noNewEffectActions = selectedActionPurposes.filter((action) =>
+          action.roles.includes("no_new_effect")
         ).length;
-        const setupActions = selectedActionPurposes.filter(
-          (action) => action.roles.includes("setup")
+        const setupActions = selectedActionPurposes.filter((action) =>
+          action.roles.includes("setup")
         ).length;
         purposeTelemetry.decisions++;
         purposeTelemetry.noNewEffectActions += noNewEffectActions;
@@ -353,8 +360,7 @@ async function main() {
         purposeTelemetry.totalParatrooperMissionPenalty +=
           purpose.paratrooper_mission_penalty;
         purposeTelemetry.totalNetPurposePenalty += purpose.net_purpose_penalty;
-        const generatedEarlyStops =
-          decision.purposefulEarlyStopsGenerated ?? 0;
+        const generatedEarlyStops = decision.purposefulEarlyStopsGenerated ?? 0;
         purposeTelemetry.generatedEarlyStopCandidates += generatedEarlyStops;
         if (generatedEarlyStops > 0) {
           purposeTelemetry.decisionsWithGeneratedEarlyStops++;
@@ -575,6 +581,8 @@ async function main() {
           elapsedMs: distribution(searchElapsedMs),
           nodes: distribution(searchNodes),
           completeTurnsGenerated: distribution(completeTurnsGenerated),
+          hqSurvivalProbeNodes: distribution(hqSurvivalProbeNodes),
+          hqSurvivalReplyNodes: distribution(hqSurvivalReplyNodes),
           fallbackElapsedMs: distribution(fallbackElapsedMs),
         },
         fallbackTypes,
