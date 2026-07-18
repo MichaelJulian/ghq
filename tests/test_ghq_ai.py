@@ -891,6 +891,23 @@ class SearchTests(unittest.TestCase):
             )
         )
 
+    def test_stagnation_deadline_seed_does_not_repeat_the_infantry_cycle(self):
+        board = engine.BaseBoard(
+            "2i1t↓p2/qih↓ir↓3/2i5/8/1I5Q/I5I1/"
+            "2IR↑H↑T↑R↑R↑/4IPI1 - - r"
+        )
+        seed = ghq_ai.purposeful_complete_turn_seed(
+            board,
+            "tactical_gambler",
+            turn_number=81,
+            max_actions=3,
+            time_ms=2_000,
+            stagnation_turns=18,
+        )
+        moves = [move.uci() for move in seed.pv]
+        self.assertNotEqual(moves, ["c2c3", "b4b3", "a3a2"])
+        self.assertEqual(moves, ["c2c3", "a3a4", "b4b5"])
+
     def test_safety_prefers_reducing_an_unavoidable_baseline_loss(self):
         board = engine.BaseBoard(
             "qi2iii1/ir↓if3f/1i2r↓3/2If4/2R↑H↑4/"

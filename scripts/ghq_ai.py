@@ -4677,6 +4677,7 @@ def purposeful_complete_turn_seed(
     turn_number: int = 1,
     max_actions: int = 3,
     time_ms: int = 2_000,
+    stagnation_turns: int = 0,
 ) -> SearchResult:
     """Fast full-turn seed used before iterative search.
 
@@ -4699,6 +4700,10 @@ def purposeful_complete_turn_seed(
         beam_width=4,
         turn_number=turn_number,
         max_actions=max_actions,
+        stagnation_turns=stagnation_turns,
+    )
+    stagnation_factor = max(
+        0.0, min(1.0, (stagnation_turns - 4) / 20.0)
     )
     try:
         _, starting_forced_loss, _ = fallback_rules.tactical_risk(
@@ -4848,6 +4853,24 @@ def purposeful_complete_turn_seed(
                 utility += 2.5 * fallback_rules.early_plan_score(
                     candidate_purposes
                 )
+            if (
+                stagnation_factor >= 0.20
+                and move.capture_preference is None
+                and piece_type in INFANTRY_TYPES
+                and move.from_square is not None
+                and move.to_square is not None
+            ):
+                # The bounded deadline seed is often the only root line a
+                # cold native worker can reply-verify.  During an established
+                # repetition cycle, do not let two cosmetically purposeful
+                # backward infantry shuffles become that seed.  Prefer a
+                # forward step; the completed turn still has to pass the same
+                # tactical-safety gate as every other fallback.
+                forward_delta = (
+                    fallback_rules.home_distance(move.to_square, original_turn)
+                    - fallback_rules.home_distance(move.from_square, original_turn)
+                )
+                utility += 6.0 * stagnation_factor * forward_delta
             utility -= purpose_penalty
             candidates.append(
                 (
@@ -5248,6 +5271,7 @@ def search(
             turn_number,
             max_actions=max_actions,
             time_ms=seed_time_ms,
+            stagnation_turns=stagnation_turns,
         )
         seed_moves, seed_board = first_turn_from_pv(board, emergency_seed.pv)
         seed_purpose = searcher.deadline_safe_turn_purpose_breakdown(
@@ -5510,6 +5534,7 @@ def search(
                 turn_number,
                 max_actions=max_actions,
                 time_ms=seed_time_ms,
+                stagnation_turns=stagnation_turns,
             )
             fallback_kind = "seeded"
     first_turn, resulting_board = first_turn_from_pv(board, best.pv)
@@ -5704,6 +5729,7 @@ def search(
                 turn_number,
                 max_actions=max_actions,
                 time_ms=seed_time_ms,
+                stagnation_turns=stagnation_turns,
             )
             clean_moves, clean_board = first_turn_from_pv(board, clean_seed.pv)
             clean_purpose = searcher.deadline_safe_turn_purpose_breakdown(
@@ -5726,6 +5752,7 @@ def search(
             turn_number,
             max_actions=max_actions,
             time_ms=seed_time_ms,
+            stagnation_turns=stagnation_turns,
         )
         first_turn, resulting_board = first_turn_from_pv(board, fallback.pv)
         best = fallback
