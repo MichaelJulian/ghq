@@ -58,7 +58,7 @@ def main() -> None:
         raise ValueError("baseline feature schema does not match dataset")
 
     splits = chronological_split(rows)
-    train_indices = splits["train"]
+    calibration_indices = splits["calibration"]
     validation_indices = splits["validation"]
     raw_scores = exported_raw_scores(baseline, vectors)
     baseline_probabilities = {
@@ -75,17 +75,17 @@ def main() -> None:
 
     candidates: List[Dict[str, Any]] = []
     for share in shares:
-        train_weights = game_balanced_weights(
+        calibration_weights = game_balanced_weights(
             rows,
-            train_indices,
+            calibration_indices,
             share,
             balance_outcomes=True,
             outcome_balance_sources={"vercel_self_play"},
         )
         fit_vectors, fit_labels, fit_weights = expand_soft_labels(
-            raw_scores[train_indices].reshape(-1, 1),
-            labels[train_indices],
-            train_weights,
+            raw_scores[calibration_indices].reshape(-1, 1),
+            labels[calibration_indices],
+            calibration_weights,
         )
         calibrator = LogisticRegression(random_state=args.random_state)
         calibrator.fit(fit_vectors, fit_labels, sample_weight=fit_weights)
@@ -157,7 +157,7 @@ def main() -> None:
     metadata = dict(artifact.get("metadata") or {})
     metadata.update(
         {
-            "model_selection": "validation-only calibration of fixed incumbent trees; smallest feasible self-play share",
+            "model_selection": "fixed incumbent trees are calibrated on a dedicated chronological calibration split, then the smallest feasible self-play share is selected on validation only",
             "validation_constraints": "require human retention and self-play improvement overall and by color",
             "validation_constraints_passed": validation_constraints_passed,
             "self_play_train_share": selected["self_play_train_share"],

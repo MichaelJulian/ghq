@@ -226,6 +226,10 @@ class ValueModelWeightTests(unittest.TestCase):
                 )
 
         splits = chronological_split(rows)
+        self.assertEqual(
+            {name: len(indices) for name, indices in splits.items()},
+            {"train": 36, "calibration": 6, "validation": 8, "test": 10},
+        )
         split_by_index = {
             int(index): name for name, indices in splits.items() for index in indices
         }

@@ -15,8 +15,11 @@ Python or a native machine-learning runtime.
 - Start-of-turn captures are restored from `historyLog`.
 - Samples are created only after committed turns.
 - Every position is represented from both players' perspectives.
-- Train, validation, and test sets are split chronologically by whole game.
-  Positions from one game can never leak across splits.
+- Train, calibration, validation, and test sets are split chronologically by
+  whole game. Positions from one game can never leak across splits, and
+  color-swapped self-play games sharing a seed remain in the same split.
+- Probability calibration is fitted only on the calibration split. Model and
+  self-play-share selection use validation; promotion evidence uses test.
 - Each game receives equal aggregate sample weight, so unusually long games do
   not dominate training.
 

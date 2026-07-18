@@ -134,6 +134,7 @@ def chronological_split(rows: List[Dict[str, Any]]) -> Dict[str, np.ndarray]:
         unit_dates[key] = min(unit_dates.get(key, created_at), created_at)
     sets: Dict[str, set[Tuple[str, str]]] = {
         "train": set(),
+        "calibration": set(),
         "validation": set(),
         "test": set(),
     }
@@ -147,10 +148,12 @@ def chronological_split(rows: List[Dict[str, Any]]) -> Dict[str, np.ndarray]:
             raise ValueError(
                 f"source {source} requires at least 30 independent evaluation units for splits"
             )
-        train_end = max(1, int(len(units) * 0.70))
-        validation_end = max(train_end + 1, int(len(units) * 0.85))
+        train_end = max(1, int(len(units) * 0.60))
+        calibration_end = max(train_end + 1, int(len(units) * 0.70))
+        validation_end = max(calibration_end + 1, int(len(units) * 0.85))
         sets["train"].update(units[:train_end])
-        sets["validation"].update(units[train_end:validation_end])
+        sets["calibration"].update(units[train_end:calibration_end])
+        sets["validation"].update(units[calibration_end:validation_end])
         sets["test"].update(units[validation_end:])
     return {
         name: np.asarray(
@@ -610,6 +613,7 @@ def main() -> None:
         {"n_estimators": 200, "max_depth": 3, "learning_rate": 0.03, "min_samples_leaf": 20},
     ]
     train_indices = splits["train"]
+    calibration_indices = splits["calibration"]
     validation_indices = splits["validation"]
     baseline_artifact: Optional[Dict[str, Any]] = None
     baseline_validation_by_source: Optional[Dict[str, Any]] = None
@@ -654,9 +658,31 @@ def main() -> None:
                 train_labels,
                 sample_weight=train_weights,
             )
-            validation_probability = model.predict_proba(
+            calibration_raw_probability = model.predict_proba(
+                vectors[calibration_indices]
+            )[:, 1]
+            calibrator = LogisticRegression(random_state=args.random_state)
+            calibration_vectors, calibration_labels, calibration_weights = (
+                expand_soft_labels(
+                    safe_logit(calibration_raw_probability).reshape(-1, 1),
+                    labels[calibration_indices],
+                    fit_weights_by_share[share]["calibration"],
+                )
+            )
+            calibrator.fit(
+                calibration_vectors,
+                calibration_labels,
+                sample_weight=calibration_weights,
+            )
+            calibration_scale = float(calibrator.coef_[0, 0])
+            calibration_intercept = float(calibrator.intercept_[0])
+            validation_raw_probability = model.predict_proba(
                 vectors[validation_indices]
             )[:, 1]
+            validation_probability = sigmoid(
+                calibration_scale * safe_logit(validation_raw_probability)
+                + calibration_intercept
+            )
             score = metrics(
                 labels[validation_indices],
                 validation_probability,
@@ -704,6 +730,8 @@ def main() -> None:
                     "share": share,
                     "parameters": parameters,
                     "model": model,
+                    "calibration_scale": calibration_scale,
+                    "calibration_intercept": calibration_intercept,
                     "constraints_passed": constraints_passed,
                 }
             )
@@ -714,24 +742,11 @@ def main() -> None:
     selected_self_play_train_share = selected["share"]
     best_parameters = selected["parameters"]
     model = selected["model"]
+    calibration_scale = selected["calibration_scale"]
+    calibration_intercept = selected["calibration_intercept"]
     validation_constraints_passed = (
         feasible_selection or baseline_artifact is None
     )
-
-    validation_raw_probability = model.predict_proba(vectors[validation_indices])[:, 1]
-    calibrator = LogisticRegression(random_state=args.random_state)
-    calibration_vectors, calibration_labels, calibration_weights = expand_soft_labels(
-        safe_logit(validation_raw_probability).reshape(-1, 1),
-        labels[validation_indices],
-        selection_weights,
-    )
-    calibrator.fit(
-        calibration_vectors,
-        calibration_labels,
-        sample_weight=calibration_weights,
-    )
-    calibration_scale = float(calibrator.coef_[0, 0])
-    calibration_intercept = float(calibrator.intercept_[0])
 
     split_metrics: Dict[str, Any] = {}
     all_probabilities: Dict[str, np.ndarray] = {}
@@ -796,11 +811,11 @@ def main() -> None:
         "metadata": {
             "target": "expected eventual score for the perspective player (win=1, draw=0.5, loss=0)",
             "eligible_outcomes": sorted({row["outcome_reason"] for row in rows}),
-            "split": "source-stratified chronological 70/15/15 by game; color-swapped self-play pairs are indivisible",
+            "split": "source-stratified chronological 60/10/15/15 train/calibration/validation/test by game; color-swapped self-play pairs are indivisible",
             "hyperparameters": best_parameters,
             "self_play_train_share": selected_self_play_train_share,
             "self_play_train_share_candidates": self_play_train_shares,
-            "model_selection": "validation-only; fixed 50/50 source-balanced validation weights when comparing multiple self-play shares",
+            "model_selection": "challengers are calibrated on a dedicated chronological calibration split, then selected on validation only; fixed 50/50 source-balanced validation weights compare multiple self-play shares",
             "validation_constraints": "require human retention and self-play improvement overall and by color; choose the smallest feasible self-play share before minimizing validation loss",
             "validation_constraints_passed": validation_constraints_passed,
             "candidate_validation": candidate_validation,
