@@ -1341,6 +1341,29 @@ class SearchTests(unittest.TestCase):
             )
         )
 
+    def test_reported_para_trap_moves_cannot_immediately_follow_bombardment(self):
+        """Do not let partial-turn expansion bypass the valuable-gun floor."""
+        board = engine.BaseBoard(
+            "q1r↓fi1i1/ir←ir↙1f1f/1i3h↓2/2t↓5/3I4/II3II1/"
+            "R↑R↑H↑3R↑I/2I1IP1Q FFF iii b"
+        )
+        board.push(engine.Move.from_uci("sbf3"))
+        searcher = ghq_ai.Searcher(
+            "para_specialist", time_ms=5000, beam_width=16, turn_number=8
+        )
+
+        candidates = searcher.generate_turn_candidates(board)
+        forbidden = {"c5b5↓", "f6g5↓"}
+
+        self.assertTrue(candidates)
+        self.assertTrue(
+            all(
+                candidate.moves
+                and candidate.moves[0].uci() not in forbidden
+                for candidate in candidates
+            )
+        )
+
     def test_protected_multi_target_diagonal_artillery_is_allowed(self):
         board = engine.BaseBoard(
             "p6q/8/5r↓2/4r↓3/4I3/2IR↑4/8/7Q - - r"
