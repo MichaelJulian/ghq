@@ -73,8 +73,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--self-play-behavior-checkpoint")
     parser.add_argument(
         "--correction-feature-mode",
-        choices=("diff", "all"),
-        default="diff",
+        choices=("material-diff", "diff", "infantry-diff", "all"),
+        default="material-diff",
         help="use symmetric own-minus-opponent additions or every append-only feature",
     )
     parser.add_argument("--random-state", type=int, default=42)
@@ -110,6 +110,33 @@ def split_metrics(
             rows, indices, labels, probability
         )
     return result
+
+
+def select_stable_correction_candidate(
+    candidates: List[Dict[str, Any]],
+) -> tuple[Dict[str, Any], bool]:
+    """Prefer the simplest regularization within a negligible loss tolerance."""
+    feasible = [
+        candidate for candidate in candidates if candidate["constraints_passed"]
+    ]
+    if not feasible:
+        return select_validation_candidate(candidates, baseline_constrained=True)
+    minimum_share = min(float(candidate["share"]) for candidate in feasible)
+    least_shifted = [
+        candidate
+        for candidate in feasible
+        if float(candidate["share"]) == minimum_share
+    ]
+    best_score = min(float(candidate["score"]) for candidate in least_shifted)
+    statistically_tied = [
+        candidate
+        for candidate in least_shifted
+        if float(candidate["score"]) <= best_score + 0.0005
+    ]
+    return min(
+        statistically_tied,
+        key=lambda candidate: float(candidate["regularization_c"]),
+    ), True
 
 
 def exported_correction(
@@ -176,18 +203,22 @@ def main() -> None:
     if len(baseline_feature_names) >= len(feature_names):
         raise ValueError("correction training requires append-only features")
     appended_indices = np.arange(len(baseline_feature_names), len(feature_names))
-    new_indices = (
-        np.asarray(
+    if args.correction_feature_mode == "all":
+        new_indices = appended_indices
+    else:
+        prefix = {
+            "diff": "diff_",
+            "material-diff": "diff_material_",
+            "infantry-diff": "diff_infantry_",
+        }[args.correction_feature_mode]
+        new_indices = np.asarray(
             [
                 index
                 for index in appended_indices
-                if feature_names[index].startswith("diff_")
+                if feature_names[index].startswith(prefix)
             ],
             dtype=np.int64,
         )
-        if args.correction_feature_mode == "diff"
-        else appended_indices
-    )
     if not len(new_indices):
         raise ValueError("correction feature selection is empty")
     splits = chronological_split(rows)
@@ -221,7 +252,17 @@ def main() -> None:
         if len(shares) > 1
         else fit_weights[shares[0]]["validation"]
     )
-    regularization_candidates = [0.001, 0.003, 0.01, 0.03, 0.1, 0.3, 1.0]
+    regularization_candidates = [
+        0.001,
+        0.003,
+        0.01,
+        0.03,
+        0.1,
+        0.3,
+        1.0,
+        3.0,
+        10.0,
+    ]
     trained: List[Dict[str, Any]] = []
     candidate_validation: List[Dict[str, Any]] = []
     train_indices = splits["train"]
@@ -281,9 +322,7 @@ def main() -> None:
                     "constraints_passed": constraints_passed,
                 }
             )
-    selected, feasible = select_validation_candidate(
-        trained, baseline_constrained=True
-    )
+    selected, feasible = select_stable_correction_candidate(trained)
     model = selected["model"]
     scaler = selected["scaler"]
     design = selected["design"]

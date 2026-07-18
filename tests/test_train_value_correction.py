@@ -3,11 +3,39 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from scripts.train_value_correction import exported_correction
+from scripts.train_value_correction import (
+    exported_correction,
+    select_stable_correction_candidate,
+)
 from scripts.train_value_model import exported_probabilities, sigmoid
 
 
 class ValueCorrectionExportTests(unittest.TestCase):
+    def test_selection_prefers_more_regularization_inside_tiny_loss_tolerance(self):
+        candidates = [
+            {
+                "share": 0.1,
+                "score": 0.4000,
+                "regularization_c": 1.0,
+                "constraints_passed": True,
+            },
+            {
+                "share": 0.1,
+                "score": 0.4004,
+                "regularization_c": 0.1,
+                "constraints_passed": True,
+            },
+            {
+                "share": 0.1,
+                "score": 0.4010,
+                "regularization_c": 0.01,
+                "constraints_passed": True,
+            },
+        ]
+        selected, feasible = select_stable_correction_candidate(candidates)
+        self.assertTrue(feasible)
+        self.assertEqual(selected["regularization_c"], 0.1)
+
     def test_standardized_correction_exports_with_probability_parity(self):
         baseline = {
             "format": "ghq-gradient-boosted-value-v1",
