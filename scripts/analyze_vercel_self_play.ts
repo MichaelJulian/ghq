@@ -77,6 +77,53 @@ function sameMoves(left: string[], right: string[]): boolean {
   );
 }
 
+const MOVE_UCI = /^([a-h])([1-8])([a-h])([1-8])/;
+const DIAGONAL_ORIENTATIONS = new Set(["↗", "↘", "↙", "↖"]);
+const ARTILLERY_ORIENTATIONS = new Set([
+  "↑",
+  "↗",
+  "→",
+  "↘",
+  "↓",
+  "↙",
+  "←",
+  "↖",
+]);
+
+function isCaptureMove(move: string): boolean {
+  return move.includes("x") || (move.startsWith("s") && move !== "skip");
+}
+
+function isVoluntaryBoardMove(move: string): boolean {
+  return move !== "skip" && !move.startsWith("r") && !move.startsWith("s");
+}
+
+function isLongRangeParadrop(move: string, player: "RED" | "BLUE"): boolean {
+  const parsed = MOVE_UCI.exec(move);
+  if (!parsed) return false;
+  const [, fromFile, fromRank, toFile, toRank] = parsed;
+  if (fromRank !== (player === "RED" ? "1" : "8")) return false;
+  const fileDistance = Math.abs(fromFile.charCodeAt(0) - toFile.charCodeAt(0));
+  const rankDistance = Math.abs(Number(fromRank) - Number(toRank));
+  // No ordinary GHQ unit can relocate more than two squares. This is a
+  // conservative classifier: short airborne commitments are deliberately
+  // omitted rather than misclassifying an armored unit.
+  return Math.max(fileDistance, rankDistance) > 2;
+}
+
+function isDiagonalArtilleryAction(move: string): boolean {
+  return DIAGONAL_ORIENTATIONS.has(move.at(-1) ?? "");
+}
+
+function isArtilleryAction(move: string): boolean {
+  return ARTILLERY_ORIENTATIONS.has(move.at(-1) ?? "");
+}
+
+function isPureRotation(move: string): boolean {
+  const parsed = MOVE_UCI.exec(move);
+  return Boolean(parsed && parsed[1] === parsed[3] && parsed[2] === parsed[4]);
+}
+
 function percentile(values: number[], fraction: number): number {
   if (!values.length) return 0;
   const sorted = [...values].sort((left, right) => left - right);
@@ -94,6 +141,65 @@ function distribution(values: number[]) {
     max: Math.max(...values),
     mean: Number(
       (values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(1)
+    ),
+  };
+}
+
+function summarizeTacticalPatterns<
+  T extends {
+    decisions: number;
+    voluntaryBoardActions: number;
+    artilleryActions: number;
+    multiCaptureTurns: number;
+    captureSetupMultiCaptureTurns: number;
+    paradropActions: number;
+    paradropSameTurnFollowupCaptures: number;
+    paradropHqCombinations: number;
+    paradropConcreteMissions: number;
+    paradropSingleCaptureOnly: number;
+    diagonalArtilleryActions: number;
+    diagonalPureRotations: number;
+  }
+>(patterns: T) {
+  return {
+    ...patterns,
+    multiCaptureTurnRate: Number(
+      (patterns.multiCaptureTurns / Math.max(1, patterns.decisions)).toFixed(4)
+    ),
+    captureSetupShareOfMultiCaptureTurns: Number(
+      (
+        patterns.captureSetupMultiCaptureTurns /
+        Math.max(1, patterns.multiCaptureTurns)
+      ).toFixed(4)
+    ),
+    paradropActionRate: Number(
+      (
+        patterns.paradropActions / Math.max(1, patterns.voluntaryBoardActions)
+      ).toFixed(4)
+    ),
+    concreteParadropMissionRate: Number(
+      (
+        patterns.paradropConcreteMissions /
+        Math.max(1, patterns.paradropActions)
+      ).toFixed(4)
+    ),
+    singleCaptureOnlyParadropRate: Number(
+      (
+        patterns.paradropSingleCaptureOnly /
+        Math.max(1, patterns.paradropActions)
+      ).toFixed(4)
+    ),
+    diagonalArtilleryActionRate: Number(
+      (
+        patterns.diagonalArtilleryActions /
+        Math.max(1, patterns.artilleryActions)
+      ).toFixed(4)
+    ),
+    diagonalPureRotationRate: Number(
+      (
+        patterns.diagonalPureRotations /
+        Math.max(1, patterns.diagonalArtilleryActions)
+      ).toFixed(4)
     ),
   };
 }
@@ -158,6 +264,26 @@ async function main() {
     generatedEarlyStopCandidates: 0,
     selectedPurposefulEarlyStops: 0,
   };
+  const tacticalPatternTelemetry = {
+    decisions: 0,
+    voluntaryBoardActions: 0,
+    artilleryActions: 0,
+    multiCaptureTurns: 0,
+    captureSetupMultiCaptureTurns: 0,
+    paradropActions: 0,
+    paradropDirectCaptures: 0,
+    paradropSameTurnFollowupCaptures: 0,
+    paradropHqCombinations: 0,
+    paradropConcreteMissions: 0,
+    paradropSingleCaptureOnly: 0,
+    diagonalArtilleryActions: 0,
+    diagonalArtilleryRelocations: 0,
+    diagonalPureRotations: 0,
+  };
+  const tacticalPatternsByPersonality: Record<
+    string,
+    typeof tacticalPatternTelemetry
+  > = {};
   const purposeExamples: Array<{
     gameId: string;
     turn: number;
@@ -299,6 +425,87 @@ async function main() {
       increment(trainingRejectionReasons, reason);
     }
     for (const decision of game.decisions) {
+      const personalityPatterns = (tacticalPatternsByPersonality[
+        decision.personality
+      ] ??= {
+        decisions: 0,
+        voluntaryBoardActions: 0,
+        artilleryActions: 0,
+        multiCaptureTurns: 0,
+        captureSetupMultiCaptureTurns: 0,
+        paradropActions: 0,
+        paradropDirectCaptures: 0,
+        paradropSameTurnFollowupCaptures: 0,
+        paradropHqCombinations: 0,
+        paradropConcreteMissions: 0,
+        paradropSingleCaptureOnly: 0,
+        diagonalArtilleryActions: 0,
+        diagonalArtilleryRelocations: 0,
+        diagonalPureRotations: 0,
+      });
+      const patternRecords = [tacticalPatternTelemetry, personalityPatterns];
+      for (const record of patternRecords) record.decisions++;
+      const captureIndexes = decision.selectedMoves
+        .map((move, index) => (isCaptureMove(move) ? index : -1))
+        .filter((index) => index >= 0);
+      if (captureIndexes.length >= 2) {
+        for (const record of patternRecords) record.multiCaptureTurns++;
+        const firstCapture = captureIndexes[0];
+        if (
+          decision.selectedMoves
+            .slice(0, firstCapture)
+            .some(isVoluntaryBoardMove)
+        ) {
+          for (const record of patternRecords) {
+            record.captureSetupMultiCaptureTurns++;
+          }
+        }
+      }
+      for (
+        let moveIndex = 0;
+        moveIndex < decision.selectedMoves.length;
+        moveIndex++
+      ) {
+        const move = decision.selectedMoves[moveIndex];
+        if (isVoluntaryBoardMove(move)) {
+          for (const record of patternRecords) record.voluntaryBoardActions++;
+        }
+        if (isArtilleryAction(move)) {
+          for (const record of patternRecords) record.artilleryActions++;
+        }
+        if (isDiagonalArtilleryAction(move)) {
+          for (const record of patternRecords) {
+            record.diagonalArtilleryActions++;
+            if (isPureRotation(move)) record.diagonalPureRotations++;
+            else record.diagonalArtilleryRelocations++;
+          }
+        }
+        if (!isLongRangeParadrop(move, decision.player)) continue;
+        const directCapture = isCaptureMove(move);
+        const followupCapture = decision.selectedMoves
+          .slice(moveIndex + 1)
+          .some(isCaptureMove);
+        const roles =
+          (decision.selectedActionPurposes ?? []).find(
+            (item) => item.move === move
+          )?.roles ?? [];
+        const hqCombination =
+          roles.some((role) =>
+            ["hq_capture_unlock", "capture"].includes(role)
+          ) && decision.currentPlayerScore >= 50_000;
+        for (const record of patternRecords) {
+          record.paradropActions++;
+          if (directCapture) record.paradropDirectCaptures++;
+          if (followupCapture) record.paradropSameTurnFollowupCaptures++;
+          if (hqCombination) record.paradropHqCombinations++;
+          if (followupCapture || hqCombination) {
+            record.paradropConcreteMissions++;
+          }
+          if (directCapture && !followupCapture && !hqCombination) {
+            record.paradropSingleCaptureOnly++;
+          }
+        }
+      }
       increment(actionCounts, String(decision.selectedMoves.length));
       increment(
         countedActionCounts,
@@ -709,6 +916,15 @@ async function main() {
         ).toFixed(4)
       ),
     },
+    tacticalPatternTelemetry: summarizeTacticalPatterns(
+      tacticalPatternTelemetry
+    ),
+    tacticalPatternsByPersonality: Object.fromEntries(
+      Object.entries(tacticalPatternsByPersonality).map(([id, patterns]) => [
+        id,
+        summarizeTacticalPatterns(patterns),
+      ])
+    ),
     purposeExamples,
     fallbackDecisions,
     fallbackRate: Number((fallbackDecisions / decisions).toFixed(4)),
