@@ -15,6 +15,7 @@
     "value:positions": "python3 scripts/extract_value_positions.py",
     "value:features": "tsx scripts/build_value_dataset.ts",
     "value:train": ".venv/bin/python scripts/train_value_model.py",
+    "value:train:counterfactual": ".venv/bin/python scripts/train_counterfactual_policy.py",
     "value:correct": ".venv/bin/python scripts/train_value_correction.py",
     "value:download:2a": "tsx scripts/download_vercel_two_action_dataset.ts",
     "value:download:vercel": "tsx scripts/download_vercel_value_dataset.ts",
