@@ -74,6 +74,8 @@ export interface GhqTurnPurpose {
   reversals: number;
   pure_rotations: number;
   forcing_gain: number;
+  /** Material, tactical pressure, safety, contact, or HQ-closing progress. */
+  stagnation_progress?: number;
   net_purpose_penalty: number;
   paratrooper_mission_penalty: number;
   total_penalty: number;

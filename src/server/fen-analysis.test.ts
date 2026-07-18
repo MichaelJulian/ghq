@@ -110,6 +110,56 @@ describe("production FEN analysis", () => {
     expect(result.score.current_player).toBe(5.5);
   });
 
+  it("rejects cosmetically purposeful shuffles with no durable progress", () => {
+    const shuffle = {
+      rank: 1,
+      actions: ["a2b2", "b3a3", "c2c3"],
+      all_moves: ["a2b2", "b3a3", "c2c3"],
+      automatic_captures: [],
+      resulting_fen: "new-shuffle-square",
+      score: 8,
+      action_purposes: [],
+      purpose: {
+        backfills: 0,
+        reversals: 0,
+        forcing_gain: 2,
+        purposeful_actions: 3,
+        stagnation_progress: 0,
+      },
+    } as unknown as GhqCandidateTurn;
+    const contactBreak = {
+      ...shuffle,
+      rank: 2,
+      actions: ["a2a4", "b3b4", "c2d3"],
+      all_moves: ["a2a4", "b3b4", "c2d3"],
+      resulting_fen: "contact-break",
+      score: 5.5,
+      purpose: {
+        ...shuffle.purpose,
+        stagnation_progress: 3,
+      },
+    } as unknown as GhqCandidateTurn;
+    const result = {
+      recommendation_label: "best found",
+      best_turn: shuffle,
+      principal_variation: shuffle.all_moves,
+      candidate_turns: [shuffle, contactBreak],
+      score: { current_player: 8, red: 8 },
+      search: { opening_book_used: false },
+      exploration: {
+        temperature: 0,
+        seed: 1,
+        selectedRank: 1,
+        candidateCount: 2,
+      },
+    } as unknown as GhqSearchResult;
+
+    applyHistoryAvoidance(result, "RED", [], [], 24);
+
+    expect(result.best_turn.resulting_fen).toBe("contact-break");
+    expect(result.recommendation_label).toBe("history avoidance");
+  });
+
   it("returns a legal complete turn plus model and search outputs", async () => {
     const result = await analyzeFen({
       fen: GHQ_STARTING_FEN,

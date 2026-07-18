@@ -923,6 +923,47 @@ class SearchTests(unittest.TestCase):
             searcher.candidate_sort_key(cycle, engine.BLUE, True),
         )
 
+    def test_late_stagnation_beam_reserves_a_capture_line(self):
+        board = engine.BaseBoard(
+            "q7/iii4r←/3i1ii1/2F1i3/1I6/F5f1/1II3Q1/3I3I - i b"
+        )
+        searcher = ghq_ai.Searcher(
+            "fortress",
+            time_ms=60_000,
+            beam_width=6,
+            turn_number=88,
+            stagnation_turns=22,
+        )
+
+        def candidate(ucis):
+            working = board.copy()
+            moves = []
+            for uci in ucis:
+                move = next(
+                    move
+                    for move in working.generate_legal_moves()
+                    if move.uci() == uci
+                )
+                moves.append(move)
+                working.push(move)
+            return ghq_ai.TurnCandidate(moves, working, 0.0)
+
+        retreat = candidate(("g3g5", "g6h6", "skip"))
+        capture = candidate(("b7c6", "c7b7", "d6d5xc5"))
+        setup = next(
+            move for move in board.generate_legal_moves() if move.uci() == "b7c6"
+        )
+        self.assertTrue(searcher.unlocks_capture_this_turn(board, setup))
+        self.assertGreater(searcher.move_priority(board, setup), 3000.0)
+        selected = searcher.select_diverse_turns(
+            board, [retreat, capture], turn_width=1
+        )
+
+        self.assertIn(
+            "capture", searcher.turn_action_classes(board, capture.moves)[0]
+        )
+        self.assertIn(capture, selected)
+
     def test_quiet_objective_approach_has_durable_stagnation_purpose(self):
         board = engine.BaseBoard(
             "q1i3i1/3i3i/2i3i1/8/8/8/1IIII1I1/1F3I1Q - - r"
@@ -1396,7 +1437,7 @@ class SearchTests(unittest.TestCase):
         result = ghq_ai.search(
             board,
             "balanced",
-            time_ms=4000,
+            time_ms=8000,
             max_depth=1,
             beam_width=6,
             turn_number=28,

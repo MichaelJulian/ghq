@@ -238,11 +238,19 @@ export function applyHistoryAvoidance(
     const conveyorMotion = (purpose.backfills ?? 0) + (purpose.reversals ?? 0);
     const lowPurpose = (purpose.forcing_gain ?? 0) < 0.25 ? 1 : 0;
     const emptyPurpose = (purpose.purposeful_actions ?? 0) < 1 ? 1 : 0;
+    const durableProgress = purpose.stagnation_progress ?? 0;
+    const noDurableProgress = durableProgress < 0.25 ? 1 : 0;
+    const progressCredit = Math.min(4, durableProgress);
     return (
       repeats * 100 +
       reversals * (1.5 + 3.5 * stagnation) +
       stagnation *
-        (2.5 * conveyorMotion + 5 * skips + 5 * lowPurpose + 4 * emptyPurpose)
+        (2.5 * conveyorMotion +
+          5 * skips +
+          5 * lowPurpose +
+          4 * emptyPurpose +
+          6 * noDurableProgress -
+          1.5 * progressCredit)
     );
   };
 

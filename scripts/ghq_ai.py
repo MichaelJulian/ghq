@@ -852,6 +852,7 @@ class Searcher:
         self.immediate_hq_capture_cache: Dict[str, bool] = {}
         self.same_turn_hq_capture_cache: Dict[str, bool] = {}
         self.hq_defense_move_cache: Dict[Tuple[str, str], bool] = {}
+        self.capture_setup_move_cache: Dict[Tuple[str, str], bool] = {}
         self.root_key: Optional[str] = None
         self.root_fallback: Optional[TurnCandidate] = None
         self.root_ranked_turns: List[Tuple[float, TurnCandidate]] = []
@@ -1142,6 +1143,8 @@ class Searcher:
                 roles.append("develop")
             if self.unlocks_airborne_extraction(working, move):
                 roles.append("unlock")
+            if self.unlocks_capture_this_turn(working, move):
+                roles.append("capture_setup")
             if include_tactical_roles and self.unlocks_hq_escape(working, move):
                 roles.append("hq_escape_unlock")
             if include_tactical_roles and self.resolves_hq_threat(working, move):
@@ -1216,6 +1219,7 @@ class Searcher:
                 "save",
                 "develop",
                 "unlock",
+                "capture_setup",
                 "extract",
                 "threat",
                 "protect",
@@ -1288,6 +1292,7 @@ class Searcher:
             "protect": 1.5,
             "extract": 2.5,
             "unlock": 1.5,
+            "capture_setup": 2.5,
             "hq_escape_unlock": 5.0,
             "hq_defense": 5.0,
             "hq_capture_unlock": 5.0,
@@ -1869,6 +1874,62 @@ class Searcher:
                 return True
         return False
 
+    def unlocks_capture_this_turn(
+        self, board: engine.BaseBoard, move: engine.Move
+    ) -> bool:
+        """Whether a quiet action unlocks a capture within this turn.
+
+        This bounded two-action probe is active only near the no-progress
+        limit. It preserves lane-clearing sequences whose first two actions
+        look inert before a third action captures; minimax still decides
+        whether the resulting complete turn is sound.
+        """
+        if (
+            self.stagnation_factor() < 0.70
+            or move.name in ("AutoCapture", "Skip")
+            or move.capture_preference is not None
+            or board.turn_moves >= self.max_actions - 1
+        ):
+            return False
+        cache_key = (board.serialize(), move.uci())
+        cached = self.capture_setup_move_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        mover = board.turn
+        child = board.copy()
+        child.push(move)
+        if child.is_game_over() or child.turn != mover:
+            self.capture_setup_move_cache[cache_key] = False
+            return False
+
+        def capture_available(position: engine.BaseBoard) -> bool:
+            return any(
+                candidate.capture_preference is not None
+                for candidate in position.generate_legal_moves()
+            )
+
+        if capture_available(child):
+            self.capture_setup_move_cache[cache_key] = True
+            return True
+
+        remaining_actions = self.max_actions - child.turn_moves
+        if remaining_actions >= 2:
+            for second in child.generate_legal_moves():
+                if second.name in ("AutoCapture", "Skip"):
+                    continue
+                grandchild = child.copy()
+                grandchild.push(second)
+                if (
+                    not grandchild.is_game_over()
+                    and grandchild.turn == mover
+                    and capture_available(grandchild)
+                ):
+                    self.capture_setup_move_cache[cache_key] = True
+                    return True
+        self.capture_setup_move_cache[cache_key] = False
+        return False
+
     def unlocks_hq_escape(
         self, board: engine.BaseBoard, move: engine.Move
     ) -> bool:
@@ -2136,6 +2197,10 @@ class Searcher:
             # Quiet blocker-vacating moves such as g3-f4 must survive long
             # enough for the next action, h2-g3, to be considered.
             priority += 4800.0
+        if self.unlocks_capture_this_turn(board, move):
+            # Late in a quiet game, keep the lane-clearing setup for a capture
+            # even when the setup action itself changes no evaluation feature.
+            priority += 3500.0
         if self.unlocks_hq_escape(board, move):
             # Clearing the only HQ flight square is part of the escape, not a
             # generic infantry shuffle. It must survive even the narrow
@@ -2324,6 +2389,7 @@ class Searcher:
                         "hq_escape",
                         "hq_escape_unlock",
                         "hq_defense",
+                        "capture_setup",
                         "airborne_extraction",
                         "unlock_and_extract",
                         "escape_and_extract",
@@ -2381,6 +2447,7 @@ class Searcher:
         airborne_extractions: List[Tuple[int, int]] = []
         hq_escapes: List[Tuple[int, int]] = []
         extraction_unlocks: List[str] = []
+        capture_setups: List[str] = []
         hq_escape_unlocks: List[str] = []
         hq_defenses: List[str] = []
         hq_capture_unlocks: List[str] = []
@@ -2388,6 +2455,8 @@ class Searcher:
             piece_type = self.move_piece_type(working, move)
             if self.unlocks_airborne_extraction(working, move):
                 extraction_unlocks.append(move.uci())
+            if self.unlocks_capture_this_turn(working, move):
+                capture_setups.append(move.uci())
             if self.unlocks_hq_escape(working, move):
                 hq_escape_unlocks.append(move.uci())
             if self.resolves_hq_threat(working, move):
@@ -2426,6 +2495,7 @@ class Searcher:
         keys.extend(("artillery_escape", source, destination) for source, destination in artillery_escapes)
         keys.extend(("airborne_extraction", source, destination) for source, destination in airborne_extractions)
         keys.extend(("airborne_unlock", uci) for uci in extraction_unlocks)
+        keys.extend(("capture_setup", uci) for uci in capture_setups)
         keys.extend(("hq_escape_unlock", uci) for uci in hq_escape_unlocks)
         keys.extend(("hq_defense", uci) for uci in hq_defenses)
         keys.extend(("hq_capture_unlock", uci) for uci in hq_capture_unlocks)
@@ -2446,6 +2516,8 @@ class Searcher:
         wasteful_rotation = False
         for move in moves:
             piece_type = self.move_piece_type(working, move)
+            if move.capture_preference is not None:
+                classes.add("capture")
             if move.name == "Reinforce":
                 classes.add("reinforcement")
             if piece_type == engine.AIRBORNE_INFANTRY:
@@ -2562,9 +2634,9 @@ class Searcher:
         # count of complete turns retained, not permission for one action type
         # to consume every slot.
         action_classes = (
-            ("development", "formation", "reinforcement", "infantry", "artillery_relocation", "paratrooper")
+            ("capture", "development", "formation", "reinforcement", "infantry", "artillery_relocation", "paratrooper")
             if self.turn_number <= EARLY_GAME_LAST_TURN
-            else ("reinforcement", "infantry", "artillery_relocation", "paratrooper")
+            else ("capture", "reinforcement", "infantry", "artillery_relocation", "paratrooper")
         )
         for action_class in action_classes:
             quota = 3 if action_class == "development" else 2
@@ -2845,6 +2917,15 @@ class Searcher:
                 partial_width = max(partial_width, self.beam_width * 4)
                 evaluation_pool_width = max(
                     evaluation_pool_width, self.beam_width * 3
+                )
+            if self.stagnation_factor() >= 0.70:
+                # Near the no-progress limit, the narrow verification pool is
+                # no longer allowed to contain only safe retreats. Multi-step
+                # capture constructions often begin with a quiet lane-clearing
+                # action and need the same root breadth as the improvement pass.
+                partial_width = max(partial_width, self.beam_width * 8)
+                evaluation_pool_width = max(
+                    evaluation_pool_width, self.beam_width * 6
                 )
         elif self.verification_mode:
             # The first reply is a tactical floor, not the final beam. One
@@ -3209,6 +3290,7 @@ class Searcher:
                     "hq_escape",
                     "hq_escape_unlock",
                     "hq_defense",
+                    "capture_setup",
                     "unlock_and_extract",
                     "escape_and_extract",
                 )
