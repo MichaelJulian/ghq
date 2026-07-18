@@ -82,6 +82,18 @@ def training_root_overlap(
     return True, sorted(evaluation_roots.intersection(raw))
 
 
+def training_source_game_overlap(
+    records: Sequence[Dict[str, Any]], artifact: Dict[str, Any]
+) -> tuple[bool, List[str]]:
+    raw = artifact.get("metadata", {}).get(
+        "counterfactual_training_source_game_ids"
+    )
+    if not isinstance(raw, list) or not all(isinstance(game, str) for game in raw):
+        return False, []
+    evaluation_games = {str(record["source_game_id"]) for record in records}
+    return True, sorted(evaluation_games.intersection(raw))
+
+
 def main() -> None:
     args = parse_args()
     feature_names, records, dataset_hash = load_counterfactual_reports(args.report)
@@ -95,6 +107,9 @@ def main() -> None:
     challenger_raw = json.loads(args.challenger.read_text(encoding="utf-8"))
     provenance_available, overlapping_roots = training_root_overlap(
         records, challenger_raw
+    )
+    source_provenance_available, overlapping_source_games = (
+        training_source_game_overlap(records, challenger_raw)
     )
     baseline = align_append_only_baseline_schema(baseline_raw, feature_names)
     challenger = align_append_only_baseline_schema(challenger_raw, feature_names)
@@ -152,6 +167,8 @@ def main() -> None:
             terminal_gate,
             provenance_available,
             not overlapping_roots,
+            source_provenance_available,
+            not overlapping_source_games,
             *player_gates.values(),
         ]
     )
@@ -181,8 +198,15 @@ def main() -> None:
             "terminal_retention": terminal_gate,
             "training_root_provenance_available": provenance_available,
             "training_evaluation_roots_disjoint": not overlapping_roots,
+            "training_source_game_provenance_available": (
+                source_provenance_available
+            ),
+            "training_evaluation_source_games_disjoint": (
+                not overlapping_source_games
+            ),
         },
         "training_evaluation_root_overlap": overlapping_roots,
+        "training_evaluation_source_game_overlap": overlapping_source_games,
         "approved_for_arena": approved,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

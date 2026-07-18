@@ -4,6 +4,7 @@ import numpy as np
 
 from scripts.evaluate_counterfactual_challenger import (
     artifact_pair_probabilities,
+    training_source_game_overlap,
     training_root_overlap,
 )
 
@@ -43,6 +44,30 @@ class CounterfactualChallengerEvaluationTests(unittest.TestCase):
                 },
             ),
             (True, ["leaked"]),
+        )
+
+    def test_training_source_game_overlap_requires_provenance_and_detects_leakage(self):
+        records = [
+            {"source_game_id": "game-a"},
+            {"source_game_id": "game-b"},
+        ]
+        self.assertEqual(
+            training_source_game_overlap(records, {"metadata": {}}),
+            (False, []),
+        )
+        self.assertEqual(
+            training_source_game_overlap(
+                records,
+                {
+                    "metadata": {
+                        "counterfactual_training_source_game_ids": [
+                            "game-b",
+                            "game-c",
+                        ]
+                    }
+                },
+            ),
+            (True, ["game-b"]),
         )
 
 

@@ -305,6 +305,97 @@ def augmented_pair_arrays(
     )
 
 
+def grouped_folds(
+    records: Sequence[Dict[str, Any]], random_state: int, fold_count: int = 5
+) -> List[np.ndarray]:
+    """Deterministic source-game folds for leakage-free model selection."""
+    groups = sorted({str(record["source_game_id"]) for record in records})
+    if len(groups) < fold_count * 2:
+        raise ValueError("counterfactual cross-validation needs two games per fold")
+    ordered = sorted(
+        groups,
+        key=lambda group: hashlib.sha256(
+            f"linear:{random_state}:{group}".encode("utf-8")
+        ).hexdigest(),
+    )
+    assignment = {group: index % fold_count for index, group in enumerate(ordered)}
+    return [
+        np.asarray(
+            [
+                index
+                for index, record in enumerate(records)
+                if assignment[str(record["source_game_id"])] == fold
+            ],
+            dtype=np.int64,
+        )
+        for fold in range(fold_count)
+    ]
+
+
+def cross_validated_linear_candidate(
+    records: Sequence[Dict[str, Any]],
+    baseline: Dict[str, Any],
+    feature_indices: np.ndarray,
+    feature_count: int,
+    l2: float,
+    folds: Sequence[np.ndarray],
+) -> Dict[str, Any]:
+    probabilities: List[float] = []
+    baseline_probabilities: List[float] = []
+    labels: List[float] = []
+    all_indices = np.arange(len(records), dtype=np.int64)
+    for validation_indices in folds:
+        training_indices = np.setdiff1d(all_indices, validation_indices)
+        training_records = records_at(records, training_indices)
+        train_offset, train_vector, train_label, train_weight = (
+            augmented_pair_arrays(training_records, baseline, feature_indices)
+        )
+        scales = np.std(train_vector, axis=0)
+        scales[scales < 1e-8] = 1.0
+        standardized = train_vector / scales
+        ranking = rank_correction_features(
+            train_offset,
+            standardized,
+            train_label,
+            train_weight,
+        )
+        selected_positions = ranking[:feature_count]
+        coefficients = fit_offset_logistic_correction(
+            train_offset,
+            standardized[:, selected_positions],
+            train_label,
+            train_weight,
+            l2,
+        )
+        validation_records = records_at(records, validation_indices)
+        val_offset, val_vector, val_label, _ = augmented_pair_arrays(
+            validation_records, baseline, feature_indices
+        )
+        probability = offset_probabilities(
+            val_offset,
+            (val_vector / scales)[:, selected_positions],
+            coefficients,
+        )
+        probabilities.extend(probability.tolist())
+        baseline_probabilities.extend(sigmoid(val_offset).tolist())
+        labels.extend(val_label.tolist())
+    label_array = np.asarray(labels, dtype=np.float64)
+    probability_array = np.asarray(probabilities, dtype=np.float64)
+    baseline_array = np.asarray(baseline_probabilities, dtype=np.float64)
+    metrics = binary_metrics(label_array, probability_array)
+    baseline_metrics = binary_metrics(label_array, baseline_array)
+    return {
+        "feature_count": feature_count,
+        "l2": l2,
+        "metrics": metrics,
+        "baseline_metrics": baseline_metrics,
+        "passed": (
+            metrics["log_loss"] < baseline_metrics["log_loss"]
+            and metrics["accuracy"] >= baseline_metrics["accuracy"]
+        ),
+    }
+
+
 def binary_metrics(labels: np.ndarray, probabilities: np.ndarray) -> Dict[str, float]:
     clipped = np.clip(probabilities, 1e-7, 1 - 1e-7)
     log_loss = -np.mean(
@@ -421,20 +512,11 @@ def main() -> None:
     if not len(feature_indices):
         raise ValueError("counterfactual policy training needs appended features")
     splits = grouped_split(records, args.random_state)
-    train_records = records_at(records, splits["train"])
-    train_offset, train_vector, train_label, train_weight = augmented_pair_arrays(
-        train_records, baseline, feature_indices
+    development_indices = np.concatenate(
+        [splits["train"], splits["validation"]]
     )
-    feature_scales = np.std(train_vector, axis=0)
-    feature_scales[feature_scales < 1e-8] = 1.0
-    train_standardized = train_vector / feature_scales
-    feature_ranking = rank_correction_features(
-        train_offset,
-        train_standardized,
-        train_label,
-        train_weight,
-    )
-
+    development_records = records_at(records, development_indices)
+    folds = grouped_folds(development_records, args.random_state)
     l2_candidates = [0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0]
     feature_count_candidates = sorted(
         {
@@ -442,48 +524,18 @@ def main() -> None:
             for count in (4, 8, 16, 32, len(feature_indices))
         }
     )
-    validation_records = records_at(records, splits["validation"])
-    validation_offset, validation_vector, validation_label, _ = augmented_pair_arrays(
-        validation_records, baseline, feature_indices
-    )
-    validation_standardized = validation_vector / feature_scales
-    baseline_validation_probability = sigmoid(validation_offset)
     candidates = []
     for feature_count in feature_count_candidates:
-        selected_positions = feature_ranking[:feature_count]
         for l2 in l2_candidates:
-            coefficients = fit_offset_logistic_correction(
-                train_offset,
-                train_standardized[:, selected_positions],
-                train_label,
-                train_weight,
-                l2,
-            )
-            probability = offset_probabilities(
-                validation_offset,
-                validation_standardized[:, selected_positions],
-                coefficients,
-            )
-            candidate_metrics = binary_metrics(validation_label, probability)
-            baseline_metrics = binary_metrics(
-                validation_label, baseline_validation_probability
-            )
             candidates.append(
-                {
-                    "feature_count": feature_count,
-                    "feature_positions": selected_positions,
-                    "l2": l2,
-                    "coefficients": coefficients,
-                    "probability": probability,
-                    "metrics": candidate_metrics,
-                    "baseline_metrics": baseline_metrics,
-                    "passed": (
-                        candidate_metrics["log_loss"]
-                        < baseline_metrics["log_loss"]
-                        and candidate_metrics["accuracy"]
-                        >= baseline_metrics["accuracy"]
-                    ),
-                }
+                cross_validated_linear_candidate(
+                    development_records,
+                    baseline,
+                    feature_indices,
+                    feature_count,
+                    l2,
+                    folds,
+                )
             )
     feasible = [candidate for candidate in candidates if candidate["passed"]]
     pool = feasible or candidates
@@ -500,14 +552,35 @@ def main() -> None:
         ),
     )
 
+    development_offset, development_vector, development_label, development_weight = (
+        augmented_pair_arrays(development_records, baseline, feature_indices)
+    )
+    feature_scales = np.std(development_vector, axis=0)
+    feature_scales[feature_scales < 1e-8] = 1.0
+    development_standardized = development_vector / feature_scales
+    feature_ranking = rank_correction_features(
+        development_offset,
+        development_standardized,
+        development_label,
+        development_weight,
+    )
+    selected_positions = feature_ranking[: selected["feature_count"]]
+    selected_coefficients = fit_offset_logistic_correction(
+        development_offset,
+        development_standardized[:, selected_positions],
+        development_label,
+        development_weight,
+        selected["l2"],
+    )
+
     test_records = records_at(records, splits["test"])
     test_offset, test_vector, test_label, _ = augmented_pair_arrays(
         test_records, baseline, feature_indices
     )
     test_probability = offset_probabilities(
         test_offset,
-        (test_vector / feature_scales)[:, selected["feature_positions"]],
-        selected["coefficients"],
+        (test_vector / feature_scales)[:, selected_positions],
+        selected_coefficients,
     )
     baseline_test_probability = sigmoid(test_offset)
     test_metrics = binary_metrics(test_label, test_probability)
@@ -547,14 +620,21 @@ def main() -> None:
         "dataset_sha256": dataset_hash,
         "pairs": len(records),
         "source_games": len({record["source_game_id"] for record in records}),
+        "source_game_ids": sorted(
+            {str(record["source_game_id"]) for record in records}
+        ),
         "root_ids": sorted({str(record["root_id"]) for record in records}),
         "root_players": dict(root_player_counts),
         "phases": dict(phase_counts),
-        "split_pairs": {name: int(len(indices)) for name, indices in splits.items()},
+        "split_pairs": {
+            "development": len(development_records),
+            "test": len(test_records),
+        },
+        "cross_validation_folds": len(folds),
         "feature_count": len(feature_names),
         "correction_feature_scope": args.feature_scope,
         "correction_feature_count": len(feature_indices),
-        "candidate_validation": [
+        "candidate_cross_validation": [
             {
                 "l2": candidate["l2"],
                 "feature_count": candidate["feature_count"],
@@ -568,7 +648,7 @@ def main() -> None:
         "selected_feature_count": selected["feature_count"],
         "selected_features": [
             feature_names[int(feature_indices[position])]
-            for position in selected["feature_positions"]
+            for position in selected_positions
         ],
         "validation_constraints_passed": bool(feasible),
         "test": {
@@ -583,9 +663,9 @@ def main() -> None:
     artifact = export_policy_correction(
         raw_baseline,
         feature_names,
-        feature_indices[selected["feature_positions"]],
-        feature_scales[selected["feature_positions"]],
-        selected["coefficients"],
+        feature_indices[selected_positions],
+        feature_scales[selected_positions],
+        selected_coefficients,
         dataset_hash,
         {
             "counterfactual_policy_report": str(args.training_report),
@@ -596,6 +676,9 @@ def main() -> None:
             "counterfactual_feature_scope": args.feature_scope,
             "counterfactual_approved_for_arena": approved,
             "counterfactual_training_root_ids": report["root_ids"],
+            "counterfactual_training_source_game_ids": report[
+                "source_game_ids"
+            ],
         },
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)

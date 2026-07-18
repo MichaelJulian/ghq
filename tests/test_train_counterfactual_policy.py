@@ -8,6 +8,7 @@ import numpy as np
 from scripts.train_counterfactual_policy import (
     export_policy_correction,
     fit_offset_logistic_correction,
+    grouped_folds,
     grouped_split,
     load_counterfactual_reports,
     offset_probabilities,
@@ -173,6 +174,21 @@ class CounterfactualPolicyTrainingTests(unittest.TestCase):
         self.assertFalse(game_sets["train"] & game_sets["validation"])
         self.assertFalse(game_sets["train"] & game_sets["test"])
         self.assertFalse(game_sets["validation"] & game_sets["test"])
+
+    def test_grouped_cross_validation_assigns_each_source_game_once(self):
+        records = [
+            {"source_game_id": f"game-{game}"}
+            for game in range(15)
+            for _ in range(2)
+        ]
+        folds = grouped_folds(records, 11, fold_count=5)
+        fold_games = [
+            {records[int(index)]["source_game_id"] for index in fold}
+            for fold in folds
+        ]
+        self.assertTrue(all(fold_games))
+        self.assertEqual(sum(len(games) for games in fold_games), 15)
+        self.assertEqual(len(set.union(*fold_games)), 15)
 
 
 if __name__ == "__main__":

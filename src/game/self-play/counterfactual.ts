@@ -38,6 +38,7 @@ export interface CounterfactualSelectionOptions {
   maxScoreMargin?: number;
   minTurnNumber?: number;
   excludeRootIds?: ReadonlySet<string>;
+  excludeSourceGameIds?: ReadonlySet<string>;
 }
 
 function personalityFor(
@@ -100,9 +101,12 @@ export function selectCounterfactualRoots(
     maxScoreMargin: rawOptions.maxScoreMargin ?? 1,
     minTurnNumber: rawOptions.minTurnNumber ?? 5,
     excludeRootIds: rawOptions.excludeRootIds ?? new Set<string>(),
+    excludeSourceGameIds:
+      rawOptions.excludeSourceGameIds ?? new Set<string>(),
   };
   for (const [name, value] of Object.entries(options).filter(
-    ([name]) => name !== "excludeRootIds"
+    ([name]) =>
+      name !== "excludeRootIds" && name !== "excludeSourceGameIds"
   )) {
     if (
       !Number.isFinite(value) ||
@@ -134,8 +138,9 @@ export function selectCounterfactualRoots(
     throw new RangeError("minTurnNumber must be an integer");
   }
 
-  const possible = games.flatMap((game) =>
-    game.decisions.flatMap((decision) => {
+  const possible = games.flatMap((game) => {
+    if (options.excludeSourceGameIds.has(game.gameId)) return [];
+    return game.decisions.flatMap((decision) => {
       if (!eligibleDecision(decision, options)) return [];
       const candidates = distinctCandidateStates(decision).slice(
         0,
@@ -173,8 +178,8 @@ export function selectCounterfactualRoots(
           })),
         } satisfies CounterfactualRoot,
       ];
-    })
-  );
+    });
+  });
   possible.sort(
     (left, right) =>
       left.scoreMargin - right.scoreMargin ||

@@ -37,6 +37,31 @@ async function excludedRootIds(): Promise<Set<string>> {
   return excluded;
 }
 
+async function excludedSourceGameIds(): Promise<Set<string>> {
+  const excluded = new Set<string>();
+  for (const path of argumentsFor("--exclude-source-games-report")) {
+    const report = JSON.parse(await readFile(path, "utf8")) as {
+      pairs?: Array<{
+        sourceGameId?: unknown;
+        confident?: unknown;
+        trainingEligible?: unknown;
+      }>;
+    };
+    if (!Array.isArray(report.pairs)) {
+      throw new Error(`${path} is not a counterfactual rollout report`);
+    }
+    for (const pair of report.pairs) {
+      const eligible =
+        pair.trainingEligible === true ||
+        (pair.trainingEligible === undefined && pair.confident === true);
+      if (eligible && typeof pair.sourceGameId === "string") {
+        excluded.add(pair.sourceGameId);
+      }
+    }
+  }
+  return excluded;
+}
+
 function integerArgument(
   name: string,
   fallback: number,
@@ -81,7 +106,10 @@ async function main() {
     throw new Error(`No completed games found for ${generationId}`);
   }
 
-  const excluded = await excludedRootIds();
+  const [excluded, excludedSourceGames] = await Promise.all([
+    excludedRootIds(),
+    excludedSourceGameIds(),
+  ]);
   const roots = selectCounterfactualRoots(games, {
     maxRoots: integerArgument("--max-roots", 8, 1, 16),
     skipRoots: integerArgument("--skip-roots", 0, 0, 10_000),
@@ -90,6 +118,7 @@ async function main() {
     maxScoreMargin: numberArgument("--max-margin", 1, 0.000_001, 100),
     minTurnNumber: integerArgument("--min-turn", 5, 1, 399),
     excludeRootIds: excluded,
+    excludeSourceGameIds: excludedSourceGames,
   });
   if (!roots.length) {
     throw new Error("No eligible near-tied candidate roots found");
@@ -122,7 +151,7 @@ async function main() {
   const outputPath = argument("--output");
   if (outputPath) await writeFile(outputPath, rendered, "utf8");
   process.stderr.write(
-    `Selected ${roots.length} roots / ${request.branches.length} branches from ${games.length} games; excluded ${excluded.size} prior roots\n`
+    `Selected ${roots.length} roots / ${request.branches.length} branches from ${games.length} games; excluded ${excluded.size} prior roots and ${excludedSourceGames.size} training source games\n`
   );
   process.stdout.write(rendered);
 }

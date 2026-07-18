@@ -237,4 +237,18 @@ describe("counterfactual rollout selection", () => {
     expect(fresh).toHaveLength(2);
     expect(fresh.every((root) => !excluded.has(root.rootId))).toBe(true);
   });
+
+  it("excludes every root from a training source game", () => {
+    const games = [
+      game("source-a", [decision(12, [1, 1.01], "RED")]),
+      game("source-b", [decision(13, [1, 1.02], "BLUE")]),
+    ];
+    const roots = selectCounterfactualRoots(games, {
+      maxRoots: 2,
+      excludeSourceGameIds: new Set(["source-a"]),
+    });
+
+    expect(roots).toHaveLength(1);
+    expect(roots[0].sourceGameId).toBe("source-b");
+  });
 });
