@@ -4849,7 +4849,7 @@ def search(
                 searcher.deadline = min(
                     final_deadline,
                     main_search_started
-                    + max(0.05, time_ms / 1000.0 * 0.20),
+                    + max(0.05, time_ms / 1000.0 * 0.40),
                 )
                 try:
                     reply = searcher.alphabeta(
@@ -4865,19 +4865,25 @@ def search(
                     # that same child instead of paying for the reply twice.
 
             searcher.hq_leaf_extension_enabled = True
-            # Reserve the first 80% of the budget for a narrow but complete
-            # depth-two pass. Depth two means our complete turn plus one full
-            # opponent reply. The final 20% is deliberately large enough to
-            # certify the emergency seed on difficult Vercel positions if the
-            # root pass times out. A later broad pass may improve the result,
-            # but may never erase a tactically verified line by timing out.
+            # If the emergency line is already reply-verified, alternatives
+            # may consume the entire remaining budget: timing out can fall
+            # back to that certified floor. Otherwise stop at 80% and retain
+            # the final slice for one last seed-reply attempt. The initial
+            # seed probe receives a contiguous 40% because interrupted turn
+            # generation is not cacheable; two 20% probes repeated the same
+            # work and caused rare depth-zero Vercel fallbacks.
             searcher.verification_mode = True
             searcher.root_verified_lines = []
             searcher.root_ranked_turns = []
             searcher.deadline = min(
                 final_deadline,
                 main_search_started
-                + max(0.05, time_ms / 1000.0 * 0.80),
+                + max(
+                    0.05,
+                    time_ms
+                    / 1000.0
+                    * (1.0 if verified_seed is not None else 0.80),
+                ),
             )
             try:
                 best = searcher.alphabeta(board, 2, -math.inf, math.inf)

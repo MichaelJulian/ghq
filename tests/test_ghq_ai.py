@@ -1,5 +1,6 @@
 import importlib.util
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -1142,6 +1143,37 @@ class SearchTests(unittest.TestCase):
         self.assertTrue(result["search"]["seed_reply_verified"])
         self.assertTrue(result["search"]["seed_reply_retry_used"])
         self.assertTrue(result["best_turn"]["actions"])
+
+    def test_seed_floor_gets_contiguous_budget_then_root_gets_remainder(self):
+        remaining_deadlines = []
+
+        def staged_alphabeta(searcher, board, depth, alpha, beta):
+            remaining_deadlines.append(searcher.deadline - time.monotonic())
+            if len(remaining_deadlines) == 1:
+                return ghq_ai.SearchResult(0.0, [])
+            raise ghq_ai.SearchTimeout
+
+        with patch.object(
+            ghq_ai.Searcher,
+            "alphabeta",
+            staged_alphabeta,
+        ):
+            result = ghq_ai.search(
+                engine.BaseBoard(),
+                "balanced",
+                time_ms=1_000,
+                max_depth=2,
+                beam_width=6,
+                turn_number=8,
+            )
+
+        self.assertEqual(len(remaining_deadlines), 2)
+        self.assertGreater(remaining_deadlines[0], 0.30)
+        self.assertLessEqual(remaining_deadlines[0], 0.41)
+        self.assertGreater(remaining_deadlines[1], 0.80)
+        self.assertEqual(result["search"]["completed_depth_in_turns"], 2)
+        self.assertEqual(result["search"]["fallback_used"], "safe")
+        self.assertTrue(result["search"]["seed_reply_verified"])
 
     def test_timeout_keeps_verified_root_development_instead_of_seed_backfill(self):
         result = ghq_ai.search(
