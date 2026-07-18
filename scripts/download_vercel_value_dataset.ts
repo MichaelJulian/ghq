@@ -1,8 +1,10 @@
 #!/usr/bin/env tsx
 /** Download quality-gated Vercel self-play samples into the trainer's JSONL format. */
 
+import "dotenv/config";
 import { createWriteStream } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { get, list, type ListBlobResultBlob } from "@vercel/blob";
 
@@ -24,6 +26,23 @@ interface DurableTrainingSample {
   codeVersion: string;
   valueModel?: "incumbent" | "challenger";
   valueModelCheckpoint?: string;
+}
+
+interface ExactHqAuditReport {
+  format: "ghq-exact-hq-audit-v1";
+  generationIds: string[];
+  codeVersions: string[];
+  games: number;
+  immediateHqLosses: number;
+  maxNodesPerAudit: number;
+  approvedTrainingGameIds: string[];
+  audits: Array<{
+    gameId: string;
+    safe_turns: number;
+    forced_hq_loss: boolean;
+    inconclusive: boolean;
+    exhaustive: boolean;
+  }>;
 }
 
 function pairedGameNumber(gameId: string): number {
@@ -106,12 +125,50 @@ async function main() {
   const codeVersion = argument("--code-version");
   const valueModelCheckpoint = argument("--value-model-checkpoint");
   const outputPath = argument("--output");
+  const hqAuditPath = argument("--hq-audit-report");
   const featureSchema = optionalArgument("--feature-schema") ?? "v1";
   if (featureSchema !== "v1" && featureSchema !== "v2") {
     throw new Error("--feature-schema must be v1 or v2");
   }
   const featureNames =
     featureSchema === "v2" ? VALUE_FEATURE_NAMES_V2 : VALUE_FEATURE_NAMES;
+  const hqAuditText = await readFile(hqAuditPath, "utf8");
+  const hqAudit = JSON.parse(hqAuditText) as ExactHqAuditReport;
+  if (hqAudit.format !== "ghq-exact-hq-audit-v1") {
+    throw new Error("Unsupported exact HQ audit report format");
+  }
+  if (hqAudit.maxNodesPerAudit < 100_000) {
+    throw new Error("Exact HQ audit must use at least 100000 nodes per loss");
+  }
+  if (
+    !hqAudit.codeVersions.includes(codeVersion) ||
+    hqAudit.codeVersions.some((version) => version !== codeVersion)
+  ) {
+    throw new Error(
+      "Exact HQ audit code provenance does not match the dataset"
+    );
+  }
+  const auditedGenerations = new Set(hqAudit.generationIds);
+  const approvedByAudit = new Set(
+    hqAudit.audits
+      .filter(
+        (audit) =>
+          audit.forced_hq_loss &&
+          audit.exhaustive &&
+          !audit.inconclusive &&
+          audit.safe_turns === 0
+      )
+      .map((audit) => audit.gameId)
+  );
+  if (
+    approvedByAudit.size !== hqAudit.approvedTrainingGameIds.length ||
+    hqAudit.approvedTrainingGameIds.some(
+      (gameId) => !approvedByAudit.has(gameId)
+    )
+  ) {
+    throw new Error("Exact HQ audit approval summary is inconsistent");
+  }
+  const hqAuditSha256 = createHash("sha256").update(hqAuditText).digest("hex");
   const blobs = await selectedBlobs(generationPrefix);
   if (!blobs.length) throw new Error("No matching training artifacts found");
   await mkdir(dirname(outputPath), { recursive: true });
@@ -128,6 +185,9 @@ async function main() {
       code_version: codeVersion,
       behavior_value_model_checkpoint: valueModelCheckpoint,
       paired_complete_only: true,
+      exact_hq_audit_required: true,
+      exact_hq_audit_sha256: hqAuditSha256,
+      exact_hq_audit_max_nodes: hqAudit.maxNodesPerAudit,
     })}\n`
   );
 
@@ -153,6 +213,11 @@ async function main() {
             }: expected ${codeVersion}, received ${
               sample.codeVersion || "missing"
             }`
+          );
+        }
+        if (!auditedGenerations.has(sample.generationId)) {
+          throw new Error(
+            `Generation ${sample.generationId} is missing from the exact HQ audit`
           );
         }
         if (sample.valueModelCheckpoint !== valueModelCheckpoint) {
@@ -199,6 +264,7 @@ async function main() {
 
   const gamesByPair = new Map<string, string[]>();
   for (const [gameId, record] of recordsByGame) {
+    if (!approvedByAudit.has(gameId)) continue;
     const games = gamesByPair.get(record.pairId) ?? [];
     games.push(gameId);
     gamesByPair.set(record.pairId, games);
@@ -272,9 +338,14 @@ async function main() {
       games: games.size,
       pairs: completePairs.size,
       excludedGames: recordsByGame.size - games.size,
+      excludedByExactHqAudit: [...recordsByGame.keys()].filter(
+        (gameId) => !approvedByAudit.has(gameId)
+      ).length,
       excludedIncompletePairs: gamesByPair.size - completePairs.size,
       samples,
       featureSchema,
+      hqAuditPath,
+      hqAuditSha256,
       outputPath,
     })}\n`
   );

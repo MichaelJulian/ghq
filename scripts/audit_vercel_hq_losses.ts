@@ -2,6 +2,7 @@
 /** Exhaustively classify immediate HQ losses in persisted Vercel self-play. */
 
 import { execFile } from "node:child_process";
+import { writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { get, list, type ListBlobResultBlob } from "@vercel/blob";
 import { config } from "dotenv";
@@ -133,22 +134,29 @@ async function main() {
   const avoidable = audits.filter((audit) => audit.safe_turns > 0);
   const forced = audits.filter((audit) => audit.forced_hq_loss);
   const inconclusive = audits.filter((audit) => audit.inconclusive);
-  console.log(
-    JSON.stringify(
-      {
-        generationIds,
-        games: games.length,
-        immediateHqLosses: audits.length,
-        forcedHqLosses: forced.length,
-        avoidableHqLosses: avoidable.length,
-        inconclusiveHqLosses: inconclusive.length,
-        maxNodesPerAudit: maxNodes,
-        audits,
-      },
-      null,
-      2
-    )
-  );
+  const report = {
+    format: "ghq-exact-hq-audit-v1",
+    generationIds,
+    codeVersions: [
+      ...new Set(games.map((game) => game.codeVersion ?? "unknown")),
+    ].sort(),
+    games: games.length,
+    immediateHqLosses: audits.length,
+    forcedHqLosses: forced.length,
+    avoidableHqLosses: avoidable.length,
+    inconclusiveHqLosses: inconclusive.length,
+    maxNodesPerAudit: maxNodes,
+    approvedTrainingGameIds: forced.map((audit) => audit.gameId).sort(),
+    rejectedAvoidableGameIds: avoidable.map((audit) => audit.gameId).sort(),
+    rejectedInconclusiveGameIds: inconclusive
+      .map((audit) => audit.gameId)
+      .sort(),
+    audits,
+  };
+  const rendered = `${JSON.stringify(report, null, 2)}\n`;
+  const outputPath = argumentsFor("--output").at(-1);
+  if (outputPath) await writeFile(outputPath, rendered, "utf8");
+  process.stdout.write(rendered);
   if (process.argv.includes("--fail-on-avoidable") && avoidable.length) {
     process.exitCode = 2;
   }
