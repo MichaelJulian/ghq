@@ -209,11 +209,6 @@ AVOIDABLE_HQ_LOSS_REGRESSIONS = (
         "balanced",
         "qp6/h↓i3r↓2/8/4i3/4r↓3/8/8/5PfQ - - r",
     ),
-    (
-        107,
-        "tactical_gambler",
-        "q5pr↓/i1i5/1i6/8/3f4/t↓1r↓1i3/QT↑2h←3/8 - - r",
-    ),
 )
 LIVE_MATE_DELAY_REPLY_CASES = (
     (
@@ -967,6 +962,70 @@ class SearchTests(unittest.TestCase):
         self.assertFalse(suicide_safety.tactically_safe)
         self.assertEqual(escape_safety.forced_loss_value, 0.0)
         self.assertTrue(escape_safety.tactically_safe)
+
+    def test_exact_hq_probe_retains_sparse_artillery_orientation_mate(self):
+        root = engine.BaseBoard(
+            "4qT←2/5H↑2/4r→3/1I3R↑2/8/2R→5/1R↑2Q3/8 - - b"
+        )
+        exposed = root.copy()
+        for uci in ("e6d6↓", "e8e7", "skip"):
+            exposed.push(engine.Move.from_uci(uci))
+        searcher = ghq_ai.Searcher(
+            "mobile_raider",
+            time_ms=60_000,
+            beam_width=6,
+            turn_number=158,
+        )
+        remaining_nodes = [100_000]
+
+        self.assertTrue(
+            searcher.exact_same_turn_hq_capture(
+                exposed, exposed.turn, remaining_nodes
+            )
+        )
+        self.assertGreater(remaining_nodes[0], 0)
+        survival = searcher.find_hq_survival_turn(
+            root, max_reply_nodes=1_000_000
+        )
+        self.assertIsNotNone(survival)
+        assert survival is not None
+        _, survived = survival
+        verification_nodes = [100_000]
+        self.assertFalse(
+            searcher.exact_same_turn_hq_capture(
+                survived, survived.turn, verification_nodes
+            )
+        )
+
+    def test_sparse_orientation_proof_reclassifies_old_turn_107_escape(self):
+        root = engine.BaseBoard(
+            "q5pr↓/i1i5/1i6/8/3f4/t↓1r↓1i3/"
+            "QT↑2h←3/8 - - r"
+        )
+        alleged_escape = root.copy()
+        for uci in ("a2b1", "b2b4↘", "skip"):
+            alleged_escape.push(engine.Move.from_uci(uci))
+        searcher = ghq_ai.Searcher(
+            "tactical_gambler",
+            time_ms=60_000,
+            beam_width=6,
+            turn_number=107,
+        )
+        remaining_nodes = [100_000]
+
+        self.assertTrue(
+            searcher.exact_same_turn_hq_capture(
+                alleged_escape,
+                alleged_escape.turn,
+                remaining_nodes,
+            )
+        )
+        winning = alleged_escape.copy()
+        for uci in ("g8b3xb4", "a3a1→", "c3b2←"):
+            legal = {move.uci(): move for move in winning.generate_legal_moves()}
+            self.assertIn(uci, legal)
+            winning.push(legal[uci])
+        self.assertEqual(winning.outcome().winner, engine.BLUE)
 
     def test_opponent_home_rank_para_is_trapped_when_infantry_can_deploy(self):
         no_reserve = engine.BaseBoard("q6P/8/8/8/8/8/8/7Q - - r")
@@ -2226,18 +2285,31 @@ class SearchTests(unittest.TestCase):
             all(move.name in ("AutoCapture", "Skip") for move in moves)
         )
 
-    def test_exact_hq_capture_moves_collapse_artillery_and_prune_remote_actions(self):
+    def test_exact_hq_capture_moves_retain_sparse_artillery_and_prune_remote_actions(self):
         board = engine.BaseBoard("q7/8/2R5/8/8/8/8/7Q - - r")
         moves = list(ghq_ai.Searcher.exact_hq_capture_moves(board))
 
         self.assertNotIn("Skip", {move.name for move in moves})
-        self.assertFalse(
-            any(
-                move.name == "MoveAndOrient"
-                and move.from_square == move.to_square
-                for move in moves
+        stationary = [
+            move
+            for move in moves
+            if move.name == "MoveAndOrient"
+            and move.from_square == move.to_square
+        ]
+        self.assertTrue(stationary)
+        enemy_hq = board.hq & board.occupied_co[engine.BLUE]
+        for move in stationary:
+            piece_type = board.piece_type_at(move.from_square)
+            distance = 3 if piece_type == engine.HEAVY_ARTILLERY else 2
+            target = board.get_bombardment_target(
+                move.to_square, move.orientation, distance
             )
-        )
+            self.assertIsNotNone(target)
+            assert target is not None
+            self.assertTrue(
+                engine.between_inclusive_end(move.to_square, target)
+                & enemy_hq
+            )
         self.assertFalse(
             any(
                 move.name == "Reinforce"
@@ -2251,20 +2323,11 @@ class SearchTests(unittest.TestCase):
             for move in moves
             if move.name == "MoveAndOrient"
         ]
-        self.assertEqual(len(relocations), len(set(relocations)))
-        self.assertEqual(
-            {move.uci() for move in moves},
-            {
-                "c6b5↑",
-                "c6b6↑",
-                "c6b7↑",
-                "c6c5↑",
-                "c6c7↑",
-                "c6d5↑",
-                "c6d6↑",
-                "c6d7↑",
-            },
-        )
+        self.assertGreater(len(relocations), len(set(relocations)))
+        move_ucis = {move.uci() for move in moves}
+        self.assertIn("c6b5↑", move_ucis)
+        self.assertIn("c6b5↗", move_ucis)
+        self.assertIn("c6c6↖", move_ucis)
         remote = engine.BaseBoard("q7/8/8/8/8/8/8/R6Q R - r")
         self.assertEqual(
             list(ghq_ai.Searcher.exact_hq_capture_moves(remote)), []

@@ -42,7 +42,7 @@ class ExactHqLossAuditTests(unittest.TestCase):
         self.assertFalse(result["exhaustive"])
         self.assertEqual(result["nodes_visited"], 1)
 
-    def test_audit_hq_attack_search_collapses_artillery_orientation_clones(self):
+    def test_audit_hq_attack_search_retains_sparse_artillery_orientations(self):
         board = audit_hq_loss.engine.BaseBoard(
             "q7/8/8/8/8/8/8/R6Q R - r"
         )
@@ -53,7 +53,7 @@ class ExactHqLossAuditTests(unittest.TestCase):
             if move.name == "MoveAndOrient"
         ]
 
-        self.assertEqual(len(relocations), len(set(relocations)))
+        self.assertGreater(len(relocations), len(set(relocations)))
         self.assertFalse(any(move.name == "Skip" for move in moves))
         self.assertFalse(
             any(

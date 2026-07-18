@@ -163,6 +163,9 @@ def same_turn_hq_win(
 
 def exact_hq_capture_moves(board: engine.BaseBoard) -> Iterator[engine.Move]:
     """Collapse only actions provably irrelevant to same-turn HQ capture."""
+    enemy_hq_mask = board.hq & board.occupied_co[not board.turn]
+    surviving_non_hq = engine.popcount(board.occupied & ~board.hq)
+    preserve_artillery_orientations = surviving_non_hq <= 12
     artillery_relocations: set[tuple[int, int]] = set()
     for move in board.generate_legal_moves():
         if move.name == "Skip":
@@ -174,14 +177,33 @@ def exact_hq_capture_moves(board: engine.BaseBoard) -> Iterator[engine.Move]:
         ):
             continue
         if move.name == "MoveAndOrient":
-            if move.from_square is None or move.to_square is None:
+            if (
+                move.from_square is None
+                or move.to_square is None
+                or move.orientation is None
+            ):
                 continue
+            piece_type = board.piece_type_at(move.from_square)
+            distance = 3 if piece_type == engine.HEAVY_ARTILLERY else 2
+            target = board.get_bombardment_target(
+                move.to_square, move.orientation, distance
+            )
+            directly_bombards_hq = bool(
+                target is not None
+                and engine.between_inclusive_end(move.to_square, target)
+                & enemy_hq_mask
+            )
             if move.from_square == move.to_square:
+                if directly_bombards_hq:
+                    yield move
                 continue
             relocation = (move.from_square, move.to_square)
-            if relocation in artillery_relocations:
-                continue
-            artillery_relocations.add(relocation)
+            if not (
+                directly_bombards_hq or preserve_artillery_orientations
+            ):
+                if relocation in artillery_relocations:
+                    continue
+                artillery_relocations.add(relocation)
         yield move
 
 

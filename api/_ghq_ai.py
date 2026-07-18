@@ -2825,12 +2825,15 @@ class Searcher:
         help the mover capture an HQ during the current turn:
 
         * Skip ends the turn without taking a piece.
-        * A stationary artillery rotation neither vacates nor captures.
+        * A stationary artillery rotation is retained when its new lane
+          directly bombards the enemy HQ. GHQ resolves that bombardment when
+          the turn ends, so the rotation can itself be the mating action.
         * Reinforcing non-infantry only occupies a square; it cannot join an
           infantry capture cluster or remove an enemy.
-        * Artillery relocation orientations are equivalent for this question.
-          Friendly bombardment is not resolved until the mover's next turn,
-          and friendly orientation does not change the mover's legal squares.
+        * In crowded positions, artillery relocation orientations are
+          equivalent unless an orientation directly bombards the HQ. Once
+          the board is sparse, retain every orientation: a lane can engage or
+          bombard an intermediate piece and thereby enable a later HQ shot.
 
         Every capture remains because a mandatory remote capture can consume
         an action and change which local HQ capture becomes legal next. Quiet
@@ -2843,6 +2846,8 @@ class Searcher:
         avoiding remote moves and hundreds of irrelevant orientation branches.
         """
         enemy_hqs = list(board.pieces(engine.HQ, not board.turn))
+        enemy_hq_mask = board.hq & board.occupied_co[not board.turn]
+        preserve_artillery_orientations = surviving_non_hq_count(board) <= 12
         artillery_relocations: set[Tuple[int, int]] = set()
         for move in board.generate_legal_moves():
             if move.name == "Skip":
@@ -2854,14 +2859,33 @@ class Searcher:
             ):
                 continue
             if move.name == "MoveAndOrient":
-                if move.from_square is None or move.to_square is None:
+                if (
+                    move.from_square is None
+                    or move.to_square is None
+                    or move.orientation is None
+                ):
                     continue
+                piece_type = board.piece_type_at(move.from_square)
+                distance = 3 if piece_type == engine.HEAVY_ARTILLERY else 2
+                target = board.get_bombardment_target(
+                    move.to_square, move.orientation, distance
+                )
+                directly_bombards_hq = bool(
+                    target is not None
+                    and engine.between_inclusive_end(move.to_square, target)
+                    & enemy_hq_mask
+                )
                 if move.from_square == move.to_square:
+                    if directly_bombards_hq:
+                        yield move
                     continue
                 relocation = (move.from_square, move.to_square)
-                if relocation in artillery_relocations:
-                    continue
-                artillery_relocations.add(relocation)
+                if not (
+                    directly_bombards_hq or preserve_artillery_orientations
+                ):
+                    if relocation in artillery_relocations:
+                        continue
+                    artillery_relocations.add(relocation)
             if move.capture_preference is not None:
                 yield move
                 continue
@@ -5229,6 +5253,7 @@ def search(
     fallback_kind = "none"
     hq_survival_override_used = False
     hq_survival_reply_verified = False
+    hq_exact_return_probe_used = False
     policy_return_guard_used = False
     tactical_return_guard_used = False
     emergency_seed: Optional[SearchResult] = None
@@ -5565,15 +5590,44 @@ def search(
     selected_current_player_score = (
         best.score if board.turn == engine.RED else -best.score
     )
+    exact_return_hq_threat = False
+    if (
+        not resulting_board.is_game_over()
+        and resulting_board.turn != board.turn
+        and surviving_non_hq_count(resulting_board) <= 12
+        and not searcher.has_same_turn_hq_capture(resulting_board)
+    ):
+        # Sparse late games can hide artillery-orientation combinations that
+        # the deliberately collapsed reply beam does not retain.  Exhaust the
+        # complete same-turn HQ action set before returning such a position.
+        # The sparse-board gate keeps this exact proof out of ordinary crowded
+        # middlegames; an incomplete proof never certifies safety.
+        hq_exact_return_probe_used = True
+        exact_return_hq_threat = (
+            searcher.exact_same_turn_hq_capture(
+                resulting_board,
+                resulting_board.turn,
+                [100_000],
+            )
+            is True
+        )
     if (
         not resulting_board.is_game_over()
         and resulting_board.turn != board.turn
         and (
             selected_current_player_score <= -MATE_SCORE + 100.0
             or searcher.has_same_turn_hq_capture(resulting_board)
+            or exact_return_hq_threat
         )
     ):
-        survival = searcher.find_hq_survival_turn(board)
+        survival = searcher.find_hq_survival_turn(
+            board,
+            max_reply_nodes=(
+                1_000_000
+                if surviving_non_hq_count(board) <= 12
+                else 100_000
+            ),
+        )
         if survival is not None:
             # Minimax can correctly decide that every line is eventually
             # losing yet still use purpose terms to choose a line that loses
@@ -6005,6 +6059,7 @@ def search(
             "hq_survival_reply_nodes": searcher.hq_survival_reply_nodes,
             "hq_survival_override_used": hq_survival_override_used,
             "hq_survival_reply_verified": hq_survival_reply_verified,
+            "hq_exact_return_probe_used": hq_exact_return_probe_used,
             "policy_return_guard_used": policy_return_guard_used,
             "tactical_return_guard_used": tactical_return_guard_used,
             "seed_reply_verified": verified_seed is not None,
