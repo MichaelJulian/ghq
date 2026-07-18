@@ -980,6 +980,21 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(bounded.forced_loss_value, 4.0)
         self.assertFalse(bounded.tactically_safe)
 
+        recovery = ghq_ai.material_safe_recovery_turn(
+            board,
+            "para_specialist",
+            28,
+            16,
+            3,
+            2_000,
+        )
+        self.assertIsNotNone(recovery)
+        self.assertNotIn("f5h3", [move.uci() for move in recovery.moves])
+        recovery_safety = searcher.assess_turn_safety(
+            board, recovery.board, board.turn
+        )
+        self.assertTrue(recovery_safety.tactically_safe)
+
     def test_exact_hq_probe_retains_sparse_artillery_orientation_mate(self):
         root = engine.BaseBoard(
             "4qT←2/5H↑2/4r→3/1I3R↑2/8/2R→5/1R↑2Q3/8 - - b"

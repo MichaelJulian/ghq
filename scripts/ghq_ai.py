@@ -5244,6 +5244,154 @@ def bounded_seed_safety(
         return None
 
 
+def material_safe_recovery_turn(
+    board: engine.BaseBoard,
+    personality: str,
+    turn_number: int,
+    beam_width: int,
+    max_actions: int,
+    time_ms: int,
+) -> Optional[TurnCandidate]:
+    """Find a safe turn after the ordinary root beam retains only losses.
+
+    Forced bombardments can form a chain: moving the eventual victim is not
+    enough if an earlier automatic capture changes the bombardment lanes.  A
+    timed-out search therefore gets one small, independent recovery pass.  It
+    tries moves by pieces in the opponent's first forced-capture layer first,
+    greedily completes each turn, and applies both material and HQ safety
+    checks before returning anything.
+    """
+    deadline = time.monotonic() + max(50, time_ms) / 1000.0
+    mover = board.turn
+    ordering_probe = Searcher(
+        personality,
+        time_ms=max(50, time_ms),
+        beam_width=max(4, beam_width),
+        turn_number=turn_number,
+        max_actions=max_actions,
+    )
+    forced_targets = engine.BB_EMPTY
+    try:
+        opponent_turn = ordering_probe.board_as_turn(board, not mover)
+        opponent_moves = list(opponent_turn.generate_legal_moves())
+        if opponent_moves and all(move.name == "AutoCapture" for move in opponent_moves):
+            for move in opponent_moves:
+                if move.capture_preference is not None:
+                    forced_targets |= engine.BB_SQUARES[move.capture_preference]
+    except (SearchTimeout, ValueError, AssertionError):
+        forced_targets = engine.BB_EMPTY
+
+    legal = list(board.generate_legal_moves())
+    voluntary_exists = any(move.name not in ("AutoCapture", "Skip") for move in legal)
+
+    def recovery_order(move: engine.Move) -> Tuple[int, int, int, str]:
+        rescues_forced_target = bool(
+            move.from_square is not None
+            and engine.BB_SQUARES[move.from_square] & forced_targets
+        )
+        capture = move.capture_preference is not None
+        filler_skip = move.name == "Skip" and voluntary_exists
+        return (
+            0 if rescues_forced_target else 1,
+            0 if capture else 1,
+            1 if filler_skip else 0,
+            move.uci(),
+        )
+
+    legal.sort(key=recovery_order)
+    candidates: List[Tuple[Tuple[float, float, float, str], TurnCandidate]] = []
+    for first_move in legal[:32]:
+        if time.monotonic() >= deadline:
+            break
+        child = board.copy()
+        try:
+            child.push(first_move)
+        except (ValueError, AssertionError):
+            continue
+        moves = [first_move]
+        resulting = child
+        if not child.is_game_over() and child.turn == mover:
+            remaining_ms = max(50, int((deadline - time.monotonic()) * 1000.0))
+            tail_seed = purposeful_complete_turn_seed(
+                child,
+                personality,
+                turn_number,
+                max_actions=max_actions,
+                time_ms=min(250, remaining_ms),
+            )
+            tail_moves, resulting = first_turn_from_pv(child, tail_seed.pv)
+            moves.extend(tail_moves)
+        if not resulting.is_game_over() and resulting.turn == mover:
+            continue
+
+        remaining_ms = max(50, int((deadline - time.monotonic()) * 1000.0))
+        safety = bounded_seed_safety(
+            board,
+            resulting,
+            personality,
+            turn_number,
+            beam_width,
+            max_actions,
+            min(500, remaining_ms),
+            check_hq_combinations=False,
+        )
+        if safety is None or not safety.tactically_safe:
+            continue
+
+        hq_probe = Searcher(
+            personality,
+            time_ms=min(500, remaining_ms),
+            beam_width=4,
+            turn_number=turn_number,
+            max_actions=max_actions,
+        )
+        try:
+            if hq_probe.has_same_turn_hq_capture(resulting):
+                continue
+        except SearchTimeout:
+            continue
+
+        purpose = ordering_probe.deadline_safe_turn_purpose_breakdown(
+            board, resulting, moves, mover, retrospective=False
+        )
+        if purpose["paratrooper_mission_penalty"] > 0.0:
+            continue
+        action_purposes = ordering_probe.deadline_safe_action_purpose_labels(
+            board, moves, mover, retrospective=False
+        )
+        candidate = TurnCandidate(
+            moves=moves,
+            board=resulting,
+            priority=0.0,
+            static_score=ordering_probe.quick_score(resulting),
+            safety_penalty=max(
+                0.0, safety.new_risk_value - safety.compensation_value
+            ),
+            tactically_safe=True,
+            purpose_penalty=purpose["net_purpose_penalty"],
+            paratrooper_mission_penalty=purpose["paratrooper_mission_penalty"],
+            action_purposes=action_purposes,
+            early_plan_score=ordering_probe.early_plan_score(action_purposes),
+        )
+        mover_score = (
+            candidate.static_score if mover == engine.RED else -candidate.static_score
+        )
+        candidates.append((
+            (
+                safety.forced_loss_value,
+                candidate.safety_penalty,
+                -mover_score,
+                normalized_turn_key(moves, mover),
+            ),
+            candidate,
+        ))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0])
+    return candidates[0][1]
+
+
 def search(
     board: engine.BaseBoard,
     personality: str,
@@ -5733,8 +5881,7 @@ def search(
     )
     if (
         not hq_survival_override_used
-        and selected_safety is not None
-        and not selected_safety.tactically_safe
+        and (selected_safety is None or not selected_safety.tactically_safe)
     ):
         replacement_options: List[TurnCandidate] = []
         seen_replacements: set[Tuple[str, ...]] = set()
@@ -5776,6 +5923,23 @@ def search(
             fallback_kind = "safe"
             tactical_return_guard_used = True
             break
+
+        if not tactical_return_guard_used:
+            recovery = material_safe_recovery_turn(
+                board,
+                personality,
+                turn_number,
+                beam_width,
+                max_actions,
+                max(500, min(5_000, int(time_ms * 0.25))),
+            )
+            if recovery is not None:
+                first_turn = list(recovery.moves)
+                resulting_board = recovery.board
+                best = SearchResult(recovery.static_score, list(first_turn))
+                completed_depth = 0
+                fallback_kind = "safe"
+                tactical_return_guard_used = True
 
     selected_policy = searcher.deadline_safe_turn_purpose_breakdown(
         board,
