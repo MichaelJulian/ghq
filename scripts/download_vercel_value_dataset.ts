@@ -236,6 +236,19 @@ async function main() {
       auditParatrooperTrainingPolicy(game.decisions),
     ])
   );
+  const searchQualityEligibleByGame = new Map(
+    persistedGames.map((game) => [
+      game.gameId,
+      game.quality.trainingEligible &&
+        (game.quality.unverifiedFallbackDecisions ??
+          game.decisions.filter(
+            (decision) =>
+              decision.fallback === "seeded" ||
+              (decision.fallback !== "none" &&
+                decision.completedDepth < 2)
+          ).length) === 0,
+    ])
+  );
   const blobs = await selectedBlobs(generationPrefix);
   if (!blobs.length) throw new Error("No matching training artifacts found");
 
@@ -335,6 +348,7 @@ async function main() {
     if (!approvedByAudit.has(gameId)) continue;
     const policyAudit = policyAuditsByGame.get(gameId);
     if (!policyAudit?.eligible) continue;
+    if (!searchQualityEligibleByGame.get(gameId)) continue;
     const games = gamesByPair.get(record.pairId) ?? [];
     games.push(gameId);
     gamesByPair.set(record.pairId, games);
@@ -366,6 +380,7 @@ async function main() {
       paired_complete_only: true,
       exact_hq_audit_required: true,
       paratrooper_policy_audit_required: true,
+      zero_unverified_fallbacks_required: true,
       exact_hq_audit_sha256: hqAuditSha256,
       exact_hq_audit_max_nodes: hqAudit.maxNodesPerAudit,
     })}\n`
@@ -469,6 +484,9 @@ async function main() {
       ).length,
       excludedByParatrooperPolicy: [...recordsByGame.keys()].filter(
         (gameId) => !policyAuditsByGame.get(gameId)?.eligible
+      ).length,
+      excludedByUnverifiedFallback: [...recordsByGame.keys()].filter(
+        (gameId) => !searchQualityEligibleByGame.get(gameId)
       ).length,
       excludedByMissingParatrooperPolicyTelemetry: [
         ...recordsByGame.keys(),

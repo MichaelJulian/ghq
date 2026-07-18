@@ -91,15 +91,20 @@ export async function GET(
       persistentCacheHits += game.decisions.filter(
         (decision) => decision.persistentCacheHit
       ).length;
-      unverifiedFallbackDecisions +=
+      const gameUnverifiedFallbackDecisions =
         game.quality.unverifiedFallbackDecisions ??
         game.decisions.filter(
           (decision) =>
             decision.fallback === "seeded" ||
             (decision.fallback !== "none" && decision.completedDepth < 2)
         ).length;
+      unverifiedFallbackDecisions += gameUnverifiedFallbackDecisions;
       const policyAudit = auditParatrooperTrainingPolicy(game.decisions);
-      if (policyAudit.eligible) {
+      const gameTrainingEligible =
+        policyAudit.eligible &&
+        game.quality.trainingEligible &&
+        gameUnverifiedFallbackDecisions === 0;
+      if (gameTrainingEligible) {
         if (game.trainingPositions > 0) policyCleanTrainingGames++;
         policyCleanTrainingPositions += game.trainingPositions;
       } else {

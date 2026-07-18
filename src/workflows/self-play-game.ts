@@ -436,11 +436,13 @@ export function durableGameTrainingRejectionReasons(
       decision.fallback === "seeded" ||
       (decision.fallback !== "none" && decision.completedDepth < 2)
   ).length;
-  if (
-    decisions.length &&
-    unverifiedFallbackDecisions / decisions.length > 0.05
-  ) {
-    reasons.push("excessive-unverified-fallback-rate");
+  // One blind turn changes the position, the eventual result, and therefore
+  // every later value label in the game.  A low aggregate rate cannot make
+  // those downstream labels clean.  Reply-verified safe fallbacks remain
+  // eligible because they have completed the same tactical floor as an
+  // ordinary depth-two decision.
+  if (unverifiedFallbackDecisions > 0) {
+    reasons.push("unverified-fallback-decision");
   }
   return reasons;
 }

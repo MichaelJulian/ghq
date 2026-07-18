@@ -210,8 +210,40 @@ describe("durable self-play training quality", () => {
       })
     ).toEqual([
       "unverified-complete-turn-seed",
-      "excessive-unverified-fallback-rate",
+      "unverified-fallback-decision",
     ]);
+  });
+
+  it("quarantines a whole game after one shallow safe fallback", () => {
+    const decisions = Array.from({ length: 100 }, (_, index) =>
+      decision({
+        turnNumber: index + 1,
+        fallback: index === 50 ? "safe" : "none",
+        completedDepth: index === 50 ? 0 : 2,
+      })
+    );
+    expect(
+      durableGameTrainingRejectionReasons(decisions, {
+        winner: "RED",
+        termination: "hq-capture",
+      })
+    ).toContain("unverified-fallback-decision");
+  });
+
+  it("keeps reply-verified safe fallbacks training-eligible", () => {
+    const decisions = Array.from({ length: 20 }, (_, index) =>
+      decision({
+        turnNumber: index + 1,
+        fallback: index === 10 ? "safe" : "none",
+        completedDepth: 2,
+      })
+    );
+    expect(
+      durableGameTrainingRejectionReasons(decisions, {
+        winner: "BLUE",
+        termination: "hq-capture",
+      })
+    ).toEqual([]);
   });
 
   it("rejects draws and experimental action limits", () => {
