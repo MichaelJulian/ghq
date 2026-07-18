@@ -80,6 +80,8 @@ export async function GET(
     let policyQuarantinedTrainingPositions = 0;
     let policyCleanTrainingGames = 0;
     let policyCleanTrainingPositions = 0;
+    let policyUnverifiedFallbackGames = 0;
+    let policyUnverifiedFallbackDecisions = 0;
     const codeVersions = new Set<string>();
     const valueModelCheckpoints = new Set<string>();
     for (const game of games) {
@@ -99,6 +101,11 @@ export async function GET(
             (decision.fallback !== "none" && decision.completedDepth < 2)
         ).length;
       unverifiedFallbackDecisions += gameUnverifiedFallbackDecisions;
+      if (gameUnverifiedFallbackDecisions > 0) {
+        policyUnverifiedFallbackGames++;
+        policyUnverifiedFallbackDecisions +=
+          gameUnverifiedFallbackDecisions;
+      }
       const policyAudit = auditParatrooperTrainingPolicy(game.decisions);
       const gameTrainingEligible =
         policyAudit.eligible &&
@@ -176,6 +183,8 @@ export async function GET(
         violatingDecisions: policyViolationDecisions,
         missingTelemetryGames: policyMissingTelemetryGames,
         missingTelemetryDecisions: policyMissingTelemetryDecisions,
+        unverifiedFallbackGames: policyUnverifiedFallbackGames,
+        unverifiedFallbackDecisions: policyUnverifiedFallbackDecisions,
         quarantinedTrainingPositions: policyQuarantinedTrainingPositions,
         effectiveTrainingGames: policyCleanTrainingGames,
         effectiveTrainingPositions: policyCleanTrainingPositions,

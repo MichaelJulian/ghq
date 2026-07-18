@@ -104,6 +104,8 @@ interface GenerationSummary {
     violatingDecisions: number;
     missingTelemetryGames: number;
     missingTelemetryDecisions: number;
+    unverifiedFallbackGames: number;
+    unverifiedFallbackDecisions: number;
     quarantinedTrainingPositions: number;
     effectiveTrainingGames: number;
     effectiveTrainingPositions: number;
@@ -598,6 +600,9 @@ export function SelfPlayRuns() {
                       {generationSummary.trainingPolicy.missingTelemetryGames >
                         0 &&
                         ` · ${generationSummary.trainingPolicy.missingTelemetryGames} games missing telemetry`}
+                      {generationSummary.trainingPolicy
+                        .unverifiedFallbackGames > 0 &&
+                        ` · ${generationSummary.trainingPolicy.unverifiedFallbackGames} games with ${generationSummary.trainingPolicy.unverifiedFallbackDecisions} unverified decisions`}
                     </>
                   )}
                 </div>
