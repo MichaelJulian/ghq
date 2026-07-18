@@ -86,6 +86,16 @@ interface GenerationSummary {
   unverifiedFallbackRate: number;
   timedOutRate?: number;
   persistentCacheHitRate?: number;
+  trainingPolicy?: {
+    cleanGames: number;
+    quarantinedGames: number;
+    violatingDecisions: number;
+    missingTelemetryGames: number;
+    missingTelemetryDecisions: number;
+    quarantinedTrainingPositions: number;
+    effectiveTrainingGames: number;
+    effectiveTrainingPositions: number;
+  };
   provenance?: {
     codeVersions: string[];
     valueModelCheckpoints: string[];
@@ -403,8 +413,8 @@ export function SelfPlayRuns() {
                             result.outcome.termination
                           } · ${result.decisions.length} turns`
                         : status?.failure
-                          ? `${status.status} · ${status.failure.message}`
-                          : status?.status ?? "not refreshed"}
+                        ? `${status.status} · ${status.failure.message}`
+                        : status?.status ?? "not refreshed"}
                     </span>
                   </div>
                 );
@@ -489,10 +499,10 @@ export function SelfPlayRuns() {
                   <div className="mt-2 grid gap-1 rounded bg-white/70 p-2">
                     {generationSummary.progress.snapshots.map((snapshot) => (
                       <div key={snapshot.gameId}>
-                        <span className="font-mono">{snapshot.gameId}</span> · turn{" "}
-                        {snapshot.completedTurns} · {snapshot.decisions} decisions ·
-                        depth≥2 {snapshot.depthAtLeastTwoDecisions} · fallback{" "}
-                        {snapshot.fallbackDecisions} (unverified{" "}
+                        <span className="font-mono">{snapshot.gameId}</span> ·
+                        turn {snapshot.completedTurns} · {snapshot.decisions}{" "}
+                        decisions · depth≥2 {snapshot.depthAtLeastTwoDecisions}{" "}
+                        · fallback {snapshot.fallbackDecisions} (unverified{" "}
                         {snapshot.unverifiedFallbackDecisions}) · timeout{" "}
                         {snapshot.timedOutDecisions}
                       </div>
@@ -521,6 +531,36 @@ export function SelfPlayRuns() {
                   </>
                 )}
               </div>
+              {generationSummary.trainingPolicy && (
+                <div
+                  className={`mt-2 rounded px-2 py-1 font-semibold ${
+                    generationSummary.trainingPolicy.quarantinedGames > 0
+                      ? "bg-amber-100 text-amber-900"
+                      : "bg-emerald-100 text-emerald-900"
+                  }`}
+                >
+                  Training policy: {generationSummary.trainingPolicy.cleanGames}{" "}
+                  clean
+                  {" · "}
+                  {generationSummary.trainingPolicy.quarantinedGames}{" "}
+                  quarantined
+                  {" · "}
+                  {
+                    generationSummary.trainingPolicy.effectiveTrainingPositions
+                  }{" "}
+                  usable positions
+                  {generationSummary.trainingPolicy.quarantinedGames > 0 && (
+                    <>
+                      {" · "}
+                      {generationSummary.trainingPolicy.violatingDecisions} para
+                      violations
+                      {generationSummary.trainingPolicy.missingTelemetryGames >
+                        0 &&
+                        ` · ${generationSummary.trainingPolicy.missingTelemetryGames} games missing telemetry`}
+                    </>
+                  )}
+                </div>
+              )}
               {generationSummary.searchRuntime &&
                 generationSummary.searchRuntime.decisions > 0 && (
                   <div className="mt-1">
@@ -536,25 +576,27 @@ export function SelfPlayRuns() {
                     {generationSummary.searchRuntime.averageCompletedDepth.toFixed(
                       2
                     )}{" "}
-                    ({
-                      generationSummary.searchRuntime.completedDepthCounts["2"] ??
-                      0
-                    }{" "}
+                    (
+                    {generationSummary.searchRuntime.completedDepthCounts[
+                      "2"
+                    ] ?? 0}{" "}
                     at depth 2) · depth≥2{" "}
                     {(
-                      100 *
-                      generationSummary.searchRuntime.depthAtLeastTwoRate
+                      100 * generationSummary.searchRuntime.depthAtLeastTwoRate
                     ).toFixed(1)}
                     % · depth 0{" "}
                     {(
                       100 * generationSummary.searchRuntime.zeroDepthRate
                     ).toFixed(1)}
                     %
-                    {generationSummary.searchRuntime.averageNodes !== undefined && (
+                    {generationSummary.searchRuntime.averageNodes !==
+                      undefined && (
                       <>
                         {" "}
                         · avg nodes{" "}
-                        {generationSummary.searchRuntime.averageNodes.toFixed(0)}
+                        {generationSummary.searchRuntime.averageNodes.toFixed(
+                          0
+                        )}
                       </>
                     )}
                     {generationSummary.searchRuntime

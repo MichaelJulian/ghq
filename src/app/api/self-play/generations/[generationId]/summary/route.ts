@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getRun } from "workflow/api";
 import { summarizeValueModelArena } from "@/game/self-play/arena-results";
 import { summarizeSearchRuntime } from "@/game/self-play/search-runtime-summary";
+import { auditParatrooperTrainingPolicy } from "@/game/self-play/training-policy";
 import {
   readPersistedSelfPlayGames,
   readPersistedSelfPlayProgress,
@@ -71,6 +72,13 @@ export async function GET(
     let unverifiedFallbackDecisions = 0;
     let timedOutDecisions = 0;
     let persistentCacheHits = 0;
+    let policyQuarantinedGames = 0;
+    let policyViolationDecisions = 0;
+    let policyMissingTelemetryGames = 0;
+    let policyMissingTelemetryDecisions = 0;
+    let policyQuarantinedTrainingPositions = 0;
+    let policyCleanTrainingGames = 0;
+    let policyCleanTrainingPositions = 0;
     const codeVersions = new Set<string>();
     const valueModelCheckpoints = new Set<string>();
     for (const game of games) {
@@ -89,6 +97,18 @@ export async function GET(
             decision.fallback === "seeded" ||
             (decision.fallback !== "none" && decision.completedDepth < 2)
         ).length;
+      const policyAudit = auditParatrooperTrainingPolicy(game.decisions);
+      if (policyAudit.eligible) {
+        if (game.trainingPositions > 0) policyCleanTrainingGames++;
+        policyCleanTrainingPositions += game.trainingPositions;
+      } else {
+        policyQuarantinedGames++;
+        policyViolationDecisions += policyAudit.violatingDecisions;
+        policyMissingTelemetryDecisions +=
+          policyAudit.missingTelemetryDecisions;
+        if (!policyAudit.telemetryComplete) policyMissingTelemetryGames++;
+        policyQuarantinedTrainingPositions += game.trainingPositions;
+      }
       if (game.codeVersion && game.codeVersion !== "unknown") {
         codeVersions.add(game.codeVersion);
       }
@@ -143,6 +163,16 @@ export async function GET(
         : 0,
       timedOutRate: decisions ? timedOutDecisions / decisions : 0,
       persistentCacheHitRate: decisions ? persistentCacheHits / decisions : 0,
+      trainingPolicy: {
+        cleanGames: games.length - policyQuarantinedGames,
+        quarantinedGames: policyQuarantinedGames,
+        violatingDecisions: policyViolationDecisions,
+        missingTelemetryGames: policyMissingTelemetryGames,
+        missingTelemetryDecisions: policyMissingTelemetryDecisions,
+        quarantinedTrainingPositions: policyQuarantinedTrainingPositions,
+        effectiveTrainingGames: policyCleanTrainingGames,
+        effectiveTrainingPositions: policyCleanTrainingPositions,
+      },
       provenance: {
         codeVersions: [...codeVersions].sort(),
         valueModelCheckpoints: [...valueModelCheckpoints].sort(),
