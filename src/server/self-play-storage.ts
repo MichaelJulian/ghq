@@ -54,6 +54,22 @@ export interface SelfPlayGenerationManifest {
     incumbentCheckpoints: string[];
     challengerCheckpoints: string[];
   };
+  counterfactual?: {
+    sourceGenerationId?: string;
+    rolloutTurns: number;
+    branches: Array<{
+      gameId: string;
+      rootId: string;
+      sourceGameId: string;
+      sourceTurnNumber: number;
+      rootPlayer: "RED" | "BLUE";
+      candidateRank: number;
+      candidateScore: number;
+      candidateMoves: string[];
+      initialFen: string;
+      initialTurnNumber: number;
+    }>;
+  };
   runs: Array<{
     gameId: string;
     runId: string;
@@ -121,7 +137,9 @@ export async function readSelfPlayGenerationManifest(
     useCache: false,
   });
   if (!response?.stream || response.statusCode !== 200) return undefined;
-  return (await new Response(response.stream).json()) as SelfPlayGenerationManifest;
+  return (await new Response(
+    response.stream
+  ).json()) as SelfPlayGenerationManifest;
 }
 
 export async function persistSelfPlayProgress(

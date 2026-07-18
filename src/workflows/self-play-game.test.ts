@@ -6,6 +6,7 @@ import {
   durableSelfPlayProgressSnapshot,
   durableGameTrainingRejectionReasons,
   isDurableTrainingDecisionEligible,
+  resolveDurableInitialState,
   type DurableSelfPlayDecision,
 } from "./self-play-game";
 
@@ -42,6 +43,26 @@ function decision(
 }
 
 describe("durable self-play training quality", () => {
+  it("derives a counterfactual start's side and absolute turn from its FEN", () => {
+    const state = resolveDurableInitialState({
+      initialFen: "qr↓6/iii5/8/8/8/8/5III/6R↑Q IIIIIFFFPRRTH iiiiifffprrth b",
+      initialTurnNumber: 27,
+      dataRole: "counterfactual",
+    });
+
+    expect(state).toMatchObject({
+      initialTurnNumber: 27,
+      initialPlayer: "BLUE",
+      dataRole: "counterfactual",
+    });
+  });
+
+  it("rejects invalid counterfactual turn numbers", () => {
+    expect(() => resolveDurableInitialState({ initialTurnNumber: 0 })).toThrow(
+      "initialTurnNumber must be a positive integer"
+    );
+  });
+
   it("summarizes durable mid-game progress without storing candidate trees", () => {
     const snapshot = durableSelfPlayProgressSnapshot({
       config: {

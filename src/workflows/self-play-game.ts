@@ -41,6 +41,10 @@ export interface DurableSelfPlayGameConfig {
   red: DurableSelfPlayCompetitor;
   blue: DurableSelfPlayCompetitor;
   initialFen?: string;
+  /** Absolute turn number represented by `initialFen`; defaults to turn one. */
+  initialTurnNumber?: number;
+  /** Counterfactual rollouts are persisted, but never enter terminal training. */
+  dataRole?: "standard" | "counterfactual";
   maxTurns?: number;
   repetitionLimit?: number;
   noProgressTurns?: number;
@@ -146,6 +150,8 @@ export interface DurableSelfPlayGameResult {
   blueValueModelCheckpoint: string;
   codeVersion: string;
   initialFen: string;
+  initialTurnNumber: number;
+  dataRole: "standard" | "counterfactual";
   finalFen: string;
   decisions: DurableSelfPlayDecision[];
   outcome: { winner?: Player; termination: string };
@@ -221,7 +227,9 @@ async function playDurableTurn(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(
-      `Self-play ${input.player} turn ${input.turnNumber} failed from ${input.fen ?? "serialized state"}: ${message}`
+      `Self-play ${input.player} turn ${input.turnNumber} failed from ${
+        input.fen ?? "serialized state"
+      }: ${message}`
     );
   }
   const state = FENtoBoardState(analysis.fen);
@@ -408,6 +416,30 @@ export function durableGameTrainingRejectionReasons(
   return reasons;
 }
 
+export function resolveDurableInitialState(
+  config: Pick<
+    DurableSelfPlayGameConfig,
+    "initialFen" | "initialTurnNumber" | "dataRole"
+  >
+): {
+  initialFen: string;
+  initialTurnNumber: number;
+  initialPlayer: Player;
+  dataRole: "standard" | "counterfactual";
+} {
+  const initialFen = config.initialFen ?? GHQ_STARTING_FEN;
+  const initialTurnNumber = config.initialTurnNumber ?? 1;
+  if (!Number.isSafeInteger(initialTurnNumber) || initialTurnNumber < 1) {
+    throw new RangeError("initialTurnNumber must be a positive integer");
+  }
+  return {
+    initialFen,
+    initialTurnNumber,
+    initialPlayer: FENtoBoardState(initialFen).currentPlayerTurn ?? "RED",
+    dataRole: config.dataRole ?? "standard",
+  };
+}
+
 async function persistDurableGame(input: {
   result: Omit<DurableSelfPlayGameResult, "storage">;
   trainingSamples: DurableTrainingSample[];
@@ -439,8 +471,7 @@ export function durableSelfPlayProgressSnapshot(input: {
     codeVersion: input.config.codeVersion ?? "unknown",
     redAgentId: input.config.red.id,
     blueAgentId: input.config.blue.id,
-    redValueModelCheckpoint:
-      input.config.red.valueModelCheckpoint ?? "unknown",
+    redValueModelCheckpoint: input.config.red.valueModelCheckpoint ?? "unknown",
     blueValueModelCheckpoint:
       input.config.blue.valueModelCheckpoint ?? "unknown",
     completedTurns: input.completedTurns,
@@ -483,8 +514,14 @@ export async function playDurableSelfPlayGame(
 ): Promise<DurableSelfPlayGameResult> {
   "use workflow";
 
-  const initialFen = config.initialFen ?? GHQ_STARTING_FEN;
+  const { initialFen, initialTurnNumber, initialPlayer, dataRole } =
+    resolveDurableInitialState(config);
   const maxTurns = config.maxTurns ?? 160;
+  if (!Number.isSafeInteger(maxTurns) || maxTurns < initialTurnNumber) {
+    throw new RangeError(
+      "maxTurns must be an integer at least as large as initialTurnNumber"
+    );
+  }
   const repetitionLimit = config.repetitionLimit ?? 3;
   const noProgressTurns = config.noProgressTurns ?? 36;
   const decisions: DurableSelfPlayDecision[] = [];
@@ -494,7 +531,7 @@ export async function playDurableSelfPlayGame(
   const ownTurnHistory: Record<Player, string[][]> = { RED: [], BLUE: [] };
   let fen: string | undefined = initialFen;
   let serializedState: string | undefined;
-  let player: Player = "RED";
+  let player: Player = initialPlayer;
   let turnsWithoutProgress = 0;
   const strategicBest: Record<Player, StrategicProgress> = {
     RED: strategicProgress(initialFen, "RED"),
@@ -504,7 +541,7 @@ export async function playDurableSelfPlayGame(
   let pendingTurnMoves: string[] = [];
   let outcome: DurableSelfPlayGameResult["outcome"] | undefined;
 
-  let turnNumber = 1;
+  let turnNumber = initialTurnNumber;
   while (turnNumber <= maxTurns && !outcome) {
     const competitor = player === "RED" ? config.red : config.blue;
     const opponent = player === "RED" ? config.blue : config.red;
@@ -581,11 +618,14 @@ export async function playDurableSelfPlayGame(
   }
 
   if (!outcome) outcome = { termination: "max-turns" };
-  const trainingRejectionReasons = durableGameTrainingRejectionReasons(
-    decisions,
-    outcome,
-    config.codeVersion
-  );
+  const trainingRejectionReasons = [
+    ...(dataRole === "counterfactual" ? ["counterfactual-rollout"] : []),
+    ...durableGameTrainingRejectionReasons(
+      decisions,
+      outcome,
+      config.codeVersion
+    ),
+  ];
   const trainingEligible = trainingRejectionReasons.length === 0;
   const eligibleDecisions = trainingEligible
     ? decisions.filter((decision) =>
@@ -632,6 +672,8 @@ export async function playDurableSelfPlayGame(
     blueValueModelCheckpoint: config.blue.valueModelCheckpoint ?? "unknown",
     codeVersion: config.codeVersion ?? "unknown",
     initialFen,
+    initialTurnNumber,
+    dataRole,
     finalFen: fen ?? initialFen,
     decisions,
     outcome,
