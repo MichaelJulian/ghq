@@ -126,6 +126,10 @@ async function main() {
     const best = ranked[0];
     const runnerUp = ranked[1];
     const delta = best.rolloutValue - runnerUp.rolloutValue;
+    const confident = delta >= minimumDeltaRaw;
+    const hasUnverifiedFallback = siblings.some(
+      (branch) => branch.unverifiedFallbackDecisions > 0
+    );
     return [
       {
         rootId,
@@ -137,7 +141,13 @@ async function main() {
           ...siblings.map((branch) => branch.candidateRank)
         ),
         rolloutDelta: delta,
-        confident: delta >= minimumDeltaRaw,
+        confident,
+        trainingEligible: confident && !hasUnverifiedFallback,
+        trainingExclusion: !confident
+          ? "insufficient-rollout-separation"
+          : hasUnverifiedFallback
+            ? "unverified-fallback"
+            : undefined,
         branches: [...siblings].sort(
           (left, right) => left.candidateRank - right.candidateRank
         ),
@@ -145,6 +155,7 @@ async function main() {
     ];
   });
   const confident = pairs.filter((pair) => pair.confident);
+  const trainingEligible = pairs.filter((pair) => pair.trainingEligible);
   const report = {
     format: "ghq-counterfactual-rollout-report-v1",
     generationId,
@@ -154,6 +165,10 @@ async function main() {
     missingBranches: branches.length - completed.length,
     rootsWithCompletePairs: pairs.length,
     confidentPairs: confident.length,
+    trainingEligiblePairs: trainingEligible.length,
+    trainingExcludedForUnverifiedFallback: confident.filter(
+      (pair) => pair.trainingExclusion === "unverified-fallback"
+    ).length,
     minimumDelta: minimumDeltaRaw,
     searchTopCandidatePreferred: pairs.filter(
       (pair) =>
@@ -162,6 +177,10 @@ async function main() {
     searchTopCandidateRejected: pairs.filter(
       (pair) =>
         pair.confident &&
+        pair.preferredCandidateRank !== pair.searchPreferredCandidateRank
+    ).length,
+    searchTopCandidateRejectedTrainingEligible: trainingEligible.filter(
+      (pair) =>
         pair.preferredCandidateRank !== pair.searchPreferredCandidateRank
     ).length,
     terminalBranches: completed.filter(
