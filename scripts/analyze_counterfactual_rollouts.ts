@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 /** Score paired counterfactual continuations and emit policy-training rows. */
 
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { config } from "dotenv";
 
 import type { Player } from "../src/game/engine";
@@ -11,9 +11,7 @@ import {
   VALUE_FEATURE_NAMES_V3,
 } from "../src/game/value-model/features";
 import { predictZeroSumWinProbability } from "../src/game/value-model/inference";
-import {
-  counterfactualReplicateEvidence,
-} from "../src/game/self-play/counterfactual";
+import { counterfactualReplicateEvidence } from "../src/game/self-play/counterfactual";
 import {
   readPersistedSelfPlayGames,
   readSelfPlayGenerationManifest,
@@ -67,6 +65,47 @@ function rolloutValue(
   };
 }
 
+interface ExactHqAuditReport {
+  format: "ghq-exact-hq-audit-v1";
+  generationIds: string[];
+  codeVersions: string[];
+  maxNodesPerAudit: number;
+  approvedTrainingGameIds: string[];
+  audits: Array<{
+    gameId: string;
+    forced_hq_loss: boolean;
+    inconclusive: boolean;
+    exhaustive: boolean;
+    safe_turns: number;
+  }>;
+}
+
+async function loadExactHqAudit(
+  path: string | undefined,
+  generationId: string,
+  codeVersion: string
+) {
+  if (!path) return undefined;
+  const raw = await readFile(path, "utf8");
+  const report = JSON.parse(raw) as ExactHqAuditReport;
+  if (report.format !== "ghq-exact-hq-audit-v1") {
+    throw new Error(`${path} is not an exact HQ audit report`);
+  }
+  if (!report.generationIds.includes(generationId)) {
+    throw new Error(`${path} does not audit ${generationId}`);
+  }
+  if (
+    report.maxNodesPerAudit < 100_000 ||
+    report.codeVersions.length !== 1 ||
+    report.codeVersions[0] !== codeVersion
+  ) {
+    throw new Error(`${path} does not match the required search provenance`);
+  }
+  const approved = new Set(report.approvedTrainingGameIds);
+  const audited = new Set(report.audits.map((audit) => audit.gameId));
+  return { path, approved, audited, report };
+}
+
 async function main() {
   const generationId = argument("--generation");
   if (!generationId) {
@@ -79,11 +118,23 @@ async function main() {
   if (!manifest?.counterfactual) {
     throw new Error(`${generationId} has no counterfactual manifest metadata`);
   }
+  const exactHqAudit = await loadExactHqAudit(
+    argument("--hq-audit-report"),
+    generationId,
+    manifest.codeVersion
+  );
   const gameById = new Map(games.map((game) => [game.gameId, game]));
   const rollouts = manifest.counterfactual.branches.map((branch) => {
     const game = gameById.get(branch.gameId);
     if (!game) return { ...branch, status: "missing" as const };
     const scored = rolloutValue(game, branch.rootPlayer);
+    const hqCapture = game.outcome.termination === "hq-capture";
+    const tacticalAuditEligible =
+      !hqCapture ||
+      Boolean(
+        exactHqAudit?.audited.has(game.gameId) &&
+          exactHqAudit.approved.has(game.gameId)
+      );
     const start = position(branch.initialFen, branch.initialTurnNumber);
     return {
       ...branch,
@@ -97,6 +148,12 @@ async function main() {
       fallbackDecisions: game.quality.fallbackDecisions,
       unverifiedFallbackDecisions: game.quality.unverifiedFallbackDecisions,
       featuresV3: extractValueFeaturesV3(start, branch.rootPlayer),
+      tacticalAuditEligible,
+      tacticalAuditExclusion: tacticalAuditEligible
+        ? undefined
+        : exactHqAudit
+        ? "hq-audit-rejected"
+        : "hq-audit-missing",
     };
   });
   const completedRollouts = rollouts.filter(
@@ -117,8 +174,10 @@ async function main() {
     const completed = replicates.filter(
       (
         branch
-      ): branch is Extract<(typeof rollouts)[number], { status: "completed" }> =>
-        branch.status === "completed"
+      ): branch is Extract<
+        (typeof rollouts)[number],
+        { status: "completed" }
+      > => branch.status === "completed"
     );
     if (completed.length !== replicates.length) {
       return {
@@ -156,6 +215,19 @@ async function main() {
       unverifiedFallbackDecisions: completed.reduce(
         (sum, branch) => sum + branch.unverifiedFallbackDecisions,
         0
+      ),
+      tacticalAuditEligible: completed.every(
+        (branch) => branch.tacticalAuditEligible
+      ),
+      tacticalAuditExclusions: completed.flatMap((branch) =>
+        branch.tacticalAuditEligible
+          ? []
+          : [
+              {
+                gameId: branch.gameId,
+                reason: branch.tacticalAuditExclusion,
+              },
+            ]
       ),
       expectedReplicates: replicates.length,
       completedReplicates: completed.length,
@@ -215,6 +287,18 @@ async function main() {
     const hasUnverifiedFallback = siblings.some(
       (branch) => branch.unverifiedFallbackDecisions > 0
     );
+    const hasTacticalAuditExclusion = siblings.some(
+      (branch) => !branch.tacticalAuditEligible
+    );
+    const trainingExclusionReasons = [
+      ...(!confident ? ["insufficient-rollout-separation"] : []),
+      ...(conflictingReplicates > 0 ? ["replicate-disagreement"] : []),
+      ...(!replicateReliable && conflictingReplicates === 0
+        ? ["insufficient-replicate-support"]
+        : []),
+      ...(hasTacticalAuditExclusion ? ["tactical-audit-rejected"] : []),
+      ...(hasUnverifiedFallback ? ["unverified-fallback"] : []),
+    ];
     return [
       {
         rootId,
@@ -233,16 +317,12 @@ async function main() {
         requiredReplicateSupport,
         replicateReliable,
         trainingEligible:
-          confident && replicateReliable && !hasUnverifiedFallback,
-        trainingExclusion: !confident
-          ? "insufficient-rollout-separation"
-          : conflictingReplicates > 0
-            ? "replicate-disagreement"
-            : !replicateReliable
-              ? "insufficient-replicate-support"
-          : hasUnverifiedFallback
-            ? "unverified-fallback"
-            : undefined,
+          confident &&
+          replicateReliable &&
+          !hasTacticalAuditExclusion &&
+          !hasUnverifiedFallback,
+        trainingExclusion: trainingExclusionReasons[0],
+        trainingExclusionReasons,
         branches: [...siblings].sort(
           (left, right) => left.candidateRank - right.candidateRank
         ),
@@ -264,15 +344,27 @@ async function main() {
     rootsWithCompletePairs: pairs.length,
     confidentPairs: confident.length,
     trainingEligiblePairs: trainingEligible.length,
-    trainingExcludedForUnverifiedFallback: confident.filter(
-      (pair) => pair.trainingExclusion === "unverified-fallback"
+    trainingExcludedForUnverifiedFallback: confident.filter((pair) =>
+      pair.trainingExclusionReasons.includes("unverified-fallback")
     ).length,
-    trainingExcludedForReplicateDisagreement: confident.filter(
-      (pair) => pair.trainingExclusion === "replicate-disagreement"
+    trainingExcludedForReplicateDisagreement: confident.filter((pair) =>
+      pair.trainingExclusionReasons.includes("replicate-disagreement")
     ).length,
-    trainingExcludedForInsufficientReplicateSupport: confident.filter(
-      (pair) => pair.trainingExclusion === "insufficient-replicate-support"
+    trainingExcludedForInsufficientReplicateSupport: confident.filter((pair) =>
+      pair.trainingExclusionReasons.includes("insufficient-replicate-support")
     ).length,
+    trainingExcludedForTacticalAudit: confident.filter((pair) =>
+      pair.trainingExclusionReasons.includes("tactical-audit-rejected")
+    ).length,
+    exactHqAudit: exactHqAudit
+      ? {
+          path: exactHqAudit.path,
+          maxNodesPerAudit: exactHqAudit.report.maxNodesPerAudit,
+          auditedGames: exactHqAudit.audited.size,
+          approvedTrainingGames: exactHqAudit.approved.size,
+          codeVersions: exactHqAudit.report.codeVersions,
+        }
+      : { provided: false },
     minimumDelta: minimumDeltaRaw,
     searchTopCandidatePreferred: pairs.filter(
       (pair) =>
