@@ -145,10 +145,14 @@ async function main() {
     maxDepth: integerArgument("--max-depth", 2, 1, 3),
     beamWidth: integerArgument("--beam", 6, 2, 16),
     rolloutTurns: integerArgument("--rollout-turns", 24, 2, 120),
-    replicates: integerArgument("--replicates", 1, 1, 4),
+    // A single deterministic continuation frequently gives both candidate
+    // branches the same binary winner and therefore no policy information.
+    // Two matched stochastic continuations are the cheapest setting that can
+    // distinguish a repeatable advantage from one lucky trajectory.
+    replicates: integerArgument("--replicates", 2, 1, 4),
     explorationTemperature: numberArgument(
       "--exploration-temperature",
-      0,
+      0.12,
       0,
       0.5
     ),
