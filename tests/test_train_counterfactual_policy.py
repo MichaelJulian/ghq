@@ -132,6 +132,46 @@ class CounterfactualPolicyTrainingTests(unittest.TestCase):
             _, records, _ = load_counterfactual_reports([path])
         self.assertEqual(records, [])
 
+    def test_analyzer_clean_replicate_gate_can_admit_aggregate_fallback(self):
+        branches = [
+            {
+                "status": "completed",
+                "candidateRank": rank,
+                "featuresV3": [float(rank), 0.0],
+                "rolloutValue": value,
+                "valueSource": "terminal",
+                # The analyzer has already proved that two matched replicates
+                # are clean; a third unverified replicate is not label evidence.
+                "unverifiedFallbackDecisions": unverified,
+            }
+            for rank, value, unverified in ((1, 0.0, 0), (2, 1.0, 1))
+        ]
+        report = {
+            "format": "ghq-counterfactual-rollout-report-v1",
+            "featureSchema": ["base", "shape"],
+            "expectedBranches": 2,
+            "completedBranches": 2,
+            "missingBranches": 0,
+            "pairs": [
+                {
+                    "confident": True,
+                    "trainingEligible": True,
+                    "rootId": "root-clean-replicates",
+                    "sourceGameId": "game-clean-replicates",
+                    "rootPlayer": "BLUE",
+                    "sourceTurnNumber": 12,
+                    "branches": branches,
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "clean-replicates.json"
+            path.write_text(json.dumps(report))
+            _, records, _ = load_counterfactual_reports([path])
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["label"], 0.0)
+
     def test_semantically_duplicate_roots_are_admitted_once(self):
         def pair(root_id, source_game):
             return {

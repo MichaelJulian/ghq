@@ -83,7 +83,11 @@ async function main() {
     throw new Error("Pass at least one --generation <id>");
   }
   const rawMaxNodes = argumentsFor("--max-nodes").at(-1);
-  const maxNodes = rawMaxNodes ? Number.parseInt(rawMaxNodes, 10) : 100_000;
+  // Production counterfactual positions routinely need several hundred
+  // thousand states to prove that every legal defense still loses. The old
+  // 100k default discarded three of the first seven otherwise clean labels;
+  // the observed high-water mark was 1.65m states, so keep a measured margin.
+  const maxNodes = rawMaxNodes ? Number.parseInt(rawMaxNodes, 10) : 2_000_000;
   if (!Number.isSafeInteger(maxNodes) || maxNodes < 1) {
     throw new Error("--max-nodes must be a positive integer");
   }

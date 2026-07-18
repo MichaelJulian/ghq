@@ -370,6 +370,8 @@ export function counterfactualReplicateSeed(
 interface ReplicateValue {
   replicate: number;
   rolloutValue: number;
+  /** A replicate with shallow/seeded fallback cannot supply label evidence. */
+  unverifiedFallbackDecisions?: number;
 }
 
 /** Require repeated matched continuations to support the same policy label. */
@@ -380,7 +382,7 @@ export function counterfactualReplicateEvidence(
   minimumDelta: number
 ) {
   const runnerUpByReplicate = new Map(
-    runnerUp.map((replicate) => [replicate.replicate, replicate.rolloutValue])
+    runnerUp.map((replicate) => [replicate.replicate, replicate])
   );
   const replicateDeltas = preferred.flatMap((replicate) => {
     const other = runnerUpByReplicate.get(replicate.replicate);
@@ -389,7 +391,11 @@ export function counterfactualReplicateEvidence(
       : [
           {
             replicate: replicate.replicate,
-            preferredMinusRunnerUp: replicate.rolloutValue - other,
+            preferredMinusRunnerUp:
+              replicate.rolloutValue - other.rolloutValue,
+            verified:
+              (replicate.unverifiedFallbackDecisions ?? 0) === 0 &&
+              (other.unverifiedFallbackDecisions ?? 0) === 0,
           },
         ];
   });
@@ -399,14 +405,30 @@ export function counterfactualReplicateEvidence(
   const conflictingReplicates = replicateDeltas.filter(
     (replicate) => replicate.preferredMinusRunnerUp <= -minimumDelta
   ).length;
+  const cleanSupportingReplicates = replicateDeltas.filter(
+    (replicate) =>
+      replicate.verified &&
+      replicate.preferredMinusRunnerUp >= minimumDelta
+  ).length;
+  const cleanConflictingReplicates = replicateDeltas.filter(
+    (replicate) =>
+      replicate.verified &&
+      replicate.preferredMinusRunnerUp <= -minimumDelta
+  ).length;
+  const unverifiedReplicates = replicateDeltas.filter(
+    (replicate) => !replicate.verified
+  ).length;
   const requiredReplicateSupport = Math.min(2, expectedReplicates);
   return {
     replicateDeltas,
     supportingReplicates,
     conflictingReplicates,
+    cleanSupportingReplicates,
+    cleanConflictingReplicates,
+    unverifiedReplicates,
     requiredReplicateSupport,
     replicateReliable:
-      supportingReplicates >= requiredReplicateSupport &&
-      conflictingReplicates === 0,
+      cleanSupportingReplicates >= requiredReplicateSupport &&
+      cleanConflictingReplicates === 0,
   };
 }

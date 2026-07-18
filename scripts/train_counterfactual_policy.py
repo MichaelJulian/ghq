@@ -286,7 +286,8 @@ def load_counterfactual_reports(
             # Newer analyzers distinguish raw separation from a trustworthy
             # training label (replicate agreement, fallback quality, etc.).
             # Preserve compatibility with older reports that predate the flag.
-            if "trainingEligible" in pair and not pair.get("trainingEligible"):
+            analyzer_eligibility = "trainingEligible" in pair
+            if analyzer_eligibility and not pair.get("trainingEligible"):
                 continue
             root_id = str(pair["rootId"])
             if root_id in seen_roots:
@@ -297,7 +298,10 @@ def load_counterfactual_reports(
                     for branch in pair.get("branches", [])
                     if branch.get("status") == "completed"
                     and isinstance(branch.get("featuresV3"), list)
-                    and int(branch.get("unverifiedFallbackDecisions", 0)) == 0
+                    and (
+                        analyzer_eligibility
+                        or int(branch.get("unverifiedFallbackDecisions", 0)) == 0
+                    )
                 ],
                 key=lambda branch: int(branch["candidateRank"]),
             )

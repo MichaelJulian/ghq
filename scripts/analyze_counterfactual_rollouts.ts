@@ -236,6 +236,8 @@ async function main() {
         gameId: branch.gameId,
         rolloutValue: branch.rolloutValue,
         valueSource: branch.valueSource,
+        fallbackDecisions: branch.fallbackDecisions,
+        unverifiedFallbackDecisions: branch.unverifiedFallbackDecisions,
         outcome: branch.outcome,
         finalFen: branch.finalFen,
       })),
@@ -276,6 +278,9 @@ async function main() {
       replicateDeltas,
       supportingReplicates,
       conflictingReplicates,
+      cleanSupportingReplicates,
+      cleanConflictingReplicates,
+      unverifiedReplicates,
       requiredReplicateSupport,
       replicateReliable,
     } = counterfactualReplicateEvidence(
@@ -284,20 +289,19 @@ async function main() {
       Math.max(...siblings.map((branch) => branch.expectedReplicates)),
       minimumDeltaRaw
     );
-    const hasUnverifiedFallback = siblings.some(
-      (branch) => branch.unverifiedFallbackDecisions > 0
-    );
     const hasTacticalAuditExclusion = siblings.some(
       (branch) => !branch.tacticalAuditEligible
     );
     const trainingExclusionReasons = [
       ...(!confident ? ["insufficient-rollout-separation"] : []),
-      ...(conflictingReplicates > 0 ? ["replicate-disagreement"] : []),
-      ...(!replicateReliable && conflictingReplicates === 0
-        ? ["insufficient-replicate-support"]
+      ...(cleanConflictingReplicates > 0 ? ["replicate-disagreement"] : []),
+      ...(!replicateReliable && cleanConflictingReplicates === 0
+        ? ["insufficient-clean-replicate-support"]
+        : []),
+      ...(!replicateReliable && unverifiedReplicates > 0
+        ? ["unverified-replicate-evidence"]
         : []),
       ...(hasTacticalAuditExclusion ? ["tactical-audit-rejected"] : []),
-      ...(hasUnverifiedFallback ? ["unverified-fallback"] : []),
     ];
     return [
       {
@@ -314,13 +318,15 @@ async function main() {
         replicateDeltas,
         supportingReplicates,
         conflictingReplicates,
+        cleanSupportingReplicates,
+        cleanConflictingReplicates,
+        unverifiedReplicates,
         requiredReplicateSupport,
         replicateReliable,
         trainingEligible:
           confident &&
           replicateReliable &&
-          !hasTacticalAuditExclusion &&
-          !hasUnverifiedFallback,
+          !hasTacticalAuditExclusion,
         trainingExclusion: trainingExclusionReasons[0],
         trainingExclusionReasons,
         branches: [...siblings].sort(
@@ -345,13 +351,15 @@ async function main() {
     confidentPairs: confident.length,
     trainingEligiblePairs: trainingEligible.length,
     trainingExcludedForUnverifiedFallback: confident.filter((pair) =>
-      pair.trainingExclusionReasons.includes("unverified-fallback")
+      pair.trainingExclusionReasons.includes("unverified-replicate-evidence")
     ).length,
     trainingExcludedForReplicateDisagreement: confident.filter((pair) =>
       pair.trainingExclusionReasons.includes("replicate-disagreement")
     ).length,
     trainingExcludedForInsufficientReplicateSupport: confident.filter((pair) =>
-      pair.trainingExclusionReasons.includes("insufficient-replicate-support")
+      pair.trainingExclusionReasons.includes(
+        "insufficient-clean-replicate-support"
+      )
     ).length,
     trainingExcludedForTacticalAudit: confident.filter((pair) =>
       pair.trainingExclusionReasons.includes("tactical-audit-rejected")

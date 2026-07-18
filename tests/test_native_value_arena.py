@@ -7,6 +7,7 @@ import json
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,7 +16,9 @@ sys.path.insert(0, str(ROOT / "api"))
 
 import _engine as engine  # noqa: E402
 import _value_model as value_model  # noqa: E402
+import run_native_value_arena as arena  # noqa: E402
 from run_native_value_arena import (  # noqa: E402
+    GameConfig,
     GameResult,
     extends_strategic_best,
     merge_strategic_best,
@@ -98,6 +101,53 @@ class NativeValueArenaTest(unittest.TestCase):
             evaluate(engine.STARTING_FEN, 1, engine.RED),
             0.5 * features[0],
         )
+
+    def test_play_game_forwards_the_movers_policy_to_search(self) -> None:
+        challenger = {
+            **self.incumbent,
+            "policy_correction": {
+                "feature_indices": [3],  # own_to_move
+                "coefficients": [2.0],
+                "scale": 0.25,
+            },
+        }
+        seen_policy_scores = []
+
+        def fake_search(board, *args, **kwargs):
+            seen_policy_scores.append(
+                kwargs["policy_function"](
+                    board.board_fen(), 1, board.turn
+                )
+            )
+            return {
+                "search": {
+                    "fallback_used": "none",
+                    "completed_depth_in_turns": 2,
+                    "opening_book_used": False,
+                },
+                "best_turn": {"all_moves": ["skip"]},
+            }
+
+        config = GameConfig(
+            index=0,
+            seed=1,
+            baseline_path="baseline.json",
+            challenger_path="challenger.json",
+            time_ms=100,
+            max_depth=2,
+            beam_width=4,
+            max_turns=1,
+            repetition_limit=3,
+            no_progress_turns=24,
+        )
+        with patch.object(
+            arena,
+            "load_artifact",
+            side_effect=[self.incumbent, challenger],
+        ), patch.object(arena.ghq_ai, "search", side_effect=fake_search):
+            arena.play_game(config)
+
+        self.assertEqual(seen_policy_scores, [0.5])
 
     def test_quality_gate_rejects_one_seeded_fallback(self) -> None:
         report = summarize(

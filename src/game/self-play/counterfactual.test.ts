@@ -220,6 +220,8 @@ describe("counterfactual rollout selection", () => {
     ).toMatchObject({
       supportingReplicates: 2,
       conflictingReplicates: 0,
+      cleanSupportingReplicates: 2,
+      cleanConflictingReplicates: 0,
       requiredReplicateSupport: 2,
       replicateReliable: true,
     });
@@ -239,6 +241,61 @@ describe("counterfactual rollout selection", () => {
     ).toMatchObject({
       supportingReplicates: 1,
       conflictingReplicates: 1,
+      replicateReliable: false,
+    });
+  });
+
+  it("ignores unverified replicates but keeps two clean matched supports", () => {
+    expect(
+      counterfactualReplicateEvidence(
+        [
+          { replicate: 0, rolloutValue: 1 },
+          { replicate: 1, rolloutValue: 0.5 },
+          { replicate: 2, rolloutValue: 1 },
+        ],
+        [
+          { replicate: 0, rolloutValue: 0 },
+          {
+            replicate: 1,
+            rolloutValue: 0.5,
+            unverifiedFallbackDecisions: 1,
+          },
+          { replicate: 2, rolloutValue: 0 },
+        ],
+        3,
+        0.02
+      )
+    ).toMatchObject({
+      supportingReplicates: 2,
+      cleanSupportingReplicates: 2,
+      cleanConflictingReplicates: 0,
+      unverifiedReplicates: 1,
+      replicateReliable: true,
+    });
+  });
+
+  it("does not count an unverified rollout as required support", () => {
+    expect(
+      counterfactualReplicateEvidence(
+        [
+          { replicate: 0, rolloutValue: 1 },
+          {
+            replicate: 1,
+            rolloutValue: 1,
+            unverifiedFallbackDecisions: 1,
+          },
+        ],
+        [
+          { replicate: 0, rolloutValue: 0 },
+          { replicate: 1, rolloutValue: 0 },
+        ],
+        2,
+        0.02
+      )
+    ).toMatchObject({
+      supportingReplicates: 2,
+      cleanSupportingReplicates: 1,
+      unverifiedReplicates: 1,
       replicateReliable: false,
     });
   });

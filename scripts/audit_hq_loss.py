@@ -16,6 +16,7 @@ import engine  # noqa: E402
 
 
 MoveLine = Tuple[str, ...]
+DEFAULT_MAX_NODES = 2_000_000
 
 
 class AuditLimit(RuntimeError):
@@ -150,7 +151,7 @@ def exact_hq_capture_move_priority(
 
 
 def audit_hq_loss(
-    fen: str, example_limit: int = 10, max_nodes: int = 100_000
+    fen: str, example_limit: int = 10, max_nodes: int = DEFAULT_MAX_NODES
 ) -> dict[str, object]:
     if max_nodes < 1:
         raise ValueError("max_nodes must be positive")
@@ -212,7 +213,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("fen", help="GHQ FEN before the losing player's turn")
     parser.add_argument("--examples", type=int, default=10)
-    parser.add_argument("--max-nodes", type=int, default=100_000)
+    parser.add_argument("--max-nodes", type=int, default=DEFAULT_MAX_NODES)
     return parser.parse_args(argv)
 
 
