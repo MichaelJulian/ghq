@@ -89,6 +89,22 @@ def fit_offset_logistic_correction(
     return np.asarray(result.x, dtype=np.float64)
 
 
+def rank_correction_features(
+    offsets: np.ndarray,
+    vectors: np.ndarray,
+    labels: np.ndarray,
+    weights: np.ndarray,
+) -> np.ndarray:
+    """Rank correction features from training residuals without holdout leakage."""
+    if vectors.ndim != 2 or len(vectors) != len(offsets):
+        raise ValueError("feature-ranking inputs have incompatible shapes")
+    normalized_weights = np.asarray(weights, dtype=np.float64)
+    normalized_weights = normalized_weights / normalized_weights.sum()
+    residual = labels - sigmoid(offsets)
+    signal = np.abs(vectors.T @ (normalized_weights * residual))
+    return np.argsort(-signal, kind="stable")
+
+
 def export_policy_correction(
     baseline: Dict[str, Any],
     feature_names: List[str],
@@ -378,8 +394,20 @@ def main() -> None:
     feature_scales = np.std(train_vector, axis=0)
     feature_scales[feature_scales < 1e-8] = 1.0
     train_standardized = train_vector / feature_scales
+    feature_ranking = rank_correction_features(
+        train_offset,
+        train_standardized,
+        train_label,
+        train_weight,
+    )
 
     l2_candidates = [0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0]
+    feature_count_candidates = sorted(
+        {
+            min(len(feature_indices), count)
+            for count in (4, 8, 16, 32, len(feature_indices))
+        }
+    )
     validation_records = records_at(records, splits["validation"])
     validation_offset, validation_vector, validation_label, _ = augmented_pair_arrays(
         validation_records, baseline, feature_indices
@@ -387,34 +415,42 @@ def main() -> None:
     validation_standardized = validation_vector / feature_scales
     baseline_validation_probability = sigmoid(validation_offset)
     candidates = []
-    for l2 in l2_candidates:
-        coefficients = fit_offset_logistic_correction(
-            train_offset,
-            train_standardized,
-            train_label,
-            train_weight,
-            l2,
-        )
-        probability = offset_probabilities(
-            validation_offset, validation_standardized, coefficients
-        )
-        candidate_metrics = binary_metrics(validation_label, probability)
-        baseline_metrics = binary_metrics(
-            validation_label, baseline_validation_probability
-        )
-        candidates.append(
-            {
-                "l2": l2,
-                "coefficients": coefficients,
-                "probability": probability,
-                "metrics": candidate_metrics,
-                "baseline_metrics": baseline_metrics,
-                "passed": (
-                    candidate_metrics["log_loss"] < baseline_metrics["log_loss"]
-                    and candidate_metrics["accuracy"] >= baseline_metrics["accuracy"]
-                ),
-            }
-        )
+    for feature_count in feature_count_candidates:
+        selected_positions = feature_ranking[:feature_count]
+        for l2 in l2_candidates:
+            coefficients = fit_offset_logistic_correction(
+                train_offset,
+                train_standardized[:, selected_positions],
+                train_label,
+                train_weight,
+                l2,
+            )
+            probability = offset_probabilities(
+                validation_offset,
+                validation_standardized[:, selected_positions],
+                coefficients,
+            )
+            candidate_metrics = binary_metrics(validation_label, probability)
+            baseline_metrics = binary_metrics(
+                validation_label, baseline_validation_probability
+            )
+            candidates.append(
+                {
+                    "feature_count": feature_count,
+                    "feature_positions": selected_positions,
+                    "l2": l2,
+                    "coefficients": coefficients,
+                    "probability": probability,
+                    "metrics": candidate_metrics,
+                    "baseline_metrics": baseline_metrics,
+                    "passed": (
+                        candidate_metrics["log_loss"]
+                        < baseline_metrics["log_loss"]
+                        and candidate_metrics["accuracy"]
+                        >= baseline_metrics["accuracy"]
+                    ),
+                }
+            )
     feasible = [candidate for candidate in candidates if candidate["passed"]]
     pool = feasible or candidates
     best_loss = min(candidate["metrics"]["log_loss"] for candidate in pool)
@@ -424,7 +460,10 @@ def main() -> None:
             for candidate in pool
             if candidate["metrics"]["log_loss"] <= best_loss + 0.001
         ],
-        key=lambda candidate: candidate["l2"],
+        key=lambda candidate: (
+            candidate["l2"],
+            -candidate["feature_count"],
+        ),
     )
 
     test_records = records_at(records, splits["test"])
@@ -432,7 +471,9 @@ def main() -> None:
         test_records, baseline, feature_indices
     )
     test_probability = offset_probabilities(
-        test_offset, test_vector / feature_scales, selected["coefficients"]
+        test_offset,
+        (test_vector / feature_scales)[:, selected["feature_positions"]],
+        selected["coefficients"],
     )
     baseline_test_probability = sigmoid(test_offset)
     test_metrics = binary_metrics(test_label, test_probability)
@@ -488,6 +529,7 @@ def main() -> None:
         "candidate_validation": [
             {
                 "l2": candidate["l2"],
+                "feature_count": candidate["feature_count"],
                 "metrics": candidate["metrics"],
                 "baseline_metrics": candidate["baseline_metrics"],
                 "passed": candidate["passed"],
@@ -495,6 +537,11 @@ def main() -> None:
             for candidate in candidates
         ],
         "selected_l2": selected["l2"],
+        "selected_feature_count": selected["feature_count"],
+        "selected_features": [
+            feature_names[int(feature_indices[position])]
+            for position in selected["feature_positions"]
+        ],
         "validation_constraints_passed": bool(feasible),
         "test": {
             "candidate": test_metrics,
@@ -508,8 +555,8 @@ def main() -> None:
     artifact = export_policy_correction(
         raw_baseline,
         feature_names,
-        feature_indices,
-        feature_scales,
+        feature_indices[selected["feature_positions"]],
+        feature_scales[selected["feature_positions"]],
         selected["coefficients"],
         dataset_hash,
         {
@@ -517,6 +564,7 @@ def main() -> None:
             "counterfactual_pairs": len(records),
             "counterfactual_source_games": report["source_games"],
             "counterfactual_selected_l2": selected["l2"],
+            "counterfactual_selected_feature_count": selected["feature_count"],
             "counterfactual_approved_for_arena": approved,
         },
     )

@@ -11,11 +11,22 @@ from scripts.train_counterfactual_policy import (
     grouped_split,
     load_counterfactual_reports,
     offset_probabilities,
+    rank_correction_features,
 )
 from scripts.train_value_model import exported_probabilities
 
 
 class CounterfactualPolicyTrainingTests(unittest.TestCase):
+    def test_feature_ranking_uses_training_residual_signal(self):
+        vectors = np.asarray(
+            [[1.0, 0.0], [-1.0, 0.0], [2.0, 0.0], [-2.0, 0.0]]
+        )
+        labels = np.asarray([1.0, 0.0, 1.0, 0.0])
+        ranking = rank_correction_features(
+            np.zeros(4), vectors, labels, np.ones(4)
+        )
+        self.assertEqual(ranking.tolist(), [0, 1])
+
     def test_incomplete_rollout_report_is_rejected(self):
         report = {
             "format": "ghq-counterfactual-rollout-report-v1",
