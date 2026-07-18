@@ -14,6 +14,12 @@ export interface ValueModelArenaSummary {
     decisions: number;
     unverifiedFallbackDecisions: number;
     unverifiedFallbackRate: number;
+    seededFallbackDecisions: number;
+    incompleteTurnDecisions: number;
+    missingRuntimeProvenanceDecisions: number;
+    mismatchedSearchCodeDecisions: number;
+    searchBackends: string[];
+    valueModelBackends: string[];
   };
   challenger: {
     points: number;
@@ -218,6 +224,34 @@ export function summarizeValueModelArena(
   const unverifiedFallbackRate = decisions
     ? unverifiedFallbackDecisions / decisions
     : 0;
+  const arenaDecisions = scored.flatMap(({ game }) =>
+    game.decisions.map((decision) => ({ game, decision }))
+  );
+  const seededFallbackDecisions = arenaDecisions.filter(
+    ({ decision }) => decision.fallback === "seeded"
+  ).length;
+  const incompleteTurnDecisions = arenaDecisions.filter(
+    ({ decision }) => !decision.completedTurn
+  ).length;
+  const missingRuntimeProvenanceDecisions = arenaDecisions.filter(
+    ({ decision }) =>
+      !decision.searchBackend ||
+      !decision.searchValueModelBackend ||
+      !decision.searchCodeVersion
+  ).length;
+  const mismatchedSearchCodeDecisions = arenaDecisions.filter(
+    ({ game, decision }) =>
+      Boolean(decision.searchCodeVersion) &&
+      decision.searchCodeVersion !== game.codeVersion
+  ).length;
+  const searchBackends = new Set(
+    arenaDecisions.map(({ decision }) => decision.searchBackend ?? "unknown")
+  );
+  const valueModelBackends = new Set(
+    arenaDecisions.map(
+      ({ decision }) => decision.searchValueModelBackend ?? "unknown"
+    )
+  );
   const scoreRate = points / scored.length;
   const clamped = Math.max(0.001, Math.min(0.999, scoreRate));
   const ci95Low = percentile(draws, 0.025);
@@ -269,6 +303,22 @@ export function summarizeValueModelArena(
   if (scored.length < 100) reasons.push("fewer-than-100-games");
   if (unverifiedFallbackRate > 0.05)
     reasons.push("excessive-unverified-search-rate");
+  // Aggregate rates are useful diagnostics, but promotion cannot tolerate a
+  // single blind complete-turn seed: it can directly determine a game and
+  // manufacture apparent Elo. Exact HQ-safe fallbacks are not seeds and stay
+  // separately represented by the existing fallback telemetry.
+  if (seededFallbackDecisions > 0)
+    reasons.push("seeded-fallback-decision");
+  if (incompleteTurnDecisions > 0)
+    reasons.push("incomplete-turn-decision");
+  if (missingRuntimeProvenanceDecisions > 0)
+    reasons.push("missing-search-runtime-provenance");
+  if (mismatchedSearchCodeDecisions > 0)
+    reasons.push("search-code-does-not-match-game");
+  if (arenaDecisions.length && searchBackends.size !== 1)
+    reasons.push("mixed-search-backends");
+  if (arenaDecisions.length && valueModelBackends.size !== 1)
+    reasons.push("mixed-value-model-backends");
   if (mismatchedPairSeed) reasons.push("mismatched-pair-seed");
   if (mismatchedPairCompetitor) reasons.push("mismatched-pair-competitor");
   if (mismatchedPairRules) reasons.push("mismatched-pair-rules");
@@ -297,6 +347,12 @@ export function summarizeValueModelArena(
       decisions,
       unverifiedFallbackDecisions,
       unverifiedFallbackRate: Number(unverifiedFallbackRate.toFixed(4)),
+      seededFallbackDecisions,
+      incompleteTurnDecisions,
+      missingRuntimeProvenanceDecisions,
+      mismatchedSearchCodeDecisions,
+      searchBackends: [...searchBackends].sort(),
+      valueModelBackends: [...valueModelBackends].sort(),
     },
     challenger: {
       points,

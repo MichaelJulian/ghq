@@ -188,4 +188,81 @@ describe("value-model arena promotion gate", () => {
       "excessive-unverified-search-rate"
     );
   });
+
+  it("rejects even one seeded fallback below the aggregate-rate threshold", () => {
+    const games = Array.from({ length: 100 }, (_, index) =>
+      game(index, index < 70)
+    );
+    games[0].quality.decisions = 100;
+    games[0].quality.unverifiedFallbackDecisions = 1;
+    games[0].decisions = [
+      {
+        turnNumber: 10,
+        player: "RED",
+        fen: "before",
+        resultingFen: "after",
+        personality: "balanced",
+        agentId: games[0].redAgentId,
+        opponentId: games[0].blueAgentId,
+        selectedMoves: ["a1a2"],
+        selectedRank: 1,
+        candidateTurns: [],
+        currentPlayerScore: 0,
+        winProbability: 0.5,
+        completedDepth: 0,
+        timedOut: true,
+        fallback: "seeded",
+        searchBackend: "native-python",
+        searchValueModelBackend: "native-gbdt",
+        searchCodeVersion: "test-commit",
+        explorationSeed: 1,
+        explorationTemperature: 0,
+        features: [],
+        completedTurn: true,
+      },
+    ];
+    const summary = summarizeValueModelArena(games, 1_000)!;
+    expect(summary.searchQuality.unverifiedFallbackRate).toBe(0.01);
+    expect(summary.searchQuality.seededFallbackDecisions).toBe(1);
+    expect(summary.promotionGate.reasons).toContain(
+      "seeded-fallback-decision"
+    );
+  });
+
+  it("rejects decision provenance that disagrees with the game revision", () => {
+    const games = Array.from({ length: 100 }, (_, index) =>
+      game(index, index < 70)
+    );
+    games[0].decisions = [
+      {
+        turnNumber: 10,
+        player: "RED",
+        fen: "before",
+        resultingFen: "after",
+        personality: "balanced",
+        agentId: games[0].redAgentId,
+        opponentId: games[0].blueAgentId,
+        selectedMoves: ["a1a2"],
+        selectedRank: 1,
+        candidateTurns: [],
+        currentPlayerScore: 0,
+        winProbability: 0.5,
+        completedDepth: 2,
+        timedOut: false,
+        fallback: "none",
+        searchBackend: "native-python",
+        searchValueModelBackend: "native-gbdt",
+        searchCodeVersion: "different-commit",
+        explorationSeed: 1,
+        explorationTemperature: 0,
+        features: [],
+        completedTurn: true,
+      },
+    ];
+    const summary = summarizeValueModelArena(games, 1_000)!;
+    expect(summary.searchQuality.mismatchedSearchCodeDecisions).toBe(1);
+    expect(summary.promotionGate.reasons).toContain(
+      "search-code-does-not-match-game"
+    );
+  });
 });
