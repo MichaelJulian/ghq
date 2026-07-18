@@ -1449,6 +1449,25 @@ class SearchTests(unittest.TestCase):
             )
         )
 
+    def test_mild_stagnation_keeps_reply_verification_root_narrow(self):
+        board = engine.BaseBoard(
+            "6i1/3q3i/1i6/F1r↓1i3/8/8/1FI1IF1I/2PI2IQ II ii b"
+        )
+        searcher = ghq_ai.Searcher(
+            "mobile_raider",
+            time_ms=60_000,
+            beam_width=6,
+            turn_number=38,
+            stagnation_turns=8,
+        )
+        searcher.root_key = board.serialize()
+        searcher.verification_mode = True
+
+        candidates = searcher.generate_turn_candidates(board)
+
+        self.assertTrue(candidates)
+        self.assertLessEqual(len(candidates), 2)
+
     def test_purpose_filter_cannot_delete_a_quiet_hq_escape(self):
         board = engine.BaseBoard(
             "q2i1i2/3ii3/4f3/8/8/1F6/IF1I1f2/1P2f1Q1 II i r"

@@ -3018,12 +3018,17 @@ class Searcher:
             # The later improvement pass is responsible for breadth.
             partial_width = max(8, self.beam_width)
             evaluation_pool_width = max(6, self.beam_width)
-            if self.stagnation_factor() >= 0.20:
+            if self.stagnation_factor() >= 0.70:
+                # Do not spend the tactical-floor budget on extra root lines
+                # merely because a game has had a few quiet turns.  Early
+                # widening caused the pass to time out before *any* opponent
+                # reply completed.  Breadth is justified only as the actual
+                # no-progress limit approaches.
                 partial_width = max(partial_width, self.beam_width * 4)
                 evaluation_pool_width = max(
                     evaluation_pool_width, self.beam_width * 3
                 )
-            if self.stagnation_factor() >= 0.70:
+            if self.stagnation_factor() >= 0.90:
                 # Near the no-progress limit, the narrow verification pool is
                 # no longer allowed to contain only safe retreats. Multi-step
                 # capture constructions often begin with a quiet lane-clearing
@@ -3057,7 +3062,7 @@ class Searcher:
         if self.verification_mode:
             turn_width = 2 if is_root_generation else 1
             turn_capacity = turn_width
-            if is_root_generation and self.stagnation_factor() >= 0.20:
+            if is_root_generation and self.stagnation_factor() >= 0.70:
                 turn_width = max(turn_width, min(5, self.beam_width))
                 turn_capacity = turn_width + 2
         else:
