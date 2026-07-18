@@ -29,6 +29,15 @@ export interface ValueModelArtifact {
     scale: number;
     intercept: number;
   };
+  /**
+   * Optional sparse additive correction in the artifact's feature space.
+   * This lets a challenger preserve every incumbent tree while learning how
+   * append-only strategic features should adjust its calibrated log-odds.
+   */
+  linear_correction?: {
+    feature_indices: number[];
+    coefficients: number[];
+  };
   trees: ExportedTree[];
   metadata: Record<string, unknown>;
 }
@@ -60,6 +69,7 @@ export function valueModelCheckpointId(
   // Prefer the calibration dataset hash when present; otherwise distinct
   // recalibrations can look like the same checkpoint apart from a timestamp.
   const datasetHash =
+    artifact.metadata.correction_dataset_sha256 ??
     artifact.metadata.calibration_dataset_sha256 ??
     artifact.metadata.dataset_sha256;
   const fingerprint =
@@ -102,6 +112,23 @@ export function assertValueModelCompatible(
       "GHQ value model feature schema does not match the runtime"
     );
   }
+  const correction = artifact.linear_correction;
+  if (correction) {
+    if (
+      correction.feature_indices.length !== correction.coefficients.length ||
+      correction.feature_indices.some(
+        (index) =>
+          !Number.isInteger(index) ||
+          index < 0 ||
+          index >= artifact.feature_names.length
+      ) ||
+      correction.coefficients.some(
+        (coefficient) => !Number.isFinite(coefficient)
+      )
+    ) {
+      throw new Error("GHQ value model linear correction is invalid");
+    }
+  }
 }
 
 function featuresForArtifact(
@@ -129,9 +156,17 @@ export function predictFromFeatures(
   for (const tree of artifact.trees) {
     raw += artifact.learning_rate * evaluateTree(tree, features);
   }
-  return sigmoid(
-    artifact.calibration.scale * raw + artifact.calibration.intercept
-  );
+  let calibrated =
+    artifact.calibration.scale * raw + artifact.calibration.intercept;
+  const correction = artifact.linear_correction;
+  if (correction) {
+    for (let index = 0; index < correction.feature_indices.length; index += 1) {
+      calibrated +=
+        correction.coefficients[index] *
+        features[correction.feature_indices[index]];
+    }
+  }
+  return sigmoid(calibrated);
 }
 
 export function predictWinProbability(

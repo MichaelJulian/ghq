@@ -655,7 +655,17 @@ def exported_raw_scores(artifact: Dict[str, Any], vectors: np.ndarray) -> np.nda
 def exported_probabilities(artifact: Dict[str, Any], vectors: np.ndarray) -> np.ndarray:
     raw = exported_raw_scores(artifact, vectors)
     calibration = artifact["calibration"]
-    return sigmoid(calibration["scale"] * raw + calibration["intercept"])
+    calibrated = calibration["scale"] * raw + calibration["intercept"]
+    correction = artifact.get("linear_correction")
+    if correction:
+        indices = np.asarray(correction["feature_indices"], dtype=np.int64)
+        coefficients = np.asarray(correction["coefficients"], dtype=np.float64)
+        if len(indices) != len(coefficients):
+            raise ValueError("linear correction schema mismatch")
+        if len(indices) and (indices.min() < 0 or indices.max() >= vectors.shape[1]):
+            raise ValueError("linear correction feature index is out of range")
+        calibrated = calibrated + vectors[:, indices] @ coefficients
+    return sigmoid(calibrated)
 
 
 def main() -> None:

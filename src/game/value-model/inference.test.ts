@@ -114,6 +114,48 @@ describe("gradient-boosted value model", () => {
     ).toBeCloseTo(0.5, 12);
   });
 
+  it("applies a validated sparse correction in append-only feature space", () => {
+    const base: ValueModelArtifact = {
+      format: "ghq-gradient-boosted-value-v1",
+      feature_names: [...VALUE_FEATURE_NAMES_V2],
+      base_raw_score: 0,
+      learning_rate: 0.1,
+      calibration: { kind: "platt", scale: 1, intercept: 0 },
+      trees: [],
+      metadata: {},
+    };
+    const corrected: ValueModelArtifact = {
+      ...base,
+      linear_correction: {
+        feature_indices: [VALUE_FEATURE_NAMES.length],
+        coefficients: [0.5],
+      },
+    };
+    const features = extractValueFeaturesV2(position, "RED");
+    const expected =
+      1 / (1 + Math.exp(-0.5 * features[VALUE_FEATURE_NAMES.length]));
+    expect(predictFromFeatures(features, corrected)).toBeCloseTo(expected, 12);
+  });
+
+  it("rejects malformed sparse corrections", () => {
+    const artifact: ValueModelArtifact = {
+      format: "ghq-gradient-boosted-value-v1",
+      feature_names: [...VALUE_FEATURE_NAMES_V2],
+      base_raw_score: 0,
+      learning_rate: 0.1,
+      calibration: { kind: "platt", scale: 1, intercept: 0 },
+      trees: [],
+      metadata: {},
+      linear_correction: {
+        feature_indices: [VALUE_FEATURE_NAMES_V2.length],
+        coefficients: [1],
+      },
+    };
+    expect(() => assertValueModelCompatible(artifact)).toThrow(
+      "linear correction is invalid"
+    );
+  });
+
   it("overrides the model for a captured HQ", () => {
     const terminal = JSON.parse(JSON.stringify(position)) as typeof position;
     terminal.board[0][0] = null;
