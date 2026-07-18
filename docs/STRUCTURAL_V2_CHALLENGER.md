@@ -45,6 +45,24 @@ The three outcome-length screens total 12.0/20 points with a 4-6-0 paired
 record. Including the 30-turn policy-divergence pilot gives 14.0/24 points and
 a 4-8-0 paired record. This is a screening signal, not an Elo estimate.
 
+## Rejected sparse-correction alternative
+
+An append-only logistic correction using the three material-dispersion
+features looked stronger offline than the staged tree challenger: its human
+test log loss was `0.414428` versus `0.437159` for its aligned incumbent
+baseline, and its paired bootstrap interval favored the correction. Production
+engine play contradicted that proxy:
+
+- The 4-game, 80-turn pilot scored 2.0/4 with two tied pairs; every game hit the
+  turn cap.
+- The outcome-length 8-game, 100-turn screen scored 2.0/8 (25%) with a 0-2-2
+  pair record. All eight games ended by HQ capture and the search-quality gate
+  passed at 96.9% reply-verified decisions.
+
+The sparse correction is therefore rejected. This is a concrete example of why
+holdout prediction gains are only a screening signal and cannot replace the
+paired production-engine arena.
+
 ## Promotion gate
 
 Before promotion, deploy this artifact as the challenger and run at least 100
