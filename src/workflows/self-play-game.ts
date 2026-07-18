@@ -17,7 +17,9 @@ import {
 import { analyzeFen } from "@/server/fen-analysis";
 import {
   persistSelfPlayArtifacts,
+  persistSelfPlayProgress,
   type PersistedSelfPlayArtifacts,
+  type SelfPlayProgressSnapshot,
 } from "@/server/self-play-storage";
 
 export interface DurableSelfPlayCompetitor {
@@ -414,6 +416,62 @@ async function persistDurableGame(input: {
   });
 }
 
+export function durableSelfPlayProgressSnapshot(input: {
+  config: DurableSelfPlayGameConfig;
+  decisions: DurableSelfPlayDecision[];
+  completedTurns: number;
+  currentPlayer: Player;
+  currentFen: string;
+  status: SelfPlayProgressSnapshot["status"];
+  outcome?: DurableSelfPlayGameResult["outcome"];
+}): SelfPlayProgressSnapshot {
+  return {
+    format: "ghq-self-play-progress-v1",
+    generationId: input.config.generationId,
+    gameId: input.config.gameId,
+    seed: input.config.seed >>> 0,
+    codeVersion: input.config.codeVersion ?? "unknown",
+    redAgentId: input.config.red.id,
+    blueAgentId: input.config.blue.id,
+    redValueModelCheckpoint:
+      input.config.red.valueModelCheckpoint ?? "unknown",
+    blueValueModelCheckpoint:
+      input.config.blue.valueModelCheckpoint ?? "unknown",
+    completedTurns: input.completedTurns,
+    currentPlayer: input.currentPlayer,
+    currentFen: input.currentFen,
+    decisions: input.decisions.length,
+    depthAtLeastTwoDecisions: input.decisions.filter(
+      (decision) => decision.completedDepth >= 2
+    ).length,
+    fallbackDecisions: input.decisions.filter(
+      (decision) => decision.fallback !== "none"
+    ).length,
+    unverifiedFallbackDecisions: input.decisions.filter(
+      (decision) =>
+        decision.fallback === "seeded" ||
+        (decision.fallback !== "none" && decision.completedDepth < 2)
+    ).length,
+    timedOutDecisions: input.decisions.filter((decision) => decision.timedOut)
+      .length,
+    status: input.status,
+    outcome: input.outcome,
+  };
+}
+
+async function persistDurableProgress(
+  snapshot: SelfPlayProgressSnapshot
+): Promise<"saved" | "not-configured" | "failed"> {
+  "use step";
+
+  try {
+    return await persistSelfPlayProgress(snapshot);
+  } catch (error) {
+    console.error("Unable to persist self-play progress", error);
+    return "failed";
+  }
+}
+
 export async function playDurableSelfPlayGame(
   config: DurableSelfPlayGameConfig
 ): Promise<DurableSelfPlayGameResult> {
@@ -502,6 +560,18 @@ export async function playDurableSelfPlayGame(
     pendingTurnMoves = [];
     partialTurnAttempts = 0;
     turnNumber++;
+    if (!outcome && (turnNumber - 1) % 10 === 0) {
+      await persistDurableProgress(
+        durableSelfPlayProgressSnapshot({
+          config,
+          decisions,
+          completedTurns: turnNumber - 1,
+          currentPlayer: player,
+          currentFen: fen,
+          status: "running",
+        })
+      );
+    }
   }
 
   if (!outcome) outcome = { termination: "max-turns" };
@@ -587,6 +657,17 @@ export async function playDurableSelfPlayGame(
       trainingRejectionReasons,
     },
   };
+  await persistDurableProgress(
+    durableSelfPlayProgressSnapshot({
+      config,
+      decisions,
+      completedTurns: Math.min(turnNumber - 1, maxTurns),
+      currentPlayer: player,
+      currentFen: fen ?? initialFen,
+      status: "completed",
+      outcome,
+    })
+  );
   const storage = await persistDurableGame({ result, trainingSamples });
   return { ...result, storage };
 }

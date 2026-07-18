@@ -9,6 +9,29 @@ export interface PersistedSelfPlayArtifacts {
   trainingSamples: number;
 }
 
+export interface SelfPlayProgressSnapshot {
+  format: "ghq-self-play-progress-v1";
+  generationId: string;
+  gameId: string;
+  seed: number;
+  codeVersion: string;
+  redAgentId: string;
+  blueAgentId: string;
+  redValueModelCheckpoint: string;
+  blueValueModelCheckpoint: string;
+  completedTurns: number;
+  currentPlayer: "RED" | "BLUE";
+  currentFen: string;
+  decisions: number;
+  depthAtLeastTwoDecisions: number;
+  fallbackDecisions: number;
+  unverifiedFallbackDecisions: number;
+  timedOutDecisions: number;
+  status: "running" | "completed";
+  outcome?: { winner?: "RED" | "BLUE"; termination: string };
+  updatedAt?: string;
+}
+
 export interface SelfPlayGenerationManifest {
   format: "ghq-self-play-generation-manifest-v1";
   generationId: string;
@@ -57,6 +80,22 @@ function generationManifestPathname(generationId: string): string {
   return `${SELF_PLAY_BLOB_PREFIX}${safeSegment(generationId)}/manifest.json`;
 }
 
+export function selfPlayProgressPathname(
+  generationId: string,
+  gameId: string
+): string {
+  return `${SELF_PLAY_BLOB_PREFIX}${safeSegment(
+    generationId
+  )}/progress/${safeSegment(gameId)}.json`;
+}
+
+export const SELF_PLAY_PROGRESS_PUT_OPTIONS = {
+  access: "private" as const,
+  addRandomSuffix: false,
+  allowOverwrite: true,
+  contentType: "application/json",
+};
+
 export async function persistSelfPlayGenerationManifest(
   manifest: SelfPlayGenerationManifest
 ): Promise<"saved" | "not-configured"> {
@@ -83,6 +122,18 @@ export async function readSelfPlayGenerationManifest(
   });
   if (!response?.stream || response.statusCode !== 200) return undefined;
   return (await new Response(response.stream).json()) as SelfPlayGenerationManifest;
+}
+
+export async function persistSelfPlayProgress(
+  snapshot: SelfPlayProgressSnapshot
+): Promise<"saved" | "not-configured"> {
+  if (!selfPlayStorageConfigured()) return "not-configured";
+  await put(
+    selfPlayProgressPathname(snapshot.generationId, snapshot.gameId),
+    JSON.stringify({ ...snapshot, updatedAt: new Date().toISOString() }),
+    SELF_PLAY_PROGRESS_PUT_OPTIONS
+  );
+  return "saved";
 }
 
 export async function persistSelfPlayArtifacts(input: {
@@ -133,6 +184,7 @@ export interface PersistedSelfPlayGeneration {
   manifestArtifacts: number;
   gameArtifacts: number;
   trainingArtifacts: number;
+  progressArtifacts: number;
   bytes: number;
   updatedAt: string;
 }
@@ -160,7 +212,8 @@ export async function listPersistedSelfPlayGenerations(): Promise<
     if (
       !remainder.endsWith("/manifest.json") &&
       !remainder.includes("/games/") &&
-      !remainder.includes("/training/")
+      !remainder.includes("/training/") &&
+      !remainder.includes("/progress/")
     ) {
       continue;
     }
@@ -171,12 +224,14 @@ export async function listPersistedSelfPlayGenerations(): Promise<
       manifestArtifacts: 0,
       gameArtifacts: 0,
       trainingArtifacts: 0,
+      progressArtifacts: 0,
       bytes: 0,
       updatedAt: blob.uploadedAt.toISOString(),
     };
     if (remainder.endsWith("/manifest.json")) current.manifestArtifacts++;
     if (remainder.includes("/games/")) current.gameArtifacts++;
     if (remainder.includes("/training/")) current.trainingArtifacts++;
+    if (remainder.includes("/progress/")) current.progressArtifacts++;
     current.bytes += blob.size;
     if (blob.uploadedAt.toISOString() > current.updatedAt) {
       current.updatedAt = blob.uploadedAt.toISOString();
@@ -189,24 +244,16 @@ export async function listPersistedSelfPlayGenerations(): Promise<
   );
 }
 
-export async function readPersistedSelfPlayGames<T>(
-  requestedGenerationId: string
-): Promise<T[]> {
-  if (!selfPlayStorageConfigured()) return [];
-  const generationId = safeSegment(requestedGenerationId);
+async function readPersistedJsonArtifacts<T>(prefix: string): Promise<T[]> {
   const blobs: ListBlobResultBlob[] = [];
   let cursor: string | undefined;
   do {
-    const page = await list({
-      prefix: `${SELF_PLAY_BLOB_PREFIX}${generationId}/games/`,
-      cursor,
-      limit: 1000,
-    });
+    const page = await list({ prefix, cursor, limit: 1000 });
     blobs.push(...page.blobs.filter((blob) => blob.pathname.endsWith(".json")));
     cursor = page.hasMore ? page.cursor : undefined;
   } while (cursor);
 
-  const games: T[] = [];
+  const artifacts: T[] = [];
   for (let index = 0; index < blobs.length; index += 12) {
     const chunk = await Promise.all(
       blobs.slice(index, index + 12).map(async (blob) => {
@@ -218,7 +265,29 @@ export async function readPersistedSelfPlayGames<T>(
         return (await new Response(response.stream).json()) as T;
       })
     );
-    games.push(...chunk.filter((game): game is T => game !== undefined));
+    for (const value of chunk) {
+      if (value !== undefined) artifacts.push(value as T);
+    }
   }
-  return games;
+  return artifacts;
+}
+
+export async function readPersistedSelfPlayProgress(
+  requestedGenerationId: string
+): Promise<SelfPlayProgressSnapshot[]> {
+  if (!selfPlayStorageConfigured()) return [];
+  const generationId = safeSegment(requestedGenerationId);
+  return readPersistedJsonArtifacts<SelfPlayProgressSnapshot>(
+    `${SELF_PLAY_BLOB_PREFIX}${generationId}/progress/`
+  );
+}
+
+export async function readPersistedSelfPlayGames<T>(
+  requestedGenerationId: string
+): Promise<T[]> {
+  if (!selfPlayStorageConfigured()) return [];
+  const generationId = safeSegment(requestedGenerationId);
+  return readPersistedJsonArtifacts<T>(
+    `${SELF_PLAY_BLOB_PREFIX}${generationId}/games/`
+  );
 }

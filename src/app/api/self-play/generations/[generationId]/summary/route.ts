@@ -4,6 +4,7 @@ import { summarizeValueModelArena } from "@/game/self-play/arena-results";
 import { summarizeSearchRuntime } from "@/game/self-play/search-runtime-summary";
 import {
   readPersistedSelfPlayGames,
+  readPersistedSelfPlayProgress,
   readSelfPlayGenerationManifest,
 } from "@/server/self-play-storage";
 import type { DurableSelfPlayGameResult } from "@/workflows/self-play-game";
@@ -43,11 +44,15 @@ export async function GET(
 ) {
   try {
     const { generationId } = await params;
-    const [games, manifest] = await Promise.all([
+    const [games, progress, manifest] = await Promise.all([
       readPersistedSelfPlayGames<DurableSelfPlayGameResult>(generationId),
+      readPersistedSelfPlayProgress(generationId),
       readSelfPlayGenerationManifest(generationId),
     ]);
     const persistedGameIds = new Set(games.map((game) => game.gameId));
+    const activeProgress = progress
+      .filter((snapshot) => !persistedGameIds.has(snapshot.gameId))
+      .sort((left, right) => left.gameId.localeCompare(right.gameId));
     const unresolvedRunIds =
       manifest?.runs
         .filter((run) => !persistedGameIds.has(run.gameId))
@@ -96,6 +101,19 @@ export async function GET(
         }
       }
     }
+    for (const snapshot of activeProgress) {
+      if (snapshot.codeVersion && snapshot.codeVersion !== "unknown") {
+        codeVersions.add(snapshot.codeVersion);
+      }
+      for (const checkpoint of [
+        snapshot.redValueModelCheckpoint,
+        snapshot.blueValueModelCheckpoint,
+      ]) {
+        if (checkpoint && checkpoint !== "unknown") {
+          valueModelCheckpoints.add(checkpoint);
+        }
+      }
+    }
     return NextResponse.json({
       generationId,
       games: games.length,
@@ -112,6 +130,10 @@ export async function GET(
             statuses: workflowRunStatuses,
           }
         : undefined,
+      progress: {
+        games: activeProgress.length,
+        snapshots: activeProgress,
+      },
       outcomes,
       terminations,
       decisions,

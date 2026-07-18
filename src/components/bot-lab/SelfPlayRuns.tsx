@@ -36,6 +36,7 @@ interface PersistedGeneration {
   manifestArtifacts: number;
   gameArtifacts: number;
   trainingArtifacts: number;
+  progressArtifacts?: number;
   bytes: number;
   updatedAt: string;
 }
@@ -64,6 +65,20 @@ interface GenerationSummary {
   workflowRuns?: {
     total: number;
     statuses: Record<string, number>;
+  };
+  progress?: {
+    games: number;
+    snapshots: Array<{
+      gameId: string;
+      completedTurns: number;
+      decisions: number;
+      depthAtLeastTwoDecisions: number;
+      fallbackDecisions: number;
+      unverifiedFallbackDecisions: number;
+      timedOutDecisions: number;
+      status: "running" | "completed";
+      updatedAt?: string;
+    }>;
   };
   outcomes: Record<string, number>;
   terminations: Record<string, number>;
@@ -426,6 +441,9 @@ export function SelfPlayRuns() {
                   <span className="font-semibold text-slate-700">
                     {generation.gameArtifacts} completed
                     {generation.manifestArtifacts ? " · tracked" : ""} ·{" "}
+                    {generation.progressArtifacts
+                      ? `${generation.progressArtifacts} live · `
+                      : ""}
                     {generation.trainingArtifacts} training files ·{" "}
                     {(generation.bytes / 1_000_000).toFixed(1)} MB
                   </span>
@@ -466,6 +484,21 @@ export function SelfPlayRuns() {
                 {JSON.stringify(generationSummary.outcomes)} · terminations{" "}
                 {JSON.stringify(generationSummary.terminations)}
               </div>
+              {generationSummary.progress &&
+                generationSummary.progress.snapshots.length > 0 && (
+                  <div className="mt-2 grid gap-1 rounded bg-white/70 p-2">
+                    {generationSummary.progress.snapshots.map((snapshot) => (
+                      <div key={snapshot.gameId}>
+                        <span className="font-mono">{snapshot.gameId}</span> · turn{" "}
+                        {snapshot.completedTurns} · {snapshot.decisions} decisions ·
+                        depth≥2 {snapshot.depthAtLeastTwoDecisions} · fallback{" "}
+                        {snapshot.fallbackDecisions} (unverified{" "}
+                        {snapshot.unverifiedFallbackDecisions}) · timeout{" "}
+                        {snapshot.timedOutDecisions}
+                      </div>
+                    ))}
+                  </div>
+                )}
               <div className="mt-1">
                 fallback {(100 * generationSummary.fallbackRate).toFixed(1)}% ·
                 unverified{" "}

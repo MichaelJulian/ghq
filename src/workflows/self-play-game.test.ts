@@ -3,6 +3,7 @@
 import { describe, expect, it } from "@jest/globals";
 import {
   actionMadeProgress,
+  durableSelfPlayProgressSnapshot,
   durableGameTrainingRejectionReasons,
   isDurableTrainingDecisionEligible,
   type DurableSelfPlayDecision,
@@ -41,6 +42,68 @@ function decision(
 }
 
 describe("durable self-play training quality", () => {
+  it("summarizes durable mid-game progress without storing candidate trees", () => {
+    const snapshot = durableSelfPlayProgressSnapshot({
+      config: {
+        generationId: "generation-1",
+        gameId: "game-1",
+        seed: 0xffff_ffff + 2,
+        codeVersion: "revision-1",
+        red: {
+          id: "balanced-challenger-a3",
+          personality: "balanced",
+          timeMs: 20_000,
+          maxDepth: 2,
+          beamWidth: 6,
+          explorationTemperature: 0,
+          valueModelCheckpoint: "challenger-1",
+        },
+        blue: {
+          id: "balanced-incumbent-a3",
+          personality: "balanced",
+          timeMs: 20_000,
+          maxDepth: 2,
+          beamWidth: 6,
+          explorationTemperature: 0,
+          valueModelCheckpoint: "incumbent-1",
+        },
+      },
+      decisions: [
+        decision({ timedOut: true }),
+        decision({
+          turnNumber: 2,
+          player: "BLUE",
+          fallback: "safe",
+          completedDepth: 2,
+        }),
+        decision({
+          turnNumber: 3,
+          fallback: "safe",
+          completedDepth: 0,
+        }),
+      ],
+      completedTurns: 3,
+      currentPlayer: "BLUE",
+      currentFen: "position-3",
+      status: "running",
+    });
+
+    expect(snapshot).toMatchObject({
+      format: "ghq-self-play-progress-v1",
+      seed: 1,
+      decisions: 3,
+      completedTurns: 3,
+      depthAtLeastTwoDecisions: 2,
+      fallbackDecisions: 2,
+      unverifiedFallbackDecisions: 1,
+      timedOutDecisions: 1,
+      redValueModelCheckpoint: "challenger-1",
+      blueValueModelCheckpoint: "incumbent-1",
+      status: "running",
+    });
+    expect(snapshot).not.toHaveProperty("candidateTurns");
+  });
+
   it("does not let skip reset the no-progress clock", () => {
     expect(actionMadeProgress("skip")).toBe(false);
     expect(actionMadeProgress("sbe5")).toBe(true);
