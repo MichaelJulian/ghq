@@ -1067,7 +1067,7 @@ class SearchTests(unittest.TestCase):
         calls = []
 
         def staged_alphabeta(searcher, board, depth, alpha, beta):
-            calls.append((board.turn, depth))
+            calls.append((board.turn, depth, searcher.hq_leaf_extension_enabled))
             if len(calls) <= 2:
                 raise ghq_ai.SearchTimeout
             return ghq_ai.SearchResult(ghq_ai.MATE_SCORE + 100.0, [])
@@ -1087,8 +1087,14 @@ class SearchTests(unittest.TestCase):
             )
 
         self.assertEqual(len(calls), 3)
+        self.assertEqual(
+            [leaf_extension for _, _, leaf_extension in calls],
+            [False, True, False],
+        )
         self.assertEqual(result["search"]["completed_depth_in_turns"], 2)
         self.assertEqual(result["search"]["fallback_used"], "safe")
+        self.assertTrue(result["search"]["seed_reply_verified"])
+        self.assertTrue(result["search"]["seed_reply_retry_used"])
         self.assertTrue(result["best_turn"]["actions"])
 
     def test_timeout_keeps_verified_root_development_instead_of_seed_backfill(self):

@@ -259,6 +259,8 @@ async function main() {
   let unverifiedFallbackDecisions = 0;
   let hqSurvivalOverrideDecisions = 0;
   let hqSurvivalReplyVerifiedDecisions = 0;
+  let seedReplyVerifiedDecisions = 0;
+  let seedReplyRetryDecisions = 0;
   let timedOutDecisions = 0;
   let incompleteTurnDecisions = 0;
   let persistentCacheHits = 0;
@@ -322,6 +324,12 @@ async function main() {
         }
         if (decision.searchTelemetry.hqSurvivalReplyVerified) {
           hqSurvivalReplyVerifiedDecisions++;
+        }
+        if (decision.searchTelemetry.seedReplyVerified) {
+          seedReplyVerifiedDecisions++;
+        }
+        if (decision.searchTelemetry.seedReplyRetryUsed) {
+          seedReplyRetryDecisions++;
         }
         if (decision.fallback !== "none") {
           fallbackElapsedMs.push(decision.searchTelemetry.elapsedMs);
@@ -651,6 +659,8 @@ async function main() {
       hqSurvivalReplyNodes: distribution(hqSurvivalReplyNodes),
       hqSurvivalOverrideDecisions,
       hqSurvivalReplyVerifiedDecisions,
+      seedReplyVerifiedDecisions,
+      seedReplyRetryDecisions,
       fallbackElapsedMs: distribution(fallbackElapsedMs),
     },
     fallbackTypes,

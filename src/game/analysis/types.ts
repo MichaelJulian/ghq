@@ -155,6 +155,10 @@ export interface GhqSearchResult {
     hq_survival_override_used?: boolean;
     /** The selected survival turn also completed a full opponent reply. */
     hq_survival_reply_verified?: boolean;
+    /** The emergency complete-turn floor received one complete opponent reply. */
+    seed_reply_verified?: boolean;
+    /** The reserved final deadline slice was needed to certify that reply. */
+    seed_reply_retry_used?: boolean;
     /** True when a shared reply-verified early search was reused. */
     persistent_cache_hit?: boolean;
     /** Runtime provenance for training and production diagnostics. */

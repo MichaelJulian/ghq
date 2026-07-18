@@ -4651,6 +4651,7 @@ def search(
     hq_survival_reply_verified = False
     emergency_seed: Optional[SearchResult] = None
     emergency_seed_safe = False
+    seed_reply_retry_used = False
     seed_moves: List[engine.Move] = []
     seed_board = board
     verified_seed: Optional[SearchResult] = None
@@ -4769,12 +4770,14 @@ def search(
         final_deadline = main_search_started + max(1, time_ms) / 1000.0
         searcher.deadline = final_deadline
         if requested_depth >= 2:
-            searcher.hq_leaf_extension_enabled = True
             # First verify the purposeful emergency turn against one complete
             # opponent reply. This produces a tactically checked floor even if
             # enumerating alternative root turns later exhausts the budget.
             # It is still labelled a fallback because root alternatives were
-            # not all compared at the same horizon.
+            # not all compared at the same horizon. Keep the optional latent-HQ
+            # extension out of this bounded floor: immediate HQ captures at the
+            # leaf are still recognized, while a second defensive turn cannot
+            # consume the reserve before one opponent reply is certified.
             if seed_board.is_game_over():
                 verified_seed = SearchResult(emergency_seed.score, list(seed_moves))
             elif seed_board.turn != board.turn:
@@ -4797,6 +4800,7 @@ def search(
                     # transposition. Reuse it when the narrow root pass reaches
                     # that same child instead of paying for the reply twice.
 
+            searcher.hq_leaf_extension_enabled = True
             # Reserve the first 90% of the budget for a narrow but complete
             # depth-two pass. Depth two means our complete turn plus one full
             # opponent reply. A later broad pass may improve it, but may never
@@ -4853,7 +4857,9 @@ def search(
                     # root search. Partial transposition entries from the
                     # first seed probe are reusable here, so difficult Vercel
                     # positions can still return a reply-verified floor.
+                    seed_reply_retry_used = True
                     searcher.verification_mode = True
+                    searcher.hq_leaf_extension_enabled = False
                     try:
                         reply = searcher.alphabeta(
                             seed_board, 1, -math.inf, math.inf
@@ -4861,6 +4867,8 @@ def search(
                         verified_seed = scored_verified_seed(reply)
                     except SearchTimeout:
                         timed_out = True
+                    finally:
+                        searcher.hq_leaf_extension_enabled = True
                 if verified_seed is not None:
                     best = verified_seed
                     completed_depth = 2
@@ -5234,6 +5242,8 @@ def search(
             "hq_survival_reply_nodes": searcher.hq_survival_reply_nodes,
             "hq_survival_override_used": hq_survival_override_used,
             "hq_survival_reply_verified": hq_survival_reply_verified,
+            "seed_reply_verified": verified_seed is not None,
+            "seed_reply_retry_used": seed_reply_retry_used,
         },
         "evaluation": {
             "before": root_eval,
