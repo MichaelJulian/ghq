@@ -7,6 +7,7 @@ from unittest import mock
 import numpy as np
 
 from scripts.train_counterfactual_policy import (
+    correction_feature_indices,
     export_policy_correction,
     fit_offset_logistic_correction,
     grouped_folds,
@@ -21,6 +22,19 @@ from scripts.train_value_model import exported_probabilities
 
 
 class CounterfactualPolicyTrainingTests(unittest.TestCase):
+    def test_difference_scope_only_selects_antisymmetric_features(self):
+        names = ["own_material", "diff_material", "opp_pressure", "diff_shape"]
+        np.testing.assert_array_equal(
+            correction_feature_indices(names, 3, "difference"),
+            np.asarray([1, 3]),
+        )
+
+    def test_empty_difference_scope_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "no features are eligible"):
+            correction_feature_indices(
+                ["own_material", "opp_material"], 1, "difference"
+            )
+
     def test_feature_ranking_uses_training_residual_signal(self):
         vectors = np.asarray(
             [[1.0, 0.0], [-1.0, 0.0], [2.0, 0.0], [-2.0, 0.0]]

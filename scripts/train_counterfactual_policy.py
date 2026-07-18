@@ -42,9 +42,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument(
         "--feature-scope",
-        choices=("all", "appended"),
+        choices=("all", "appended", "difference"),
         default="all",
-        help="Features eligible for the sparse residual correction",
+        help=(
+            "Features eligible for the sparse residual correction. The "
+            "difference scope only admits perspective-antisymmetric diff_* "
+            "features."
+        ),
     )
     parser.add_argument("--require-pass", action="store_true")
     return parser.parse_args()
@@ -109,6 +113,30 @@ def rank_correction_features(
     residual = labels - sigmoid(offsets)
     signal = np.abs(vectors.T @ (normalized_weights * residual))
     return np.argsort(-signal, kind="stable")
+
+
+def correction_feature_indices(
+    feature_names: Sequence[str], baseline_feature_count: int, scope: str
+) -> np.ndarray:
+    """Select correction features without weakening perspective symmetry."""
+    if not 0 <= baseline_feature_count <= len(feature_names):
+        raise ValueError("baseline feature count is outside the feature schema")
+    if scope == "all":
+        indices = range(len(feature_names))
+    elif scope == "appended":
+        indices = range(baseline_feature_count, len(feature_names))
+    elif scope == "difference":
+        indices = (
+            index
+            for index, name in enumerate(feature_names)
+            if name.startswith("diff_")
+        )
+    else:
+        raise ValueError(f"unsupported correction feature scope: {scope}")
+    selected = np.fromiter(indices, dtype=np.int64)
+    if not len(selected):
+        raise ValueError(f"no features are eligible for {scope} correction scope")
+    return selected
 
 
 def export_policy_correction(
@@ -550,13 +578,11 @@ def main() -> None:
     raw_baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
     baseline_names = list(raw_baseline.get("feature_names") or [])
     baseline = align_append_only_baseline_schema(raw_baseline, feature_names)
-    feature_indices = (
-        np.arange(len(feature_names))
-        if args.feature_scope == "all"
-        else np.arange(len(baseline_names), len(feature_names))
+    feature_indices = correction_feature_indices(
+        feature_names,
+        len(baseline_names),
+        args.feature_scope,
     )
-    if not len(feature_indices):
-        raise ValueError("counterfactual policy training needs appended features")
     cv_random_states = stability_random_states(args.random_state)
     folds_by_state = {
         state: grouped_folds(records, state) for state in cv_random_states
