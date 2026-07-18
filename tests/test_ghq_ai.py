@@ -1390,8 +1390,8 @@ class SearchTests(unittest.TestCase):
                     )
                 )
 
-    def test_exact_hq_capture_moves_remove_only_irrelevant_artillery_clones(self):
-        board = engine.BaseBoard("q7/8/8/8/8/8/8/R6Q R - r")
+    def test_exact_hq_capture_moves_collapse_artillery_and_prune_remote_actions(self):
+        board = engine.BaseBoard("q7/8/2R5/8/8/8/8/7Q - - r")
         moves = list(ghq_ai.Searcher.exact_hq_capture_moves(board))
 
         self.assertNotIn("Skip", {move.name for move in moves})
@@ -1418,7 +1418,20 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(len(relocations), len(set(relocations)))
         self.assertEqual(
             {move.uci() for move in moves},
-            {"h1h2", "h1g2", "h1g1", "a1b2↑", "a1a2↑", "a1b1↑"},
+            {
+                "c6b5↑",
+                "c6b6↑",
+                "c6b7↑",
+                "c6c5↑",
+                "c6c7↑",
+                "c6d5↑",
+                "c6d6↑",
+                "c6d7↑",
+            },
+        )
+        remote = engine.BaseBoard("q7/8/8/8/8/8/8/R6Q R - r")
+        self.assertEqual(
+            list(ghq_ai.Searcher.exact_hq_capture_moves(remote)), []
         )
 
     def test_exact_hq_capture_order_checks_the_hq_capture_first(self):

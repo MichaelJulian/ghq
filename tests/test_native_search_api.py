@@ -113,7 +113,7 @@ class NativeSearchContractTest(unittest.TestCase):
                 )
                 self.assertFalse(
                     verifier.exact_same_turn_hq_capture(
-                        escaped, escaped.turn, [500_000]
+                        escaped, escaped.turn, [100_000]
                     ),
                     result["search"]["best_turn"]["all_moves"],
                 )

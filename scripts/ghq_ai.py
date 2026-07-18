@@ -2398,11 +2398,17 @@ class Searcher:
           Friendly bombardment is not resolved until the mover's next turn,
           and friendly orientation does not change the mover's legal squares.
 
-        Relocating artillery and HQ pieces remain because vacating a square can
-        unlock a later infantry action.  Infantry capture variants also remain
-        distinct.  The resulting search is therefore complete for same-turn HQ
-        capture while avoiding hundreds of irrelevant orientation branches.
+        Relocating artillery and HQ pieces remain when their source,
+        destination, or capture lies within two squares of the target HQ,
+        because vacating a nearby square can unlock a later infantry action.
+        With at most three voluntary actions, an action wholly outside that
+        radius cannot change the local engagement/capture cluster before the
+        turn ends. Global paratrooper moves remain whenever their destination
+        enters the radius. Infantry capture variants also remain distinct.
+        The resulting search is complete for same-turn HQ capture while
+        avoiding remote moves and hundreds of irrelevant orientation branches.
         """
+        enemy_hqs = list(board.pieces(engine.HQ, not board.turn))
         artillery_relocations: set[Tuple[int, int]] = set()
         for move in board.generate_legal_moves():
             if move.name == "Skip":
@@ -2422,13 +2428,24 @@ class Searcher:
                 if relocation in artillery_relocations:
                     continue
                 artillery_relocations.add(relocation)
+            if move.name != "AutoCapture" and not any(
+                chebyshev(square, hq_square) <= 2
+                for square in (
+                    move.from_square,
+                    move.to_square,
+                    move.capture_preference,
+                )
+                if square is not None
+                for hq_square in enemy_hqs
+            ):
+                continue
             yield move
 
     def find_hq_survival_turn(
         self,
         root: engine.BaseBoard,
         max_probe_nodes: int = 20_000,
-        max_reply_nodes: int = 500_000,
+        max_reply_nodes: int = 100_000,
     ) -> Optional[Tuple[List[engine.Move], engine.BaseBoard]]:
         """Find and exactly verify a nearby turn that avoids immediate HQ loss.
 
