@@ -16,7 +16,10 @@ sys.path.insert(0, str(ROOT / "api"))
 import _engine as engine  # noqa: E402
 from run_native_value_arena import (  # noqa: E402
     GameResult,
+    extends_strategic_best,
+    merge_strategic_best,
     red_value_function,
+    strategic_progress,
     summarize,
 )
 
@@ -36,6 +39,7 @@ class NativeValueArenaTest(unittest.TestCase):
             beam_width=6,
             max_turns=20,
             repetition_limit=3,
+            no_progress_turns=24,
             seed=1,
             workers=1,
             output=None,
@@ -105,6 +109,25 @@ class NativeValueArenaTest(unittest.TestCase):
         self.assertEqual(
             report["policyDivergence"]["pairs"][0]["commonPrefixTurns"], 6
         )
+
+    def test_strategic_progress_matches_durable_quiet_approach(self) -> None:
+        before = strategic_progress(
+            engine.BaseBoard(
+                "q1i3i1/3i3i/2i3i1/8/8/8/1IIII1I1/1F3I1Q - - r"
+            ),
+            engine.RED,
+        )
+        after = strategic_progress(
+            engine.BaseBoard(
+                "q1i3i1/3i3i/2i3i1/8/8/2I5/1I1II1I1/F4I1Q - - b"
+            ),
+            engine.RED,
+        )
+        self.assertTrue(extends_strategic_best(before, after))
+        self.assertGreater(after.frontier_rank, before.frontier_rank)
+        historical = merge_strategic_best(before, after)
+        self.assertFalse(extends_strategic_best(historical, before))
+        self.assertEqual(merge_strategic_best(historical, before), historical)
 
 
 if __name__ == "__main__":

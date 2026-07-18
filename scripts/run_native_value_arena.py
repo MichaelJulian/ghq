@@ -40,6 +40,14 @@ class GameConfig:
     beam_width: int
     max_turns: int
     repetition_limit: int
+    no_progress_turns: int
+
+
+@dataclass(frozen=True)
+class StrategicProgress:
+    frontier_rank: int
+    enemy_hq_distance: int
+    enemy_hq_pressure: int
 
 
 @dataclass
@@ -71,6 +79,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--beam-width", type=int, default=6)
     parser.add_argument("--max-turns", type=int, default=100)
     parser.add_argument("--repetition-limit", type=int, default=3)
+    parser.add_argument("--no-progress-turns", type=int, default=24)
     parser.add_argument("--seed", type=int, default=0x474851)
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--output", type=Path)
@@ -85,6 +94,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--max-turns must be at least 4")
     if not 2 <= args.repetition_limit <= 10:
         parser.error("--repetition-limit must be from 2 through 10")
+    if not 4 <= args.no_progress_turns <= 100:
+        parser.error("--no-progress-turns must be from 4 through 100")
     if args.workers < 1:
         parser.error("--workers must be positive")
     return args
@@ -142,6 +153,81 @@ def winner_name(outcome: Any) -> Optional[str]:
     return "RED" if outcome.winner == engine.RED else "BLUE"
 
 
+def strategic_progress(
+    board: engine.BaseBoard, color: bool
+) -> StrategicProgress:
+    """Mirror the durable TypeScript no-progress landmarks exactly."""
+    own = board.occupied_co[color] & ~board.hq
+    own_squares = list(engine.scan_reversed(own))
+    enemy_hqs = list(engine.scan_reversed(board.hq & board.occupied_co[not color]))
+    frontier_rank = max(
+        (
+            engine.square_rank(square) + 1
+            if color == engine.RED
+            else 8 - engine.square_rank(square)
+            for square in own_squares
+        ),
+        default=0,
+    )
+    if own_squares and enemy_hqs:
+        enemy_hq_distance = min(
+            ghq_ai.chebyshev(square, hq)
+            for square in own_squares
+            for hq in enemy_hqs
+        )
+    else:
+        enemy_hq_distance = 8
+    infantry = own & (
+        board.infantry | board.armored_infantry | board.airborne_infantry
+    )
+    pursuers = list(engine.scan_reversed(infantry or own))
+    enemy_hq_pressure = (
+        sum(
+            max(0, 5 - min(ghq_ai.chebyshev(square, hq) for hq in enemy_hqs))
+            for square in pursuers
+        )
+        if enemy_hqs
+        else 0
+    )
+    return StrategicProgress(
+        frontier_rank=frontier_rank,
+        enemy_hq_distance=enemy_hq_distance,
+        enemy_hq_pressure=enemy_hq_pressure,
+    )
+
+
+def extends_strategic_best(
+    best: StrategicProgress, current: StrategicProgress
+) -> bool:
+    return (
+        current.frontier_rank > best.frontier_rank
+        or current.enemy_hq_distance < best.enemy_hq_distance
+        or current.enemy_hq_pressure > best.enemy_hq_pressure
+    )
+
+
+def merge_strategic_best(
+    best: StrategicProgress, current: StrategicProgress
+) -> StrategicProgress:
+    return StrategicProgress(
+        frontier_rank=max(best.frontier_rank, current.frontier_rank),
+        enemy_hq_distance=min(
+            best.enemy_hq_distance, current.enemy_hq_distance
+        ),
+        enemy_hq_pressure=max(
+            best.enemy_hq_pressure, current.enemy_hq_pressure
+        ),
+    )
+
+
+def action_made_progress(uci: str) -> bool:
+    return (
+        uci.startswith("r")
+        or (uci.startswith("s") and uci != "skip")
+        or "x" in uci
+    )
+
+
 def play_game(config: GameConfig) -> GameResult:
     baseline = load_artifact(config.baseline_path)
     challenger = load_artifact(config.challenger_path)
@@ -156,6 +242,11 @@ def play_game(config: GameConfig) -> GameResult:
     }
     board = engine.BaseBoard(engine.STARTING_FEN)
     occurrences = Counter({board.board_fen(): 1})
+    strategic_best = {
+        engine.RED: strategic_progress(board, engine.RED),
+        engine.BLUE: strategic_progress(board, engine.BLUE),
+    }
+    turns_without_progress = 0
     fallbacks: Counter[str] = Counter()
     depths: Counter[str] = Counter()
     decisions = 0
@@ -179,6 +270,7 @@ def play_game(config: GameConfig) -> GameResult:
             value_function=values[mover],
             opening_seed=pair_seed,
             max_actions=3,
+            stagnation_turns=turns_without_progress,
         )
         telemetry = result["search"]
         fallbacks[str(telemetry["fallback_used"])] += 1
@@ -217,6 +309,22 @@ def play_game(config: GameConfig) -> GameResult:
         occurrences[fen] += 1
         if occurrences[fen] >= config.repetition_limit:
             termination = "repetition"
+            break
+        current_progress = strategic_progress(board, mover)
+        made_strategic_progress = extends_strategic_best(
+            strategic_best[mover], current_progress
+        )
+        strategic_best[mover] = merge_strategic_best(
+            strategic_best[mover], current_progress
+        )
+        turns_without_progress = (
+            0
+            if made_strategic_progress
+            or any(action_made_progress(uci) for uci in selected_moves)
+            else turns_without_progress + 1
+        )
+        if turns_without_progress >= config.no_progress_turns:
+            termination = "no-progress"
             break
         turn_number += 1
 
@@ -310,6 +418,7 @@ def summarize(args: argparse.Namespace, games: list[GameResult]) -> Dict[str, An
             "beamWidth": args.beam_width,
             "maxTurns": args.max_turns,
             "repetitionLimit": args.repetition_limit,
+            "noProgressTurns": args.no_progress_turns,
             "seed": args.seed & 0xFFFF_FFFF,
             "workers": args.workers,
         },
@@ -365,6 +474,7 @@ def main() -> None:
             beam_width=args.beam_width,
             max_turns=args.max_turns,
             repetition_limit=args.repetition_limit,
+            no_progress_turns=args.no_progress_turns,
         )
         for index in range(args.games)
     ]
