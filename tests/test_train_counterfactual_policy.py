@@ -132,6 +132,47 @@ class CounterfactualPolicyTrainingTests(unittest.TestCase):
             _, records, _ = load_counterfactual_reports([path])
         self.assertEqual(records, [])
 
+    def test_semantically_duplicate_roots_are_admitted_once(self):
+        def pair(root_id, source_game):
+            return {
+                "confident": True,
+                "trainingEligible": True,
+                "rootId": root_id,
+                "sourceGameId": source_game,
+                "rootPlayer": "RED",
+                "sourceTurnNumber": 12,
+                "branches": [
+                    {
+                        "status": "completed",
+                        "candidateRank": rank,
+                        "initialFen": fen,
+                        "featuresV3": [float(rank), 0.0],
+                        "rolloutValue": value,
+                        "valueSource": "terminal",
+                        "unverifiedFallbackDecisions": 0,
+                    }
+                    for rank, fen, value in (
+                        (1, "fen-a", 1.0),
+                        (2, "fen-b", 0.0),
+                    )
+                ],
+            }
+
+        report = {
+            "format": "ghq-counterfactual-rollout-report-v1",
+            "featureSchema": ["base", "shape"],
+            "expectedBranches": 4,
+            "completedBranches": 4,
+            "missingBranches": 0,
+            "pairs": [pair("root-a", "game-a"), pair("root-b", "game-b")],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "duplicates.json"
+            path.write_text(json.dumps(report))
+            _, records, _ = load_counterfactual_reports([path])
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["root_fingerprint"], "RED:fen-a||fen-b")
+
     def test_offset_correction_learns_without_recalibrating_baseline(self):
         vectors = np.asarray([[1.0], [-1.0], [2.0], [-2.0]])
         labels = np.asarray([1.0, 0.0, 1.0, 0.0])

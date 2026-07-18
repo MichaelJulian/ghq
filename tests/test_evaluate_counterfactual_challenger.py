@@ -6,6 +6,7 @@ from scripts.evaluate_counterfactual_challenger import (
     artifact_pair_probabilities,
     terminal_improvement_gate,
     training_source_game_overlap,
+    training_root_fingerprint_overlap,
     training_root_overlap,
 )
 
@@ -102,6 +103,27 @@ class CounterfactualChallengerEvaluationTests(unittest.TestCase):
                 },
             ),
             (True, ["game-b"]),
+        )
+
+    def test_training_fingerprint_overlap_detects_semantic_leakage(self):
+        records = [{"root_fingerprint": "fresh"}, {"root_fingerprint": "same"}]
+        self.assertEqual(
+            training_root_fingerprint_overlap(records, {"metadata": {}}),
+            (False, []),
+        )
+        self.assertEqual(
+            training_root_fingerprint_overlap(
+                records,
+                {
+                    "metadata": {
+                        "counterfactual_training_root_fingerprints": [
+                            "old",
+                            "same",
+                        ]
+                    }
+                },
+            ),
+            (True, ["same"]),
         )
 
 

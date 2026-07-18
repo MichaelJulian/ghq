@@ -250,6 +250,7 @@ def load_counterfactual_reports(
     records: List[Dict[str, Any]] = []
     digest = hashlib.sha256()
     seen_roots: set[str] = set()
+    seen_root_fingerprints: set[str] = set()
     for path in paths:
         raw = path.read_bytes()
         digest.update(raw)
@@ -303,6 +304,20 @@ def load_counterfactual_reports(
             if len(branches) < 2:
                 continue
             left, right = branches[:2]
+            candidate_fens = sorted(
+                {
+                    str(branch["initialFen"])
+                    for branch in (left, right)
+                    if isinstance(branch.get("initialFen"), str)
+                }
+            )
+            root_fingerprint = (
+                f'{pair["rootPlayer"]}:{"||".join(candidate_fens)}'
+                if len(candidate_fens) == 2
+                else f"legacy-root-id:{root_id}"
+            )
+            if root_fingerprint in seen_root_fingerprints:
+                continue
             left_value = float(left["rolloutValue"])
             right_value = float(right["rolloutValue"])
             delta = abs(left_value - right_value)
@@ -313,9 +328,11 @@ def load_counterfactual_reports(
             if len(left_features) != len(names) or len(right_features) != len(names):
                 raise ValueError(f"feature vector length mismatch at {root_id}")
             seen_roots.add(root_id)
+            seen_root_fingerprints.add(root_fingerprint)
             records.append(
                 {
                     "root_id": root_id,
+                    "root_fingerprint": root_fingerprint,
                     "source_game_id": str(pair["sourceGameId"]),
                     "root_player": str(pair["rootPlayer"]),
                     "source_turn_number": int(pair["sourceTurnNumber"]),
@@ -718,6 +735,9 @@ def main() -> None:
             {str(record["source_game_id"]) for record in records}
         ),
         "root_ids": sorted({str(record["root_id"]) for record in records}),
+        "root_fingerprints": sorted(
+            {str(record["root_fingerprint"]) for record in records}
+        ),
         "root_players": dict(root_player_counts),
         "phases": dict(phase_counts),
         "split_pairs": {
@@ -777,6 +797,9 @@ def main() -> None:
             ),
             "counterfactual_approved_for_arena": False,
             "counterfactual_training_root_ids": report["root_ids"],
+            "counterfactual_training_root_fingerprints": report[
+                "root_fingerprints"
+            ],
             "counterfactual_training_source_game_ids": report[
                 "source_game_ids"
             ],
