@@ -641,6 +641,19 @@ def predict_from_features(features: Sequence[float], artifact: Dict[str, Any]) -
                 correction["feature_indices"], correction["coefficients"]
             )
         )
+    tree_correction = artifact.get("tree_correction")
+    if tree_correction:
+        correction_rate = float(tree_correction["learning_rate"])
+        for tree in tree_correction["trees"]:
+            node = 0
+            while tree["children_left"][node] != -1:
+                feature = tree["feature"][node]
+                node = (
+                    tree["children_left"][node]
+                    if features[feature] <= tree["threshold"][node]
+                    else tree["children_right"][node]
+                )
+            calibrated += correction_rate * tree["value"][node]
     return _sigmoid(calibrated)
 
 

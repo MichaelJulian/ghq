@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+import math
 from pathlib import Path
 
 
@@ -46,12 +47,12 @@ class NativeValueModelTest(unittest.TestCase):
 
     def test_matches_typescript_challenger_with_append_only_features(self) -> None:
         self.assert_prediction(
-            engine.STARTING_FEN, 1, 0.5332769823702843, "challenger"
+            engine.STARTING_FEN, 1, 0.534942747149323, "challenger"
         )
         self.assert_prediction(
             "q1r↓1ip2/ir↘1i4/1ii5/3ff3/7r↓/6f1/2FI1I1I/1I2I1FQ I iii r",
             31,
-            0.016427033102013284,
+            0.009824085353743121,
             "challenger",
         )
 
@@ -135,6 +136,32 @@ class NativeValueModelTest(unittest.TestCase):
         }
         for name, expected_value in expected.items():
             self.assertEqual(features[name], expected_value, name)
+
+    def test_applies_post_calibration_tree_correction(self) -> None:
+        artifact = {
+            "feature_names": ["test"],
+            "base_raw_score": 0.0,
+            "learning_rate": 0.1,
+            "calibration": {"scale": 1.0, "intercept": 0.0},
+            "trees": [],
+            "tree_correction": {
+                "learning_rate": 0.25,
+                "trees": [
+                    {
+                        "children_left": [1, -1, -1],
+                        "children_right": [2, -1, -1],
+                        "feature": [0, -2, -2],
+                        "threshold": [0.5, -2.0, -2.0],
+                        "value": [0.0, -1.0, 1.0],
+                    }
+                ],
+            },
+        }
+        self.assertAlmostEqual(
+            value_model.predict_from_features([1.0], artifact),
+            1.0 / (1.0 + math.exp(-0.25)),
+            places=15,
+        )
 
 
 if __name__ == "__main__":

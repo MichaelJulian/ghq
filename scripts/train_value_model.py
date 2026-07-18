@@ -665,6 +665,22 @@ def exported_probabilities(artifact: Dict[str, Any], vectors: np.ndarray) -> np.
         if len(indices) and (indices.min() < 0 or indices.max() >= vectors.shape[1]):
             raise ValueError("linear correction feature index is out of range")
         calibrated = calibrated + vectors[:, indices] @ coefficients
+    tree_correction = artifact.get("tree_correction")
+    if tree_correction:
+        correction_rate = float(tree_correction["learning_rate"])
+        for tree in tree_correction["trees"]:
+            values = np.empty(len(vectors), dtype=np.float64)
+            for row_index, vector in enumerate(vectors):
+                node = 0
+                while tree["children_left"][node] != -1:
+                    feature = tree["feature"][node]
+                    node = (
+                        tree["children_left"][node]
+                        if vector[feature] <= tree["threshold"][node]
+                        else tree["children_right"][node]
+                    )
+                values[row_index] = tree["value"][node]
+            calibrated = calibrated + correction_rate * values
     return sigmoid(calibrated)
 
 

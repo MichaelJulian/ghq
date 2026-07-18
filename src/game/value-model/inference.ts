@@ -40,6 +40,11 @@ export interface ValueModelArtifact {
     feature_indices: number[];
     coefficients: number[];
   };
+  /** Shallow post-calibration trees trained under a pairwise ranking loss. */
+  tree_correction?: {
+    learning_rate: number;
+    trees: ExportedTree[];
+  };
   trees: ExportedTree[];
   metadata: Record<string, unknown>;
 }
@@ -135,6 +140,49 @@ export function assertValueModelCompatible(
       throw new Error("GHQ value model linear correction is invalid");
     }
   }
+  const treeCorrection = artifact.tree_correction;
+  if (correction && treeCorrection) {
+    throw new Error("GHQ value model cannot combine correction kinds");
+  }
+  if (treeCorrection) {
+    const validTree = (tree: ExportedTree) => {
+      const length = tree.children_left.length;
+      return (
+        length > 0 &&
+        tree.children_right.length === length &&
+        tree.feature.length === length &&
+        tree.threshold.length === length &&
+        tree.value.length === length &&
+        tree.threshold.every(Number.isFinite) &&
+        tree.value.every(Number.isFinite) &&
+        tree.feature.every(
+          (feature, node) =>
+            (tree.children_left[node] === -1 && feature === -2) ||
+            (Number.isInteger(feature) &&
+              feature >= 0 &&
+              feature < artifact.feature_names.length)
+        ) &&
+        tree.children_left.every(
+          (child, node) =>
+            (child === -1 && tree.children_right[node] === -1) ||
+            (Number.isInteger(child) &&
+              child >= 0 &&
+              child < length &&
+              Number.isInteger(tree.children_right[node]) &&
+              tree.children_right[node] >= 0 &&
+              tree.children_right[node] < length)
+        )
+      );
+    };
+    if (
+      !Number.isFinite(treeCorrection.learning_rate) ||
+      treeCorrection.learning_rate <= 0 ||
+      treeCorrection.trees.length === 0 ||
+      !treeCorrection.trees.every(validTree)
+    ) {
+      throw new Error("GHQ value model tree correction is invalid");
+    }
+  }
 }
 
 function featuresForArtifact(
@@ -174,6 +222,13 @@ export function predictFromFeatures(
       calibrated +=
         correction.coefficients[index] *
         features[correction.feature_indices[index]];
+    }
+  }
+  const treeCorrection = artifact.tree_correction;
+  if (treeCorrection) {
+    for (const tree of treeCorrection.trees) {
+      calibrated +=
+        treeCorrection.learning_rate * evaluateTree(tree, features);
     }
   }
   return sigmoid(calibrated);

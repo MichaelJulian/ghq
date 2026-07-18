@@ -179,6 +179,62 @@ describe("gradient-boosted value model", () => {
     );
   });
 
+  it("applies a validated pairwise tree correction after calibration", () => {
+    const artifact: ValueModelArtifact = {
+      format: "ghq-gradient-boosted-value-v1",
+      feature_names: [...VALUE_FEATURE_NAMES_V2],
+      base_raw_score: 0,
+      learning_rate: 0.1,
+      calibration: { kind: "platt", scale: 1, intercept: 0 },
+      trees: [],
+      metadata: {},
+      tree_correction: {
+        learning_rate: 0.25,
+        trees: [
+          {
+            children_left: [1, -1, -1],
+            children_right: [2, -1, -1],
+            feature: [VALUE_FEATURE_NAMES.length, -2, -2],
+            threshold: [0.5, -2, -2],
+            value: [0, -1, 1],
+          },
+        ],
+      },
+    };
+    const features = extractValueFeaturesV2(position, "RED");
+    const leaf = features[VALUE_FEATURE_NAMES.length] <= 0.5 ? -1 : 1;
+    const expected = 1 / (1 + Math.exp(-0.25 * leaf));
+    expect(() => assertValueModelCompatible(artifact)).not.toThrow();
+    expect(predictFromFeatures(features, artifact)).toBeCloseTo(expected, 12);
+  });
+
+  it("rejects malformed pairwise tree corrections", () => {
+    const artifact: ValueModelArtifact = {
+      format: "ghq-gradient-boosted-value-v1",
+      feature_names: [...VALUE_FEATURE_NAMES_V2],
+      base_raw_score: 0,
+      learning_rate: 0.1,
+      calibration: { kind: "platt", scale: 1, intercept: 0 },
+      trees: [],
+      metadata: {},
+      tree_correction: {
+        learning_rate: 0.1,
+        trees: [
+          {
+            children_left: [-1],
+            children_right: [-1],
+            feature: [VALUE_FEATURE_NAMES_V2.length],
+            threshold: [-2],
+            value: [0],
+          },
+        ],
+      },
+    };
+    expect(() => assertValueModelCompatible(artifact)).toThrow(
+      "tree correction is invalid"
+    );
+  });
+
   it("overrides the model for a captured HQ", () => {
     const terminal = JSON.parse(JSON.stringify(position)) as typeof position;
     terminal.board[0][0] = null;
