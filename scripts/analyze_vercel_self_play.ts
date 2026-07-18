@@ -223,6 +223,8 @@ async function main() {
     gameId: string;
     winner: string;
     potentialHorizonBlunder: boolean;
+    potentialValueModelTacticalContradiction: boolean;
+    highConfidenceValueModelTacticalContradiction: boolean;
     loserDecision: {
       turn: number;
       player: string;
@@ -523,6 +525,18 @@ async function main() {
           potentialHorizonBlunder:
             loserDecision.completedDepth >= 2 &&
             loserDecision.currentPlayerScore > -50_000,
+          // Search and the raw value model serve different purposes. When the
+          // completed search already encodes a forced loss but the static
+          // model still favors the defender, retain the position as an
+          // explicit hard-negative candidate for the next value checkpoint.
+          // Exact HQ auditing remains the authority on whether the loss was
+          // truly forced.
+          potentialValueModelTacticalContradiction:
+            loserDecision.currentPlayerScore <= -50_000 &&
+            loserDecision.winProbability > 0.5,
+          highConfidenceValueModelTacticalContradiction:
+            loserDecision.currentPlayerScore <= -50_000 &&
+            loserDecision.winProbability >= 0.8,
           loserDecision: {
             turn: loserDecision.turnNumber,
             player: loserDecision.player,
@@ -714,8 +728,40 @@ async function main() {
           orphanGameIds: colorPairs.orphans.map((game) => game.gameId),
         },
         pairedOutcomes,
+        valueModelTerminalCalibration: {
+          positions: immediateHqLosses.length,
+          potentialContradictions: immediateHqLosses.filter(
+            (loss) => loss.potentialValueModelTacticalContradiction
+          ).length,
+          highConfidencePotentialContradictions: immediateHqLosses.filter(
+            (loss) => loss.highConfidenceValueModelTacticalContradiction
+          ).length,
+          meanLosingWinProbability: immediateHqLosses.length
+            ? Number(
+                (
+                  immediateHqLosses.reduce(
+                    (sum, loss) => sum + loss.loserDecision.winProbability,
+                    0
+                  ) / immediateHqLosses.length
+                ).toFixed(4)
+              )
+            : null,
+          maxLosingWinProbability: immediateHqLosses.length
+            ? Number(
+                Math.max(
+                  ...immediateHqLosses.map(
+                    (loss) => loss.loserDecision.winProbability
+                  )
+                ).toFixed(4)
+              )
+            : null,
+        },
         immediateHqLosses: immediateHqLosses.sort(
           (left, right) =>
+            Number(right.highConfidenceValueModelTacticalContradiction) -
+              Number(left.highConfidenceValueModelTacticalContradiction) ||
+            Number(right.potentialValueModelTacticalContradiction) -
+              Number(left.potentialValueModelTacticalContradiction) ||
             Number(right.potentialHorizonBlunder) -
               Number(left.potentialHorizonBlunder) ||
             right.loserDecision.score - left.loserDecision.score
