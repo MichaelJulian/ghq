@@ -218,6 +218,29 @@ function reversalCount(
   }, 0);
 }
 
+/** Escalate search breadth before a proven own-turn undo becomes a loop. */
+export function cycleAdjustedStagnationTurns(
+  turnsWithoutProgress: number,
+  previousOwnTurns: string[][]
+): number {
+  const priorTurns = previousOwnTurns
+    .filter((turn) => Array.isArray(turn) && turn.length > 0)
+    .slice(-4);
+  let strongestUndo = 0;
+  for (let index = 1; index < priorTurns.length; index++) {
+    strongestUndo = Math.max(
+      strongestUndo,
+      reversalCount(priorTurns[index], priorTurns[index - 1])
+    );
+  }
+  // Two reversed actions are already a coordinated conveyor, not ordinary
+  // repositioning. Enter the Python searcher's measured 70% stagnation band
+  // immediately so progressive root turns survive the verification beam.
+  return strongestUndo >= 2
+    ? Math.max(turnsWithoutProgress, 18)
+    : turnsWithoutProgress;
+}
+
 /** Prefer a near-best novel turn when the nominal choice repeats or undoes play. */
 export function applyHistoryAvoidance(
   result: GhqSearchResult,
@@ -489,9 +512,7 @@ async function analyzeFenNatively(
       config.valueModel
     ),
   };
-  let nativeResponse:
-    | Awaited<ReturnType<typeof searchNatively>>
-    | undefined;
+  let nativeResponse: Awaited<ReturnType<typeof searchNatively>> | undefined;
   let rawSearchResult = await readPersistedSearch(searchCacheKey);
   if (rawSearchResult) {
     rawSearchResult = structuredClone(rawSearchResult);
@@ -647,6 +668,17 @@ export async function analyzeFen(
     400,
     "turnsWithoutProgress"
   );
+  const previousOwnTurns = (
+    request.previousOwnTurns ?? [request.previousOwnTurnMoves ?? []]
+  )
+    .filter((turn): turn is string[] => Array.isArray(turn))
+    .map((turn) =>
+      turn.filter((value): value is string => typeof value === "string")
+    );
+  const effectiveTurnsWithoutProgress = cycleAdjustedStagnationTurns(
+    turnsWithoutProgress,
+    previousOwnTurns
+  );
   const resolvedConfig: ResolvedAnalysisConfig = {
     personality,
     valueModel,
@@ -657,7 +689,7 @@ export async function analyzeFen(
     maxActions: maxActions as 2 | 3,
     explorationTemperature,
     explorationSeed,
-    turnsWithoutProgress,
+    turnsWithoutProgress: effectiveTurnsWithoutProgress,
   };
   const nativeUrl = nativeSearchUrl();
   if (nativeUrl) {
@@ -690,7 +722,7 @@ export async function analyzeFen(
       maxDepth,
       beamWidth,
       maxActions,
-      stagnationTurns: turnsWithoutProgress,
+      stagnationTurns: effectiveTurnsWithoutProgress,
       valueModel,
       valueModelCheckpoint: valueModelCheckpointId(
         maxActions === 2 ? "two-actions" : "three-actions",
@@ -713,7 +745,7 @@ export async function analyzeFen(
           redModelValue(valueFen, valueTurnNumber, maxActions, valueModel),
         explorationSeed,
         maxActions,
-        turnsWithoutProgress,
+        effectiveTurnsWithoutProgress,
         (policyFen, policyTurnNumber, moverIsRed) =>
           modelPolicyAdjustment(
             policyFen,
@@ -744,12 +776,8 @@ export async function analyzeFen(
       (request.recentFens ?? []).filter(
         (value): value is string => typeof value === "string"
       ),
-      (request.previousOwnTurns ?? [request.previousOwnTurnMoves ?? []])
-        .filter((turn): turn is string[] => Array.isArray(turn))
-        .map((turn) =>
-          turn.filter((value): value is string => typeof value === "string")
-        ),
-      turnsWithoutProgress
+      previousOwnTurns,
+      effectiveTurnsWithoutProgress
     );
 
     for (const uci of searchResult.best_turn.all_moves) {

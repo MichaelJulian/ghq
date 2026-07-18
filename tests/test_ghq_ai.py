@@ -838,6 +838,89 @@ class SearchTests(unittest.TestCase):
             )
         )
 
+    def test_cycle_seed_cannot_prune_progressive_verification_roots(self):
+        board = engine.BaseBoard(
+            "2i1t↓p2/qih↓ir↓3/2i5/8/1I5Q/I5I1/"
+            "2IR↑H↑T↑R↑R↑/4IPI1 - - r"
+        )
+        searcher = ghq_ai.Searcher(
+            "tactical_gambler",
+            time_ms=20_000,
+            beam_width=6,
+            turn_number=81,
+            stagnation_turns=18,
+        )
+        searcher.root_key = ghq_ai.board_key(board)
+        cycle_moves = [
+            engine.Move.from_uci(uci)
+            for uci in ("c2c3", "b4b3", "a3a2")
+        ]
+        cycled = board.copy()
+        for move in cycle_moves:
+            cycled.push(move)
+        purpose = searcher.turn_purpose_breakdown(
+            board, cycled, cycle_moves, board.turn
+        )
+        action_purposes = searcher.action_purpose_labels(
+            board, cycle_moves, board.turn
+        )
+        searcher.root_fallback = ghq_ai.TurnCandidate(
+            cycle_moves,
+            cycled,
+            0.0,
+            searcher.heuristic_score(cycled),
+            purpose_penalty=purpose["net_purpose_penalty"],
+            paratrooper_mission_penalty=purpose[
+                "paratrooper_mission_penalty"
+            ],
+            action_purposes=action_purposes,
+            progress_score=purpose["stagnation_progress"],
+            conveyor_actions=purpose["backfills"] + purpose["reversals"],
+        )
+        searcher.verification_mode = True
+
+        candidates = searcher.generate_turn_candidates(board)
+        lines = [[move.uci() for move in item.moves] for item in candidates]
+
+        self.assertNotIn(["c2c3", "b4b3", "a3a2"], lines)
+        self.assertTrue(
+            any(
+                item.progress_score >= 1.9
+                and item.moves[0].uci() in ("b4a5", "b4b5", "a3a4")
+                for item in candidates
+            )
+        )
+
+    def test_safety_prefers_reducing_an_unavoidable_baseline_loss(self):
+        board = engine.BaseBoard(
+            "qi2iii1/ir↓if3f/1i2r↓3/2If4/2R↑H↑4/"
+            "I3R↑1I1/R↑1PI3I/4I2Q FFF i b"
+        )
+        searcher = ghq_ai.Searcher(
+            "para_specialist",
+            time_ms=20_000,
+            beam_width=16,
+            turn_number=26,
+        )
+
+        historical = board.copy()
+        for uci in ("h7f5", "b6b5xc5", "skip"):
+            historical.push(engine.Move.from_uci(uci))
+        reduced = board.copy()
+        for uci in ("d7d8", "b6b5xc5", "h7f5"):
+            reduced.push(engine.Move.from_uci(uci))
+
+        historical_safety = searcher.assess_turn_safety(
+            board, historical, board.turn
+        )
+        reduced_safety = searcher.assess_turn_safety(
+            board, reduced, board.turn
+        )
+        self.assertEqual(historical_safety.forced_loss_value, 6.0)
+        self.assertFalse(historical_safety.tactically_safe)
+        self.assertEqual(reduced_safety.forced_loss_value, 3.0)
+        self.assertTrue(reduced_safety.tactically_safe)
+
     def test_opponent_home_rank_para_is_trapped_when_infantry_can_deploy(self):
         no_reserve = engine.BaseBoard("q6P/8/8/8/8/8/8/7Q - - r")
         infantry_ready = engine.BaseBoard("q6P/8/8/8/8/8/8/7Q - i r")

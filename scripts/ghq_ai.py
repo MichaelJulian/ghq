@@ -2015,8 +2015,13 @@ class Searcher:
             and not loses_hq_this_turn
             and forced < PIECE_VALUES[engine.HQ]
         )
+        reduced_existing_forced_loss = (
+            forced + 0.75 < baseline_forced
+            and uncovered <= 0.75
+        )
         safe = not loses_hq_this_turn and (
             resolved_hq_threat
+            or reduced_existing_forced_loss
             or (
                 uncovered <= 0.75
                 and forced <= compensation + 0.75
@@ -3443,6 +3448,35 @@ class Searcher:
                 and priority_by_uci.get(move.uci(), 0.0) >= 4000.0
             ):
                 selected.append((priority, move))
+
+        if (
+            self.stagnation_factor() >= 0.20
+            and board_key(board) == self.root_key
+        ):
+            # A narrow verification beam used to contain only home-rank and
+            # artillery shuffles, even after self-play had proven a cycle.
+            # Preserve two forward infantry first actions; complete-turn
+            # purpose and tactical safety filters still decide whether the
+            # resulting plans reach minimax.
+            progress_slots = 2
+            for priority, move in diverse_scored:
+                piece_type = self.move_piece_type(board, move)
+                if (
+                    piece_type in INFANTRY_TYPES
+                    and move.name != "Reinforce"
+                    and move.from_square is not None
+                    and move.to_square is not None
+                    and relative_rank(move.to_square, board.turn)
+                    > relative_rank(move.from_square, board.turn)
+                    and all(
+                        selected_move != move
+                        for _, selected_move in selected
+                    )
+                ):
+                    selected.append((priority, move))
+                    progress_slots -= 1
+                    if progress_slots == 0:
+                        break
         if len(selected) != len(diverse):
             self.exhaustive_within_horizon = False
             self.beam_pruned_actions += len(diverse) - len(selected)
@@ -4361,6 +4395,15 @@ class Searcher:
             ]
             minimum_no_effect = min(no_effect_counts)
             permitted_no_effect = minimum_no_effect
+            if (
+                is_root_generation
+                and self.stagnation_factor() >= 0.20
+            ):
+                # A cosmetically purposeful conveyor seed must not delete a
+                # genuinely progressive root plan merely because that plan
+                # contains one quiet setup action. The action still pays its
+                # purpose penalty; this only lets minimax verify the reply.
+                permitted_no_effect += 1
             focused = [
                 candidate
                 for candidate, count in zip(purpose_pool, no_effect_counts)

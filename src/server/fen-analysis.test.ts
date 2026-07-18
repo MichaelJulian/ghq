@@ -3,11 +3,36 @@
 import { describe, expect, it, jest } from "@jest/globals";
 import { GHQ_STARTING_FEN } from "@/game/analysis/types";
 import type { GhqCandidateTurn, GhqSearchResult } from "@/game/analysis/types";
-import { analyzeFen, applyHistoryAvoidance } from "./fen-analysis";
+import {
+  analyzeFen,
+  applyHistoryAvoidance,
+  cycleAdjustedStagnationTurns,
+} from "./fen-analysis";
 
 jest.setTimeout(30_000);
 
 describe("production FEN analysis", () => {
+  it("escalates search pressure before a two-action undo becomes a loop", () => {
+    expect(
+      cycleAdjustedStagnationTurns(5, [
+        ["d3d2↑", "a3a2", "c2c3"],
+        ["c3c2", "a2a3", "b3b4"],
+      ])
+    ).toBe(18);
+    expect(
+      cycleAdjustedStagnationTurns(5, [
+        ["d3d2↑", "a3a2", "c2c3"],
+        ["c3c2", "a2b2", "b3b4"],
+      ])
+    ).toBe(5);
+    expect(
+      cycleAdjustedStagnationTurns(24, [
+        ["d3d2↑", "a3a2", "c2c3"],
+        ["c3c2", "a2a3", "b3b4"],
+      ])
+    ).toBe(24);
+  });
+
   it("chooses a near-best novel turn over a multi-move undo cycle", () => {
     const candidate = (
       rank: number,
@@ -90,13 +115,7 @@ describe("production FEN analysis", () => {
       },
     } as unknown as GhqSearchResult;
 
-    applyHistoryAvoidance(
-      result,
-      "RED",
-      ["safe-repeated-position"],
-      [],
-      24
-    );
+    applyHistoryAvoidance(result, "RED", ["safe-repeated-position"], [], 24);
 
     expect(result.best_turn.resulting_fen).toBe("safe-repeated-position");
     expect(result.recommendation_label).toBe("safe fallback");
@@ -210,13 +229,7 @@ describe("production FEN analysis", () => {
       },
     } as unknown as GhqSearchResult;
 
-    applyHistoryAvoidance(
-      result,
-      "BLUE",
-      [],
-      [["d7d6", "a7a6", "f6f7"]],
-      5
-    );
+    applyHistoryAvoidance(result, "BLUE", [], [["d7d6", "a7a6", "f6f7"]], 5);
 
     expect(result.best_turn.resulting_fen).toBe("cycle-breaker");
     expect(result.recommendation_label).toBe("history avoidance");
