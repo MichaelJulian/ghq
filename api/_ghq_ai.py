@@ -4785,7 +4785,7 @@ def search(
                 searcher.deadline = min(
                     final_deadline,
                     main_search_started
-                    + max(0.05, time_ms / 1000.0 * 0.12),
+                    + max(0.05, time_ms / 1000.0 * 0.20),
                 )
                 try:
                     reply = searcher.alphabeta(
@@ -4801,17 +4801,19 @@ def search(
                     # that same child instead of paying for the reply twice.
 
             searcher.hq_leaf_extension_enabled = True
-            # Reserve the first 90% of the budget for a narrow but complete
+            # Reserve the first 80% of the budget for a narrow but complete
             # depth-two pass. Depth two means our complete turn plus one full
-            # opponent reply. A later broad pass may improve it, but may never
-            # erase this tactically verified result merely by timing out.
+            # opponent reply. The final 20% is deliberately large enough to
+            # certify the emergency seed on difficult Vercel positions if the
+            # root pass times out. A later broad pass may improve the result,
+            # but may never erase a tactically verified line by timing out.
             searcher.verification_mode = True
             searcher.root_verified_lines = []
             searcher.root_ranked_turns = []
             searcher.deadline = min(
                 final_deadline,
                 main_search_started
-                + max(0.05, time_ms / 1000.0 * 0.90),
+                + max(0.05, time_ms / 1000.0 * 0.80),
             )
             try:
                 best = searcher.alphabeta(board, 2, -math.inf, math.inf)
@@ -4850,7 +4852,7 @@ def search(
                     and not seed_board.is_game_over()
                     and seed_board.turn != board.turn
                 ):
-                    # The narrow root pass owns the first 90% of the absolute
+                    # The narrow root pass owns the first 80% of the absolute
                     # deadline. If it cannot finish one reply, spend the
                     # reserved final slice completing the already-started
                     # emergency-seed reply instead of restarting a shallow
