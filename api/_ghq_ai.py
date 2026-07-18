@@ -2825,6 +2825,55 @@ class Searcher:
                 continue
             yield move
 
+    @staticmethod
+    def artillery_hq_interdiction_squares(
+        board: engine.BaseBoard,
+        move: engine.Move,
+        hq_square: int,
+        mover: bool,
+    ) -> int:
+        """Return newly bombarded setup squares near the friendly HQ.
+
+        A gun can defend the HQ from well outside the local survival radius.
+        In one exact audit, moving the heavy artillery b2-c1 and facing east
+        denied f1, the transit square required by an otherwise forced enemy
+        paratrooper combination.  Key these actions by where their lane takes
+        effect rather than by the gun's distance from the HQ.
+        """
+        if (
+            move.name != "MoveAndOrient"
+            or move.from_square is None
+            or move.to_square is None
+            or move.orientation is None
+        ):
+            return engine.BB_EMPTY
+        piece_type = board.piece_type_at(move.from_square)
+        if piece_type is None or not engine.is_artillery(piece_type):
+            return engine.BB_EMPTY
+        distance = 3 if piece_type == engine.HEAVY_ARTILLERY else 2
+        target = board.get_bombardment_target(
+            move.to_square, move.orientation, distance
+        )
+        if target is None or target == move.to_square:
+            return engine.BB_EMPTY
+
+        hq_file = engine.square_file(hq_square)
+        hq_rank = engine.square_rank(hq_square)
+        defense_zone = engine.BB_EMPTY
+        for file_index in range(max(0, hq_file - 2), min(7, hq_file + 2) + 1):
+            for rank_index in range(
+                max(0, hq_rank - 2), min(7, hq_rank + 2) + 1
+            ):
+                defense_zone |= engine.BB_SQUARES[
+                    engine.square(file_index, rank_index)
+                ]
+        lane = engine.between_inclusive_end(move.to_square, target)
+        return (
+            lane
+            & defense_zone
+            & ~board.bombarded_co[mover]
+        )
+
     def find_hq_survival_turn(
         self,
         root: engine.BaseBoard,
@@ -2872,6 +2921,9 @@ class Searcher:
             actions: List[Tuple[float, str, engine.Move]] = []
             for move in board.generate_legal_moves():
                 piece_type = self.move_piece_type(board, move)
+                hq_interdiction = self.artillery_hq_interdiction_squares(
+                    board, move, hq_square, mover
+                )
                 distances = [
                     chebyshev(square, hq_square)
                     for square in (move.from_square, move.to_square)
@@ -2883,6 +2935,8 @@ class Searcher:
                     priority = 10_000.0
                 elif piece_type == engine.HQ:
                     priority = 5_000.0 - 100.0 * min(distances or [9])
+                elif hq_interdiction:
+                    priority = 4_000.0 + 25.0 * engine.popcount(hq_interdiction)
                 elif move.capture_preference is not None:
                     priority = 2_500.0 - 100.0 * min(distances or [9])
                 elif distances and min(distances) <= 3:
