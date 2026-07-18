@@ -2,6 +2,7 @@
 /** Summarize selected persisted Vercel self-play generations. */
 
 import "dotenv/config";
+import { writeFile } from "node:fs/promises";
 import { get, list, type ListBlobResultBlob } from "@vercel/blob";
 
 import {
@@ -609,172 +610,167 @@ async function main() {
     increment(pairedOutcomes, `${first}/${second}`);
   }
 
-  console.log(
-    JSON.stringify(
-      {
-        generationIds,
-        games: games.length,
-        threeActionGames: games.filter(
-          (game) => game.redMaxActions === 3 && game.blueMaxActions === 3
-        ).length,
-        outcomes,
-        terminations,
-        gameLengthTurns: {
-          min: Math.min(...lengths),
-          median: percentile(lengths, 0.5),
-          p90: percentile(lengths, 0.9),
-          max: Math.max(...lengths),
-          mean: Number(
-            (
-              lengths.reduce((sum, length) => sum + length, 0) / lengths.length
-            ).toFixed(1)
-          ),
+  const report = {
+    generationIds,
+    games: games.length,
+    threeActionGames: games.filter(
+      (game) => game.redMaxActions === 3 && game.blueMaxActions === 3
+    ).length,
+    outcomes,
+    terminations,
+    gameLengthTurns: {
+      min: Math.min(...lengths),
+      median: percentile(lengths, 0.5),
+      p90: percentile(lengths, 0.9),
+      max: Math.max(...lengths),
+      mean: Number(
+        (
+          lengths.reduce((sum, length) => sum + length, 0) / lengths.length
+        ).toFixed(1)
+      ),
+    },
+    decisions,
+    actionCounts,
+    countedActionCounts,
+    completedDepths: depths,
+    depthByColor,
+    searchTelemetry: {
+      coverageRate: Number((searchElapsedMs.length / decisions).toFixed(4)),
+      elapsedMs: distribution(searchElapsedMs),
+      nodes: distribution(searchNodes),
+      completeTurnsGenerated: distribution(completeTurnsGenerated),
+      hqSurvivalProbeNodes: distribution(hqSurvivalProbeNodes),
+      hqSurvivalReplyNodes: distribution(hqSurvivalReplyNodes),
+      fallbackElapsedMs: distribution(fallbackElapsedMs),
+    },
+    fallbackTypes,
+    fallbackByColor,
+    fallbackByPhase,
+    fallbackByTurn,
+    fallbackExamples,
+    historyAvoidanceByTurn,
+    purposeTelemetry: {
+      ...purposeTelemetry,
+      coverageRate: Number((purposeTelemetry.decisions / decisions).toFixed(4)),
+      decisionsWithNoNewEffectRate: Number(
+        (
+          purposeTelemetry.decisionsWithNoNewEffect /
+          Math.max(1, purposeTelemetry.decisions)
+        ).toFixed(4)
+      ),
+      noNewEffectActionsPerDecision: Number(
+        (
+          purposeTelemetry.noNewEffectActions /
+          Math.max(1, purposeTelemetry.decisions)
+        ).toFixed(4)
+      ),
+      decisionsWithSetupRate: Number(
+        (
+          purposeTelemetry.decisionsWithSetup /
+          Math.max(1, purposeTelemetry.decisions)
+        ).toFixed(4)
+      ),
+      setupActionsPerDecision: Number(
+        (
+          purposeTelemetry.setupActions /
+          Math.max(1, purposeTelemetry.decisions)
+        ).toFixed(4)
+      ),
+      unpurposedActionsPerDecision: Number(
+        (
+          purposeTelemetry.unpurposedActions /
+          Math.max(1, purposeTelemetry.decisions)
+        ).toFixed(4)
+      ),
+      selectedPurposefulEarlyStopRate: Number(
+        (
+          purposeTelemetry.selectedPurposefulEarlyStops /
+          Math.max(1, purposeTelemetry.decisions)
+        ).toFixed(4)
+      ),
+    },
+    purposeExamples,
+    fallbackDecisions,
+    fallbackRate: Number((fallbackDecisions / decisions).toFixed(4)),
+    verifiedFallbackDecisions,
+    unverifiedFallbackDecisions,
+    unverifiedFallbackRate: Number(
+      (unverifiedFallbackDecisions / decisions).toFixed(4)
+    ),
+    timedOutDecisions,
+    timedOutRate: Number((timedOutDecisions / decisions).toFixed(4)),
+    incompleteTurnDecisions,
+    persistentCacheHits,
+    persistentCacheHitRate: Number(
+      (persistentCacheHits / decisions).toFixed(4)
+    ),
+    trainingGames: games.filter((game) => game.trainingPositions > 0).length,
+    qualityEligibleGames,
+    trainingRejectionReasons,
+    trainingPositions,
+    personalities,
+    valueModels: Object.fromEntries(
+      Object.entries(valueModels).map(([id, record]) => [
+        id,
+        {
+          ...record,
+          scoreRate: Number((record.points / record.games).toFixed(4)),
         },
-        decisions,
-        actionCounts,
-        countedActionCounts,
-        completedDepths: depths,
-        depthByColor,
-        searchTelemetry: {
-          coverageRate: Number((searchElapsedMs.length / decisions).toFixed(4)),
-          elapsedMs: distribution(searchElapsedMs),
-          nodes: distribution(searchNodes),
-          completeTurnsGenerated: distribution(completeTurnsGenerated),
-          hqSurvivalProbeNodes: distribution(hqSurvivalProbeNodes),
-          hqSurvivalReplyNodes: distribution(hqSurvivalReplyNodes),
-          fallbackElapsedMs: distribution(fallbackElapsedMs),
-        },
-        fallbackTypes,
-        fallbackByColor,
-        fallbackByPhase,
-        fallbackByTurn,
-        fallbackExamples,
-        historyAvoidanceByTurn,
-        purposeTelemetry: {
-          ...purposeTelemetry,
-          coverageRate: Number(
-            (purposeTelemetry.decisions / decisions).toFixed(4)
-          ),
-          decisionsWithNoNewEffectRate: Number(
+      ])
+    ),
+    pairIntegrity: {
+      completePairs: colorPairs.pairs.length,
+      orphanGames: colorPairs.orphans.length,
+      orphanGameIds: colorPairs.orphans.map((game) => game.gameId),
+    },
+    pairedOutcomes,
+    valueModelTerminalCalibration: {
+      positions: immediateHqLosses.length,
+      potentialContradictions: immediateHqLosses.filter(
+        (loss) => loss.potentialValueModelTacticalContradiction
+      ).length,
+      highConfidencePotentialContradictions: immediateHqLosses.filter(
+        (loss) => loss.highConfidenceValueModelTacticalContradiction
+      ).length,
+      meanLosingWinProbability: immediateHqLosses.length
+        ? Number(
             (
-              purposeTelemetry.decisionsWithNoNewEffect /
-              Math.max(1, purposeTelemetry.decisions)
+              immediateHqLosses.reduce(
+                (sum, loss) => sum + loss.loserDecision.winProbability,
+                0
+              ) / immediateHqLosses.length
             ).toFixed(4)
-          ),
-          noNewEffectActionsPerDecision: Number(
-            (
-              purposeTelemetry.noNewEffectActions /
-              Math.max(1, purposeTelemetry.decisions)
-            ).toFixed(4)
-          ),
-          decisionsWithSetupRate: Number(
-            (
-              purposeTelemetry.decisionsWithSetup /
-              Math.max(1, purposeTelemetry.decisions)
-            ).toFixed(4)
-          ),
-          setupActionsPerDecision: Number(
-            (
-              purposeTelemetry.setupActions /
-              Math.max(1, purposeTelemetry.decisions)
-            ).toFixed(4)
-          ),
-          unpurposedActionsPerDecision: Number(
-            (
-              purposeTelemetry.unpurposedActions /
-              Math.max(1, purposeTelemetry.decisions)
-            ).toFixed(4)
-          ),
-          selectedPurposefulEarlyStopRate: Number(
-            (
-              purposeTelemetry.selectedPurposefulEarlyStops /
-              Math.max(1, purposeTelemetry.decisions)
-            ).toFixed(4)
-          ),
-        },
-        purposeExamples,
-        fallbackDecisions,
-        fallbackRate: Number((fallbackDecisions / decisions).toFixed(4)),
-        verifiedFallbackDecisions,
-        unverifiedFallbackDecisions,
-        unverifiedFallbackRate: Number(
-          (unverifiedFallbackDecisions / decisions).toFixed(4)
-        ),
-        timedOutDecisions,
-        timedOutRate: Number((timedOutDecisions / decisions).toFixed(4)),
-        incompleteTurnDecisions,
-        persistentCacheHits,
-        persistentCacheHitRate: Number(
-          (persistentCacheHits / decisions).toFixed(4)
-        ),
-        trainingGames: games.filter((game) => game.trainingPositions > 0)
-          .length,
-        qualityEligibleGames,
-        trainingRejectionReasons,
-        trainingPositions,
-        personalities,
-        valueModels: Object.fromEntries(
-          Object.entries(valueModels).map(([id, record]) => [
-            id,
-            {
-              ...record,
-              scoreRate: Number((record.points / record.games).toFixed(4)),
-            },
-          ])
-        ),
-        pairIntegrity: {
-          completePairs: colorPairs.pairs.length,
-          orphanGames: colorPairs.orphans.length,
-          orphanGameIds: colorPairs.orphans.map((game) => game.gameId),
-        },
-        pairedOutcomes,
-        valueModelTerminalCalibration: {
-          positions: immediateHqLosses.length,
-          potentialContradictions: immediateHqLosses.filter(
-            (loss) => loss.potentialValueModelTacticalContradiction
-          ).length,
-          highConfidencePotentialContradictions: immediateHqLosses.filter(
-            (loss) => loss.highConfidenceValueModelTacticalContradiction
-          ).length,
-          meanLosingWinProbability: immediateHqLosses.length
-            ? Number(
-                (
-                  immediateHqLosses.reduce(
-                    (sum, loss) => sum + loss.loserDecision.winProbability,
-                    0
-                  ) / immediateHqLosses.length
-                ).toFixed(4)
+          )
+        : null,
+      maxLosingWinProbability: immediateHqLosses.length
+        ? Number(
+            Math.max(
+              ...immediateHqLosses.map(
+                (loss) => loss.loserDecision.winProbability
               )
-            : null,
-          maxLosingWinProbability: immediateHqLosses.length
-            ? Number(
-                Math.max(
-                  ...immediateHqLosses.map(
-                    (loss) => loss.loserDecision.winProbability
-                  )
-                ).toFixed(4)
-              )
-            : null,
-        },
-        immediateHqLosses: immediateHqLosses.sort(
-          (left, right) =>
-            Number(right.highConfidenceValueModelTacticalContradiction) -
-              Number(left.highConfidenceValueModelTacticalContradiction) ||
-            Number(right.potentialValueModelTacticalContradiction) -
-              Number(left.potentialValueModelTacticalContradiction) ||
-            Number(right.potentialHorizonBlunder) -
-              Number(left.potentialHorizonBlunder) ||
-            right.loserDecision.score - left.loserDecision.score
-        ),
-        valueModelArena: summarizeValueModelArena(games),
-        rejected,
-        stalledGameTails,
-        overLimitExamples,
-      },
-      null,
-      2
-    )
-  );
+            ).toFixed(4)
+          )
+        : null,
+    },
+    immediateHqLosses: immediateHqLosses.sort(
+      (left, right) =>
+        Number(right.highConfidenceValueModelTacticalContradiction) -
+          Number(left.highConfidenceValueModelTacticalContradiction) ||
+        Number(right.potentialValueModelTacticalContradiction) -
+          Number(left.potentialValueModelTacticalContradiction) ||
+        Number(right.potentialHorizonBlunder) -
+          Number(left.potentialHorizonBlunder) ||
+        right.loserDecision.score - left.loserDecision.score
+    ),
+    valueModelArena: summarizeValueModelArena(games),
+    rejected,
+    stalledGameTails,
+    overLimitExamples,
+  };
+  const rendered = `${JSON.stringify(report, null, 2)}\n`;
+  const outputPath = argumentsFor("--output").at(-1);
+  if (outputPath) await writeFile(outputPath, rendered, "utf8");
+  process.stdout.write(rendered);
 }
 
 void main();

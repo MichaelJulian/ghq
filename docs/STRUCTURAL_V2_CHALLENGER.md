@@ -1,7 +1,7 @@
 # Structural v2 challenger checkpoint
 
-Status: staged challenger only. It is not the production incumbent and has not
-passed the durable promotion arena.
+Status: rejected. It is not the production incumbent and failed the durable
+promotion arena.
 
 ## Artifact
 
@@ -44,6 +44,30 @@ beam 6, and a two-second search budget. All quality gates passed.
 The three outcome-length screens total 12.0/20 points with a 4-6-0 paired
 record. Including the 30-turn policy-divergence pilot gives 14.0/24 points and
 a 4-8-0 paired record. This is a screening signal, not an Elo estimate.
+
+## Durable Vercel arena rejection
+
+Generation `vercel-arena-r3b3-6a5b54fe-mrq83cmf` ran 16 games as eight exact
+color-swapped pairs on production revision
+`f238b913be625c12b48707ab2ddf57d25ff11d21`. All 16 games ended by HQ capture.
+
+- The challenger scored 6/16 points (37.5%), an observed Elo difference of
+  `-88.7`.
+- Its paired record was 0 wins, 6 ties, and 2 losses.
+- It scored only 1/8 as Red (12.5%) and 5/8 as Blue (62.5%).
+- The paired bootstrap interval was `[0.1875, 0.5]`.
+- Search provenance was exact, but 26 of 1,438 decisions were unverified
+  fallbacks, concentrated in one pathological game. That independently
+  prevents promotion.
+- A two-million-node exact audit proved all 16 immediate HQ losses were
+  already forced: zero avoidable and zero inconclusive losses.
+- The raw challenger value model nevertheless produced three high-confidence
+  tactical contradictions, including losing-side win probabilities of 91.6%,
+  97.4%, and 80.3% in exactly forced positions.
+
+The exact loss audit confirms that the search layer avoided horizon blunders;
+it does not rescue the evaluator. The challenger lost the paired arena and is
+rejected. The incumbent remains production.
 
 ## Rejected sparse-correction alternative
 
@@ -126,11 +150,10 @@ checkpoint is rejected without an arena. The schema remains available for a
 future model trained on exact-audited tactical hard negatives rather than on
 eventual game outcomes alone.
 
-## Promotion gate
+## Promotion-gate outcome
 
-Before promotion, deploy this artifact as the challenger and run at least 100
-durable, color-paired arena games. Reject the arena if it contains seeded or
-shallow fallbacks, incomplete turns, broken pairs, mixed code/runtime/model
-provenance, avoidable HQ losses, or inconclusive HQ audits. Retain the current
-incumbent unless the clean arena's confidence and paired results clear the
-promotion thresholds.
+This artifact did not earn the planned 100-game arena. The 16-game durable
+screen already showed an adverse paired result, severe Red regression,
+high-confidence tactical value contradictions, and contaminated fallback
+quality. Retain the incumbent and require a new checkpoint to start again at
+the local production-engine screen.
