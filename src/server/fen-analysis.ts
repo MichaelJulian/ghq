@@ -221,7 +221,15 @@ export function applyHistoryAvoidance(
   turnsWithoutProgress: number
 ): GhqSearchResult {
   const candidates = result.candidate_turns ?? [];
-  if (candidates.length < 2 || result.search.opening_book_used) return result;
+  if (
+    candidates.length < 2 ||
+    result.search.opening_book_used ||
+    result.search.fallback_used === "safe" ||
+    result.search.hq_survival_override_used === true ||
+    result.search.hq_survival_reply_verified === true
+  ) {
+    return result;
+  }
 
   const recentCounts = new Map<string, number>();
   for (const fen of recentFens.slice(-32)) {

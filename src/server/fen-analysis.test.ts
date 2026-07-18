@@ -50,6 +50,59 @@ describe("production FEN analysis", () => {
     expect(result.exploration?.selectedRank).toBe(2);
   });
 
+  it("never replaces a reply-verified HQ survival turn to avoid history", () => {
+    const safe = {
+      rank: 1,
+      actions: ["f2g2", "h5h6", "skip"],
+      all_moves: ["f2g2", "h5h6", "skip"],
+      automatic_captures: [],
+      resulting_fen: "safe-repeated-position",
+      score: -1_000_005.7049,
+      action_purposes: [],
+      purpose: { stagnation_progress: 0 },
+    } as unknown as GhqCandidateTurn;
+    const immediateLoss = {
+      ...safe,
+      rank: 2,
+      actions: ["f2f3", "h5g4", "skip"],
+      all_moves: ["f2f3", "h5g4", "skip"],
+      resulting_fen: "novel-but-losing-position",
+      score: -1_000_002.649,
+      purpose: { stagnation_progress: 4.83 },
+    } as unknown as GhqCandidateTurn;
+    const result = {
+      recommendation_label: "safe fallback",
+      best_turn: safe,
+      principal_variation: safe.all_moves,
+      candidate_turns: [safe, immediateLoss],
+      score: { current_player: safe.score, red: safe.score },
+      search: {
+        opening_book_used: false,
+        fallback_used: "safe",
+        hq_survival_override_used: true,
+        hq_survival_reply_verified: true,
+      },
+      exploration: {
+        temperature: 0,
+        seed: 1,
+        selectedRank: 1,
+        candidateCount: 2,
+      },
+    } as unknown as GhqSearchResult;
+
+    applyHistoryAvoidance(
+      result,
+      "RED",
+      ["safe-repeated-position"],
+      [],
+      24
+    );
+
+    expect(result.best_turn.resulting_fen).toBe("safe-repeated-position");
+    expect(result.recommendation_label).toBe("safe fallback");
+    expect(result.exploration?.selectedRank).toBe(1);
+  });
+
   it("widens the quality window late in a quiet multi-turn cycle", () => {
     const stalled = {
       rank: 1,

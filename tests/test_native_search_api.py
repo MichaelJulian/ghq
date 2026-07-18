@@ -31,6 +31,7 @@ AVOIDABLE_IMMEDIATE_HQ_LOSSES = (
     (117, "q7/1I6/8/8/2if1i2/4f3/8/4Q3 - - r"),
     (77, "8/q7/1i6/I1i5/6i1/5i2/5f2/4i2Q - - r"),
     (57, "8/q1i5/1i6/2i5/2F3i1/1F1I3f/I1I5/1I1I1fQ1 - - r"),
+    (93, "q7/4i3/5i2/4i2Q/3i4/4i3/1i3I2/8 - - r"),
 )
 
 
