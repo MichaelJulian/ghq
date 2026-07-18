@@ -85,6 +85,26 @@ outcome prediction but did not improve move selection against the incumbent,
 reinforcing the requirement that every value checkpoint pass color-paired
 production-engine play before durable Vercel evaluation.
 
+## Rejected symmetric-difference correction
+
+To remove the collinearity between own, opponent, and difference versions of
+the same structural measurements, a second logistic correction was restricted
+to the 11 symmetric `own - opponent` features. It produced the strongest
+human-data proxy result of the correction experiments: test log loss
+`0.399163` versus `0.423262` for the incumbent. Its paired bootstrap point
+estimate was `-0.024099`, but the interval `[-0.062561, 0.017690]` still
+crossed zero.
+
+The 4-game, 80-turn production-engine screen rejected it immediately. The
+candidate scored 1.0/4 (25%), lost both color-swapped pairs, and changed play
+in both pairs. Two games ended by HQ capture and two reached the turn cap. The
+search-quality gate passed with a 99.7% reply-verification rate, so poor search
+coverage does not explain the result.
+
+This correction is rejected without a longer screen. Symmetry removed the
+redundant-feature pathology but did not close the objective mismatch between
+retrospective human-game outcome prediction and prospective move selection.
+
 ## Promotion gate
 
 Before promotion, deploy this artifact as the challenger and run at least 100
