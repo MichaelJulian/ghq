@@ -2420,7 +2420,7 @@ class Searcher:
     def find_hq_survival_turn(
         self,
         root: engine.BaseBoard,
-        max_probe_nodes: int = 5_000,
+        max_probe_nodes: int = 20_000,
         max_reply_nodes: int = 100_000,
     ) -> Optional[Tuple[List[engine.Move], engine.BaseBoard]]:
         """Find and exactly verify a nearby turn that avoids immediate HQ loss.
@@ -2436,6 +2436,7 @@ class Searcher:
             (root.copy(), [])
         ]
         seen: set[str] = set()
+        completed: Dict[str, Tuple[engine.BaseBoard, List[engine.Move]]] = {}
         reply_budget = [max_reply_nodes]
         probe_nodes = 0
         while frontier and probe_nodes < max_probe_nodes:
@@ -2450,13 +2451,11 @@ class Searcher:
             if outcome is not None or board.turn != mover:
                 if outcome is not None and outcome.winner == mover:
                     return line, board
-                capture = self.exact_same_turn_hq_capture(
-                    board, not mover, reply_budget
-                )
-                if capture is False:
-                    return line, board
-                if capture is None:
-                    return None
+                incumbent = completed.get(key)
+                if incumbent is None or normalized_turn_key(
+                    line, mover
+                ) < normalized_turn_key(incumbent[1], mover):
+                    completed[key] = (board, line)
                 continue
 
             hq_squares = list(board.pieces(engine.HQ, mover))
@@ -2491,6 +2490,33 @@ class Searcher:
                 child = board.copy()
                 child.push(move)
                 frontier.append((child, [*line, move]))
+
+        # Do not let the first complete but obviously losing defense consume
+        # the entire exact-reply budget.  Generate the nearby defensive turns
+        # first, then verify the positions that leave the defender with the
+        # strongest cheap evaluation.  Exact verification remains the only
+        # authority that may certify a line as safe.
+        ranked = sorted(
+            completed.values(),
+            key=lambda item: (
+                -(
+                    self.quick_score(item[0])
+                    if mover == engine.RED
+                    else -self.quick_score(item[0])
+                ),
+                normalized_turn_key(item[1], mover),
+            ),
+        )
+        for board, line in ranked:
+            if self.has_same_turn_hq_capture(board):
+                continue
+            capture = self.exact_same_turn_hq_capture(
+                board, not mover, reply_budget
+            )
+            if capture is False:
+                return line, board
+            if capture is None:
+                return None
         return None
 
     def unlocks_immediate_hq_capture(
