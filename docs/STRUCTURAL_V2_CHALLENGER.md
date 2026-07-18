@@ -63,6 +63,28 @@ The sparse correction is therefore rejected. This is a concrete example of why
 holdout prediction gains are only a screening signal and cannot replace the
 paired production-engine arena.
 
+## Rejected full structural correction
+
+An append-only logistic correction using all 33 newly derived structural
+features also improved the human-data proxy substantially. Its human test log
+loss was `0.401612` versus `0.423262` for the incumbent, with a point-estimate
+improvement of `-0.021650`; however, the paired bootstrap interval
+`[-0.056380, 0.016083]` crossed zero.
+
+The production-engine screens did not support advancing it:
+
+- The 4-game, 80-turn pilot scored 2.0/4 with two tied pairs. All four games
+  reached the turn cap despite both pairs showing policy divergence; the
+  reply-verification rate was 99.1%.
+- The outcome-length 8-game, 100-turn screen scored 3.5/8 (43.75%) with a
+  1-2-1 pair record. Seven games ended by HQ capture, all four pairs diverged,
+  and the search-quality gate passed at a 97.5% reply-verification rate.
+
+This correction is rejected. Broad structural feature coverage improved
+outcome prediction but did not improve move selection against the incumbent,
+reinforcing the requirement that every value checkpoint pass color-paired
+production-engine play before durable Vercel evaluation.
+
 ## Promotion gate
 
 Before promotion, deploy this artifact as the challenger and run at least 100
