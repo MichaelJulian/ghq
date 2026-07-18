@@ -2,6 +2,7 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -348,6 +349,47 @@ class EvaluationTests(unittest.TestCase):
 
 
 class SearchTests(unittest.TestCase):
+    def test_seed_telemetry_cannot_leak_a_search_timeout(self):
+        original = ghq_ai.Searcher.turn_purpose_breakdown
+
+        def timeout_tactical_telemetry(
+            searcher,
+            before,
+            after,
+            moves,
+            mover,
+            retrospective=True,
+            include_tactical_roles=True,
+        ):
+            if include_tactical_roles:
+                raise ghq_ai.SearchTimeout
+            return original(
+                searcher,
+                before,
+                after,
+                moves,
+                mover,
+                retrospective=retrospective,
+                include_tactical_roles=False,
+            )
+
+        with patch.object(
+            ghq_ai.Searcher,
+            "turn_purpose_breakdown",
+            timeout_tactical_telemetry,
+        ):
+            result = ghq_ai.search(
+                engine.BaseBoard(),
+                "balanced",
+                time_ms=1000,
+                max_depth=2,
+                beam_width=4,
+                turn_number=8,
+            )
+
+        self.assertTrue(result["best_turn"]["actions"])
+        self.assertTrue(result["search"]["timed_out"])
+
     def test_data_backed_opening_book_plays_both_sides_first_two_turns(self):
         board = engine.BaseBoard()
         for turn_number in range(1, 5):

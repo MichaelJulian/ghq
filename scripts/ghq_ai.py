@@ -1316,10 +1316,15 @@ class Searcher:
         moves: Sequence[engine.Move],
         mover: bool,
         retrospective: bool = True,
+        include_tactical_roles: bool = True,
     ) -> Dict[str, float]:
         """Measure what a full turn changed, beyond merely spending actions."""
         action_purposes = self.action_purpose_labels(
-            before, moves, mover, retrospective=retrospective
+            before,
+            moves,
+            mover,
+            retrospective=retrospective,
+            include_tactical_roles=include_tactical_roles,
         )
         counted_actions = sum(
             move.name not in ("AutoCapture", "Skip") for move in moves
@@ -1537,6 +1542,54 @@ class Searcher:
             "paratrooper_mission_penalty": mission_penalty,
             "total_penalty": net_purpose_penalty + mission_penalty,
         }
+
+    def deadline_safe_action_purpose_labels(
+        self,
+        before: engine.BaseBoard,
+        moves: Sequence[engine.Move],
+        mover: bool,
+        retrospective: bool = True,
+    ) -> List[Dict[str, Any]]:
+        """Keep response telemetry from invalidating a completed search."""
+        try:
+            return self.action_purpose_labels(
+                before, moves, mover, retrospective=retrospective
+            )
+        except SearchTimeout:
+            return self.action_purpose_labels(
+                before,
+                moves,
+                mover,
+                retrospective=retrospective,
+                include_tactical_roles=False,
+            )
+
+    def deadline_safe_turn_purpose_breakdown(
+        self,
+        before: engine.BaseBoard,
+        after: engine.BaseBoard,
+        moves: Sequence[engine.Move],
+        mover: bool,
+        retrospective: bool = True,
+    ) -> Dict[str, float]:
+        """Return bounded purpose telemetry even after the search deadline."""
+        try:
+            return self.turn_purpose_breakdown(
+                before,
+                after,
+                moves,
+                mover,
+                retrospective=retrospective,
+            )
+        except SearchTimeout:
+            return self.turn_purpose_breakdown(
+                before,
+                after,
+                moves,
+                mover,
+                retrospective=retrospective,
+                include_tactical_roles=False,
+            )
 
     def static_score(self, board: engine.BaseBoard) -> float:
         """Blend human heuristics with the trained red win-probability model."""
@@ -3971,11 +4024,18 @@ def opening_book_turn(
             continue
         if not safety.tactically_safe:
             continue
-        purpose = searcher.turn_purpose_breakdown(
-            board, working, moves, mover, retrospective=False
+        purpose = searcher.deadline_safe_turn_purpose_breakdown(
+            board,
+            working,
+            moves,
+            mover,
+            retrospective=False,
         )
-        action_purposes = searcher.action_purpose_labels(
-            board, moves, mover, retrospective=False
+        action_purposes = searcher.deadline_safe_action_purpose_labels(
+            board,
+            moves,
+            mover,
+            retrospective=False,
         )
         valid.append((TurnCandidate(
             moves=moves,
@@ -4046,7 +4106,7 @@ def search(
             board, personality, turn_number, max_actions=max_actions
         )
         seed_moves, seed_board = first_turn_from_pv(board, emergency_seed.pv)
-        seed_purpose = searcher.turn_purpose_breakdown(
+        seed_purpose = searcher.deadline_safe_turn_purpose_breakdown(
             board,
             seed_board,
             seed_moves,
@@ -4068,8 +4128,11 @@ def search(
             except SearchTimeout:
                 seed_safety = None
             if seed_safety is not None and seed_safety.tactically_safe:
-                seed_action_purposes = searcher.action_purpose_labels(
-                    board, seed_moves, board.turn, retrospective=False
+                seed_action_purposes = searcher.deadline_safe_action_purpose_labels(
+                    board,
+                    seed_moves,
+                    board.turn,
+                    retrospective=False,
                 )
                 searcher.root_fallback = TurnCandidate(
                     seed_moves,
@@ -4235,7 +4298,7 @@ def search(
         )
         first_turn, resulting_board = first_turn_from_pv(board, fallback.pv)
         best = fallback
-        seed_purpose = searcher.turn_purpose_breakdown(
+        seed_purpose = searcher.deadline_safe_turn_purpose_breakdown(
             board,
             resulting_board,
             first_turn,
@@ -4306,11 +4369,16 @@ def search(
                 None,
             )
         if selected_candidate is None:
-            action_purposes = searcher.action_purpose_labels(
-                board, first_turn, board.turn
+            action_purposes = searcher.deadline_safe_action_purpose_labels(
+                board,
+                first_turn,
+                board.turn,
             )
-            purpose = searcher.turn_purpose_breakdown(
-                board, resulting_board, first_turn, board.turn
+            purpose = searcher.deadline_safe_turn_purpose_breakdown(
+                board,
+                resulting_board,
+                first_turn,
+                board.turn,
             )
             selected_candidate = TurnCandidate(
                 list(first_turn),
@@ -4357,7 +4425,7 @@ def search(
                 "action_purposes": candidate_turn.action_purposes,
                 "purpose": {
                     key: round(value, 4)
-                    for key, value in searcher.turn_purpose_breakdown(
+                    for key, value in searcher.deadline_safe_turn_purpose_breakdown(
                         board,
                         candidate_turn.board,
                         candidate_turn.moves,
@@ -4391,13 +4459,18 @@ def search(
             "actions": actions,
             "all_moves": [move.uci() for move in first_turn],
             "resulting_fen": resulting_board.board_fen(),
-            "action_purposes": searcher.action_purpose_labels(
-                board, first_turn, board.turn
+            "action_purposes": searcher.deadline_safe_action_purpose_labels(
+                board,
+                first_turn,
+                board.turn,
             ),
             "purpose": {
                 key: round(value, 4)
-                for key, value in searcher.turn_purpose_breakdown(
-                    board, resulting_board, first_turn, board.turn
+                for key, value in searcher.deadline_safe_turn_purpose_breakdown(
+                    board,
+                    resulting_board,
+                    first_turn,
+                    board.turn,
                 ).items()
             },
         },
