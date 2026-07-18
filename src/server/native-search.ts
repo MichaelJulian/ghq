@@ -40,7 +40,7 @@ export interface NativeDescriptionResponse {
   evaluation: SearchEvaluationBreakdown;
 }
 
-/** Resolve the function in the exact deployment that is running this code. */
+/** Resolve the native function through the public production project domain. */
 export function nativeSearchUrl(): string | undefined {
   const configured = process.env.GHQ_NATIVE_SEARCH_URL?.trim();
   if (configured) {
@@ -48,12 +48,13 @@ export function nativeSearchUrl(): string | undefined {
   }
   // Preview deployments are protected by default, so an internal fetch to
   // their public hostname is redirected to SSO. Explicit configuration can
-  // still exercise native search in preview; production uses its exact
-  // immutable deployment hostname automatically.
+  // still exercise native search in preview. The immutable VERCEL_URL may be
+  // protected in production too, while VERCEL_PROJECT_PRODUCTION_URL is the
+  // stable public project domain and is guaranteed by Vercel at runtime.
   if (process.env.VERCEL_ENV !== "production") return undefined;
-  const deployment = process.env.VERCEL_URL?.trim();
-  return deployment
-    ? `https://${deployment.replace(/^https?:\/\//, "")}/api/native_search`
+  const production = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim();
+  return production
+    ? `https://${production.replace(/^https?:\/\//, "")}/api/native_search`
     : undefined;
 }
 
