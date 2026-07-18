@@ -4486,6 +4486,29 @@ def opening_book_turn(
     return weighted_opening_choice(valid, opening_seed, board.serialize())
 
 
+def bounded_seed_safety(
+    board: engine.BaseBoard,
+    seed_board: engine.BaseBoard,
+    personality: str,
+    turn_number: int,
+    beam_width: int,
+    max_actions: int,
+    time_ms: int,
+) -> Optional[TacticalSafety]:
+    """Assess the emergency seed without consuming the minimax deadline."""
+    probe = Searcher(
+        personality,
+        time_ms=time_ms,
+        beam_width=max(4, beam_width),
+        turn_number=turn_number,
+        max_actions=max_actions,
+    )
+    try:
+        return probe.assess_turn_safety(board, seed_board, board.turn)
+    except SearchTimeout:
+        return None
+
+
 def search(
     board: engine.BaseBoard,
     personality: str,
@@ -4563,25 +4586,21 @@ def search(
             move.name not in ("AutoCapture", "Skip") for move in seed_moves
         )
         if seed_board.is_game_over() or seed_counted_actions >= searcher.max_actions:
-            try:
-                seed_safety = searcher.assess_turn_safety(
-                    board, seed_board, board.turn
-                )
-            except SearchTimeout:
-                # The seed is built before iterative minimax and remains our
-                # only legal floor if that search expires. Its safety verdict
-                # must not disappear merely because explanatory telemetry used
-                # the main deadline. Recheck with an isolated tactical probe.
-                try:
-                    seed_safety = Searcher(
-                        personality,
-                        time_ms=seed_time_ms,
-                        beam_width=max(4, beam_width),
-                        turn_number=turn_number,
-                        max_actions=max_actions,
-                    ).assess_turn_safety(board, seed_board, board.turn)
-                except SearchTimeout:
-                    seed_safety = None
+            # Seed construction and safety are a bounded pre-search floor.
+            # Running this check on the main Searcher let a complicated
+            # safety probe consume the entire minimax deadline before the
+            # reserved opponent-reply verification could even begin. Keep it
+            # isolated so a timeout can only forfeit seed certification, not
+            # the actual search budget.
+            seed_safety = bounded_seed_safety(
+                board,
+                seed_board,
+                personality,
+                turn_number,
+                beam_width,
+                max_actions,
+                seed_time_ms,
+            )
             if seed_safety is not None and seed_safety.tactically_safe:
                 emergency_seed_safe = True
                 seed_action_purposes = searcher.deadline_safe_action_purpose_labels(

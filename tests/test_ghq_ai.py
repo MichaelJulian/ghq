@@ -496,6 +496,41 @@ class SearchTests(unittest.TestCase):
         )
         self.assertNotEqual(resulting.turn, board.turn)
 
+    def test_emergency_seed_safety_uses_an_isolated_bounded_searcher(self):
+        board = engine.BaseBoard()
+        seed = ghq_ai.purposeful_complete_turn_seed(
+            board,
+            "balanced",
+            turn_number=8,
+            max_actions=3,
+            time_ms=100,
+        )
+        _, seed_board = ghq_ai.first_turn_from_pv(board, seed.pv)
+        observed: list[tuple[int, object]] = []
+
+        def record_probe(searcher, before, after, mover):
+            observed.append((searcher.time_ms, searcher.root_key))
+            return ghq_ai.TacticalSafety(0, 0, 0, 0, 0, True)
+
+        with patch.object(
+            ghq_ai.Searcher,
+            "assess_turn_safety",
+            autospec=True,
+            side_effect=record_probe,
+        ):
+            safety = ghq_ai.bounded_seed_safety(
+                board,
+                seed_board,
+                "balanced",
+                turn_number=8,
+                beam_width=6,
+                max_actions=3,
+                time_ms=80,
+            )
+
+        self.assertTrue(safety and safety.tactically_safe)
+        self.assertEqual(observed, [(80, None)])
+
     def test_data_backed_opening_book_plays_both_sides_first_two_turns(self):
         board = engine.BaseBoard()
         for turn_number in range(1, 5):
