@@ -154,6 +154,20 @@ describe("durable self-play training quality", () => {
     ).toBe(false);
   });
 
+  it("rejects labels and games containing a paratrooper policy violation", () => {
+    const outcome = { winner: "RED" as const, termination: "hq-capture" };
+    const violating = decision({
+      selectedPurpose: {
+        paratrooper_mission_penalty: 9,
+      } as NonNullable<DurableSelfPlayDecision["selectedPurpose"]>,
+    });
+
+    expect(isDurableTrainingDecisionEligible(violating, outcome)).toBe(false);
+    expect(durableGameTrainingRejectionReasons([violating], outcome)).toContain(
+      "paratrooper-policy-violation"
+    );
+  });
+
   it("accepts a clean three-action HQ-capture game", () => {
     expect(
       durableGameTrainingRejectionReasons(

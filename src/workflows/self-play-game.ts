@@ -342,6 +342,7 @@ export function isDurableTrainingDecisionEligible(
       decision.searchBackend !== undefined &&
       decision.searchValueModelBackend !== undefined &&
       decision.searchCodeVersion !== undefined &&
+      (decision.selectedPurpose?.paratrooper_mission_penalty ?? 0) <= 0 &&
       // Depth one evaluates only our resulting position. Depth two includes a
       // complete opponent reply and is the minimum tactically verified label
       // admitted to the value-model dataset.
@@ -373,6 +374,14 @@ export function durableGameTrainingRejectionReasons(
   }
   if (decisions.some((decision) => decision.fallback === "seeded")) {
     reasons.push("unverified-complete-turn-seed");
+  }
+  if (
+    decisions.some(
+      (decision) =>
+        (decision.selectedPurpose?.paratrooper_mission_penalty ?? 0) > 0
+    )
+  ) {
+    reasons.push("paratrooper-policy-violation");
   }
   if (
     decisions.some(
