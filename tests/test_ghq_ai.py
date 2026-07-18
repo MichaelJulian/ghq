@@ -1021,11 +1021,25 @@ class SearchTests(unittest.TestCase):
         )
         candidates = result["candidate_turns"]
         self.assertEqual(result["search"]["completed_depth_in_turns"], 2)
-        self.assertIn("h1g1", result["best_turn"]["all_moves"])
         self.assertTrue(
             any(
                 "hq_escape_unlock" in purpose["roles"]
                 for purpose in result["best_turn"]["action_purposes"]
+            )
+        )
+        self.assertTrue(
+            any(
+                "hq_defense" in purpose["roles"]
+                for purpose in result["best_turn"]["action_purposes"]
+            )
+        )
+        escaped = engine.BaseBoard(result["best_turn"]["resulting_fen"])
+        verifier = ghq_ai.Searcher(
+            "balanced", time_ms=60_000, beam_width=6, turn_number=24
+        )
+        self.assertFalse(
+            verifier.exact_same_turn_hq_capture(
+                escaped, escaped.turn, [100_000]
             )
         )
         self.assertGreater(result["score"]["current_player"], -1000000.0)
@@ -1420,6 +1434,36 @@ class SearchTests(unittest.TestCase):
         self.assertTrue(
             searcher.exact_same_turn_hq_capture(board, engine.RED, [2])
         )
+
+    def test_masked_immediate_hq_detector_matches_full_legal_generation(self):
+        fens = (
+            SELF_PLAY_HQ_UNLOCK_FEN,
+            SELF_PLAY_HQ_ENGAGEMENT_FEN,
+            SELF_PLAY_THREE_ACTION_HQ_FEN,
+            *(fen for _, fen in SMOKE_IMMEDIATE_HQ_LOSS_CASES),
+            *(fen for _, fen in SELF_PLAY_AVOIDABLE_IMMEDIATE_HQ_LOSSES),
+        )
+        searcher = ghq_ai.Searcher(
+            "balanced", time_ms=60_000, beam_width=6, turn_number=80
+        )
+        for fen in fens:
+            board = engine.BaseBoard(fen)
+            probes = [board]
+            for move in list(board.generate_legal_moves())[:12]:
+                child = board.copy()
+                child.push(move)
+                probes.append(child)
+            for probe in probes:
+                with self.subTest(fen=fen, position=probe.board_fen()):
+                    exhaustive = any(
+                        move.capture_preference is not None
+                        and probe.piece_type_at(move.capture_preference)
+                        == engine.HQ
+                        for move in probe.generate_legal_moves()
+                    )
+                    self.assertEqual(
+                        searcher.has_immediate_hq_capture(probe), exhaustive
+                    )
 
     def test_exact_survival_floor_does_not_invent_an_escape_from_forced_mate(self):
         turn_number, fen = SELF_PLAY_FORCED_IMMEDIATE_HQ_LOSS
