@@ -5898,28 +5898,67 @@ def search(
     # para, artillery, or unsupported infantry by force.  A timed-out native
     # search once selected an armored-infantry move to h3 even though its own
     # PV contained the immediate ``sfh3`` capture.  Recheck the selected turn
-    # with a fresh deadline, then restore the strongest independently checked
-    # safe root alternative.  This guard is deliberately after every ordinary
-    # search/fallback path and before the policy guards below.
-    selected_safety = bounded_seed_safety(
-        board,
-        resulting_board,
-        personality,
-        turn_number,
-        beam_width,
-        max_actions,
-        seed_time_ms,
-        check_hq_combinations=False,
+    # from the completed root assessments, then restore the strongest checked
+    # safe root alternative. Unknown return paths receive a fresh bounded
+    # assessment. This guard is deliberately after every ordinary search or
+    # fallback path and before the policy guards below.
+    selected_move_key = tuple(move.uci() for move in first_turn)
+    known_root_candidates = [
+        candidate for _, candidate in searcher.root_ranked_turns
+    ]
+    known_root_candidates.extend(
+        candidate for _, candidate, _ in searcher.root_verified_lines
     )
+    if searcher.root_fallback is not None:
+        known_root_candidates.append(searcher.root_fallback)
+    known_root_candidates.extend(
+        searcher.turn_cache.get(searcher.root_key or "", [])
+    )
+    selected_candidate = next(
+        (
+            candidate
+            for candidate in known_root_candidates
+            if tuple(move.uci() for move in candidate.moves)
+            == selected_move_key
+        ),
+        None,
+    )
+    # TurnCandidate objects are created only after assess_turn_safety returns;
+    # a timed-out assessment never becomes a candidate. Reuse that completed
+    # proof instead of spending the post-search reserve proving the same root
+    # position again. Unknown return paths still fail closed through a fresh
+    # bounded assessment.
+    if selected_candidate is not None:
+        selected_is_tactically_safe = selected_candidate.tactically_safe
+    else:
+        selected_safety = bounded_seed_safety(
+            board,
+            resulting_board,
+            personality,
+            turn_number,
+            beam_width,
+            max_actions,
+            seed_time_ms,
+            check_hq_combinations=False,
+        )
+        selected_is_tactically_safe = bool(
+            selected_safety is not None and selected_safety.tactically_safe
+        )
     if (
         not hq_survival_override_used
-        and (selected_safety is None or not selected_safety.tactically_safe)
+        and not selected_is_tactically_safe
     ):
         replacement_options: List[TurnCandidate] = []
         seen_replacements: set[Tuple[str, ...]] = set()
 
         def consider_replacement(candidate: Optional[TurnCandidate]) -> None:
             if candidate is None:
+                return
+            # Candidate construction already completed the objective tactical
+            # assessment. Discard known losses before the recovery pass and
+            # preserve the post-search budget for verifying the opponent's
+            # full reply to the first known-safe replacement.
+            if not candidate.tactically_safe:
                 return
             move_key = tuple(move.uci() for move in candidate.moves)
             if move_key == tuple(move.uci() for move in first_turn):
@@ -5936,18 +5975,6 @@ def search(
             consider_replacement(candidate)
 
         for replacement in replacement_options[:8]:
-            replacement_safety = bounded_seed_safety(
-                board,
-                replacement.board,
-                personality,
-                turn_number,
-                beam_width,
-                max_actions,
-                seed_time_ms,
-                check_hq_combinations=False,
-            )
-            if replacement_safety is None or not replacement_safety.tactically_safe:
-                continue
             first_turn = list(replacement.moves)
             resulting_board = replacement.board
             best = SearchResult(replacement.static_score, list(first_turn))
@@ -6081,7 +6108,7 @@ def search(
     ):
         verifier = Searcher(
             personality,
-            time_ms=max(2_000, min(10_000, int(time_ms * 0.40))),
+            time_ms=max(2_000, min(15_000, int(time_ms * 0.75))),
             beam_width=max(4, min(6, beam_width)),
             turn_number=turn_number,
             value_function=value_function,
