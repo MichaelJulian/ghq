@@ -92,6 +92,8 @@ export interface DurableSelfPlayDecision {
     hqSurvivalReplyNodes?: number;
     hqSurvivalOverrideUsed?: boolean;
     hqSurvivalReplyVerified?: boolean;
+    hqExactReturnProbeUsed?: boolean;
+    tacticalReturnGuardUsed?: boolean;
     policyReturnGuardUsed?: boolean;
     seedReplyVerified?: boolean;
     seedReplyRetryUsed?: boolean;
@@ -281,6 +283,10 @@ async function playDurableTurn(
         analysis.search.search.hq_survival_override_used === true,
       hqSurvivalReplyVerified:
         analysis.search.search.hq_survival_reply_verified === true,
+      hqExactReturnProbeUsed:
+        analysis.search.search.hq_exact_return_probe_used === true,
+      tacticalReturnGuardUsed:
+        analysis.search.search.tactical_return_guard_used === true,
       policyReturnGuardUsed:
         analysis.search.search.policy_return_guard_used === true,
       seedReplyVerified: analysis.search.search.seed_reply_verified === true,

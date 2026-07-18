@@ -52,10 +52,13 @@ function decision(
 
 describe("self-play search runtime summary", () => {
   it("exposes backend provenance, depth coverage, and search work", () => {
+    const guarded = decision(2, "native-python");
+    guarded.searchTelemetry!.hqExactReturnProbeUsed = true;
+    guarded.searchTelemetry!.tacticalReturnGuardUsed = true;
     const summary = summarizeSearchRuntime([
       {
         decisions: [
-          decision(2, "native-python"),
+          guarded,
           decision(1, "native-python"),
           decision(0),
         ],
@@ -76,6 +79,9 @@ describe("self-play search runtime summary", () => {
     expect(summary.zeroDepthRate).toBeCloseTo(1 / 3);
     expect(summary.averageNodes).toBe(10);
     expect(summary.averageCompleteTurnsGenerated).toBe(20);
+    expect(summary.hqExactReturnProbeDecisions).toBe(1);
+    expect(summary.tacticalReturnGuardDecisions).toBe(1);
+    expect(summary.tacticalReturnGuardRate).toBeCloseTo(1 / 3);
   });
 
   it("returns finite zero rates for an empty generation", () => {
@@ -89,6 +95,9 @@ describe("self-play search runtime summary", () => {
       zeroDepthRate: 0,
       averageNodes: undefined,
       averageCompleteTurnsGenerated: undefined,
+      hqExactReturnProbeDecisions: 0,
+      tacticalReturnGuardDecisions: 0,
+      tacticalReturnGuardRate: 0,
     });
   });
 });

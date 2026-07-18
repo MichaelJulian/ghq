@@ -157,6 +157,10 @@ export interface GhqSearchResult {
     hq_survival_override_used?: boolean;
     /** The selected survival turn also completed a full opponent reply. */
     hq_survival_reply_verified?: boolean;
+    /** Sparse final-position exact HQ probe ran after ordinary search. */
+    hq_exact_return_probe_used?: boolean;
+    /** A final invariant replaced a turn with an immediate forced material loss. */
+    tactical_return_guard_used?: boolean;
     /** A final invariant replaced a missionless paratrooper return line. */
     policy_return_guard_used?: boolean;
     /** The emergency complete-turn floor received one complete opponent reply. */

@@ -13,6 +13,9 @@ export interface SearchRuntimeSummary {
   zeroDepthRate: number;
   averageNodes?: number;
   averageCompleteTurnsGenerated?: number;
+  hqExactReturnProbeDecisions: number;
+  tacticalReturnGuardDecisions: number;
+  tacticalReturnGuardRate: number;
 }
 
 function increment(counts: Record<string, number>, key: string): void {
@@ -34,6 +37,8 @@ export function summarizeSearchRuntime(
   let nodeSamples = 0;
   let generatedTotal = 0;
   let generatedSamples = 0;
+  let hqExactReturnProbeDecisions = 0;
+  let tacticalReturnGuardDecisions = 0;
 
   for (const decision of decisions as DurableSelfPlayDecision[]) {
     increment(backendCounts, decision.searchBackend ?? "unknown");
@@ -50,6 +55,12 @@ export function summarizeSearchRuntime(
       nodeSamples++;
       generatedTotal += decision.searchTelemetry.completeTurnsGenerated;
       generatedSamples++;
+      if (decision.searchTelemetry.hqExactReturnProbeUsed) {
+        hqExactReturnProbeDecisions++;
+      }
+      if (decision.searchTelemetry.tacticalReturnGuardUsed) {
+        tacticalReturnGuardDecisions++;
+      }
     }
   }
 
@@ -66,5 +77,8 @@ export function summarizeSearchRuntime(
     averageCompleteTurnsGenerated: generatedSamples
       ? generatedTotal / generatedSamples
       : undefined,
+    hqExactReturnProbeDecisions,
+    tacticalReturnGuardDecisions,
+    tacticalReturnGuardRate: count ? tacticalReturnGuardDecisions / count : 0,
   };
 }
