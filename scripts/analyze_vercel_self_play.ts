@@ -391,6 +391,11 @@ async function main() {
   let incompleteTurnDecisions = 0;
   let persistentCacheHits = 0;
   let qualityEligibleGames = 0;
+  let policyQuarantinedGames = 0;
+  let policyViolationDecisions = 0;
+  let policyQuarantinedPersistedTrainingPositions = 0;
+  let policyCleanTrainingGames = 0;
+  let policyCleanTrainingPositions = 0;
 
   for (const game of games) {
     let turnsWithoutProgress = 0;
@@ -405,6 +410,18 @@ async function main() {
     );
     decisions += game.decisions.length;
     trainingPositions += game.trainingPositions;
+    const gamePolicyViolationDecisions = game.decisions.filter(
+      (decision) =>
+        (decision.selectedPurpose?.paratrooper_mission_penalty ?? 0) > 0
+    ).length;
+    if (gamePolicyViolationDecisions > 0) {
+      policyQuarantinedGames++;
+      policyViolationDecisions += gamePolicyViolationDecisions;
+      policyQuarantinedPersistedTrainingPositions += game.trainingPositions;
+    } else {
+      if (game.trainingPositions > 0) policyCleanTrainingGames++;
+      policyCleanTrainingPositions += game.trainingPositions;
+    }
     fallbackDecisions += game.quality.fallbackDecisions;
     verifiedFallbackDecisions +=
       game.quality.verifiedFallbackDecisions ??
@@ -944,6 +961,13 @@ async function main() {
     qualityEligibleGames,
     trainingRejectionReasons,
     trainingPositions,
+    policyTrainingQuarantine: {
+      games: policyQuarantinedGames,
+      violatingDecisions: policyViolationDecisions,
+      persistedTrainingPositions: policyQuarantinedPersistedTrainingPositions,
+      effectiveTrainingGames: policyCleanTrainingGames,
+      effectiveTrainingPositions: policyCleanTrainingPositions,
+    },
     personalities,
     valueModels: Object.fromEntries(
       Object.entries(valueModels).map(([id, record]) => [
