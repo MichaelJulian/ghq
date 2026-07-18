@@ -3998,6 +3998,7 @@ def purposeful_complete_turn_seed(
     personality: str,
     turn_number: int = 1,
     max_actions: int = 3,
+    time_ms: int = 2_000,
 ) -> SearchResult:
     """Fast full-turn seed used before iterative search.
 
@@ -4012,7 +4013,10 @@ def purposeful_complete_turn_seed(
     vacated: set[int] = set()
     fallback_rules = Searcher(
         personality,
-        time_ms=60_000,
+        # This is a deadline floor, not a second full search.  The historical
+        # 60-second budget could make a nominal 30-second native request run
+        # past Vercel's function limit when a tactical-risk probe was costly.
+        time_ms=max(50, min(2_000, time_ms)),
         beam_width=4,
         turn_number=turn_number,
         max_actions=max_actions,
@@ -4466,6 +4470,7 @@ def search(
     verified_seed: Optional[SearchResult] = None
     book_turn = opening_book_turn(board, turn_number, searcher, opening_seed)
     opening_book_used = book_turn is not None
+    seed_time_ms = max(50, min(2_000, int(time_ms * 0.08)))
     if book_turn is not None:
         transition_penalty = book_turn.purpose_penalty + book_turn.paratrooper_mission_penalty
         early_bonus = (
@@ -4486,7 +4491,11 @@ def search(
         # actions (unless the game ended) rather than inventing a late greedy
         # line or stopping after two actions.
         emergency_seed = purposeful_complete_turn_seed(
-            board, personality, turn_number, max_actions=max_actions
+            board,
+            personality,
+            turn_number,
+            max_actions=max_actions,
+            time_ms=seed_time_ms,
         )
         seed_moves, seed_board = first_turn_from_pv(board, emergency_seed.pv)
         seed_purpose = searcher.deadline_safe_turn_purpose_breakdown(
@@ -4516,7 +4525,7 @@ def search(
                 try:
                     seed_safety = Searcher(
                         personality,
-                        time_ms=60_000,
+                        time_ms=seed_time_ms,
                         beam_width=max(4, beam_width),
                         turn_number=turn_number,
                         max_actions=max_actions,
@@ -4685,7 +4694,11 @@ def search(
             fallback_kind = "safe"
         else:
             best = emergency_seed or purposeful_complete_turn_seed(
-                board, personality, turn_number, max_actions=max_actions
+                board,
+                personality,
+                turn_number,
+                max_actions=max_actions,
+                time_ms=seed_time_ms,
             )
             fallback_kind = "seeded"
     first_turn, resulting_board = first_turn_from_pv(board, best.pv)
@@ -4738,7 +4751,11 @@ def search(
             fallback_kind = "safe"
     if not first_turn and not board.is_game_over():
         fallback = purposeful_complete_turn_seed(
-            board, personality, turn_number, max_actions=max_actions
+            board,
+            personality,
+            turn_number,
+            max_actions=max_actions,
+            time_ms=seed_time_ms,
         )
         first_turn, resulting_board = first_turn_from_pv(board, fallback.pv)
         best = fallback

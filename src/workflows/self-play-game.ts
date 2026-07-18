@@ -192,23 +192,31 @@ async function playDurableTurn(
 ): Promise<DurableTurnStepResult> {
   "use step";
 
-  const analysis = await analyzeFen({
-    fen: input.fen,
-    serializedState: input.serializedState,
-    turnNumber: input.turnNumber,
-    personality: input.competitor.personality,
-    timeMs: input.competitor.timeMs,
-    maxDepth: input.competitor.maxDepth,
-    beamWidth: input.competitor.beamWidth,
-    maxActions: input.competitor.maxActions ?? 3,
-    valueModel: input.competitor.valueModel ?? "incumbent",
-    explorationTemperature: input.competitor.explorationTemperature,
-    explorationSeed: input.explorationSeed,
-    recentFens: input.recentFens,
-    previousOwnTurnMoves: input.previousOwnTurnMoves,
-    previousOwnTurns: input.previousOwnTurns,
-    turnsWithoutProgress: input.turnsWithoutProgress,
-  });
+  let analysis: Awaited<ReturnType<typeof analyzeFen>>;
+  try {
+    analysis = await analyzeFen({
+      fen: input.fen,
+      serializedState: input.serializedState,
+      turnNumber: input.turnNumber,
+      personality: input.competitor.personality,
+      timeMs: input.competitor.timeMs,
+      maxDepth: input.competitor.maxDepth,
+      beamWidth: input.competitor.beamWidth,
+      maxActions: input.competitor.maxActions ?? 3,
+      valueModel: input.competitor.valueModel ?? "incumbent",
+      explorationTemperature: input.competitor.explorationTemperature,
+      explorationSeed: input.explorationSeed,
+      recentFens: input.recentFens,
+      previousOwnTurnMoves: input.previousOwnTurnMoves,
+      previousOwnTurns: input.previousOwnTurns,
+      turnsWithoutProgress: input.turnsWithoutProgress,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Self-play ${input.player} turn ${input.turnNumber} failed from ${input.fen ?? "serialized state"}: ${message}`
+    );
+  }
   const state = FENtoBoardState(analysis.fen);
   const resultingState = FENtoBoardState(analysis.resultingFen);
   const decision: DurableSelfPlayDecision = {
