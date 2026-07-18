@@ -1,6 +1,6 @@
 # Exact tactical HQ supervision
 
-Status: dataset and training pipeline validated; first classifier rejected.
+Status: dataset and training pipeline validated; classifiers remain rejected.
 No tactical classifier is active in production.
 
 ## Why this dataset exists
@@ -66,7 +66,34 @@ flagged four forced losses with no false positives, but recall was only 25%; it
 also flagged none of the three forced examples in the internal untouched test
 split. The high-precision deployment gate therefore remains failed.
 
-The next classifier needs more exact forced-loss examples from post-fix,
-three-action games. Any runtime integration must clear a held-out
-high-precision gate and then improve color-paired production-engine play; a
-retrospective metric alone is insufficient.
+## Expanded modern audit and nonlinear detector
+
+Seven recent generations contributed 56 additional completed HQ-capture
+games. Auditing four own turns per player produced 448 positions: 54 forced
+losses, 393 positions with a proved safe turn, and one position that remained
+inconclusive after a two-million-node retry. Together with the historical
+control and pilot, this supplies 718 non-overlapping training records across
+73 color-paired evaluation units after the newest 16-game arena is removed as
+an external holdout.
+
+The trainer now compares regularized logistic models with shallow gradient-
+boosted trees, supports either the 61-feature tactical subset or the complete
+194-feature schema, exports boosted trees with an exact sklearn-parity check,
+and derives its final threshold from group-separated out-of-fold predictions.
+External color pairs are automatically removed from training even when an
+input dataset contains them.
+
+The best all-feature boosted candidate ranked forced losses substantially
+better than the incumbent raw value signal, but still failed promotion:
+
+- internal test: ROC AUC `0.943497`, precision `0.75`, recall `0.214286`, one
+  false positive;
+- external modern arena: ROC AUC `0.932292`, precision `0.833333`, recall
+  `0.3125`, one false positive;
+- both the internal high-precision gate and overall promotion gate failed.
+
+The false-positive external position was genuinely precarious: exact search
+found only two surviving turns. That makes the model useful as a search-
+ordering hint, but not yet safe as a hard veto. Any runtime integration must
+first clear the held-out high-precision gate and then improve color-paired
+production-engine play; a retrospective ranking metric alone is insufficient.

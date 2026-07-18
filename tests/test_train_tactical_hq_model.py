@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+from sklearn.ensemble import GradientBoostingClassifier
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,6 +58,12 @@ class TacticalHqTrainerTest(unittest.TestCase):
         self.assertTrue(group_sets["train"].isdisjoint(group_sets["test"]))
         self.assertTrue(group_sets["validation"].isdisjoint(group_sets["test"]))
 
+    def test_external_pairs_are_removed_from_training(self) -> None:
+        training = np.asarray(["one", "two", "three", "two"], dtype=object)
+        external = np.asarray(["two", "four"], dtype=object)
+        mask = trainer.external_holdout_mask(training, external)
+        self.assertEqual(mask.tolist(), [True, False, True, False])
+
     def test_high_precision_threshold_requires_two_flags(self) -> None:
         labels = np.asarray([1, 1, 0, 0, 0])
         scores = np.asarray([0.95, 0.90, 0.60, 0.20, 0.10])
@@ -65,6 +72,37 @@ class TacticalHqTrainerTest(unittest.TestCase):
         flagged = scores >= float(threshold)
         self.assertEqual(int(np.sum(flagged)), 2)
         self.assertEqual(int(np.sum(labels[flagged])), 2)
+
+    def test_high_precision_gate_requires_precision_recall_and_no_false_positive(
+        self,
+    ) -> None:
+        passing = {"precision": 0.95, "recall": 0.5, "false_positives": 0}
+        self.assertTrue(trainer.high_precision_gate(passing, 0.95))
+        for field, value in (
+            ("precision", 0.94),
+            ("recall", 0.49),
+            ("false_positives", 1),
+        ):
+            failing = {**passing, field: value}
+            self.assertFalse(trainer.high_precision_gate(failing, 0.95))
+
+    def test_exported_boosted_probabilities_match_sklearn(self) -> None:
+        matrix = np.asarray(
+            [[float(index), float(index % 3)] for index in range(20)]
+        )
+        labels = np.asarray([int(row[0] > 9 and row[1] > 0) for row in matrix])
+        model = GradientBoostingClassifier(
+            n_estimators=12,
+            max_depth=2,
+            learning_rate=0.05,
+            min_samples_leaf=2,
+            random_state=7,
+        ).fit(matrix, labels)
+        artifact = trainer.boosted_artifact(
+            ["one", "two"], model, 0.8, {"test": True}
+        )
+        actual = trainer.exported_boosted_probabilities(artifact, matrix)
+        np.testing.assert_allclose(actual, model.predict_proba(matrix)[:, 1], atol=1e-9)
 
 
 if __name__ == "__main__":
