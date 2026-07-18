@@ -6131,10 +6131,13 @@ def search(
         verifier = Searcher(
             personality,
             # Native GBDT policy scoring makes dense artillery replies take
-            # slightly more than 15 seconds on Vercel. The route owns a
-            # 60-second budget, so reserve up to 25 seconds to finish the
-            # complete reply instead of returning after nearly all the work.
-            time_ms=max(2_000, min(25_000, int(time_ms * 1.25))),
+            # slightly more than 25 seconds on Vercel in the densest measured
+            # position. The route owns a 60-second budget and the ordinary
+            # search releases this verifier after about 27 seconds, so use the
+            # final 30 seconds to finish the complete reply. Returning after
+            # eleven of the required twelve verifier nodes would discard all
+            # of that work and contaminate the self-play game anyway.
+            time_ms=max(2_000, min(30_000, int(time_ms * 1.50))),
             beam_width=max(4, min(6, beam_width)),
             turn_number=turn_number,
             value_function=value_function,
