@@ -40,6 +40,10 @@ interface ExactHqAuditReport {
   approvedTrainingGameIds: string[];
   audits: Array<{
     gameId: string;
+    losingTurn?: number;
+    losingPlayer?: "RED" | "BLUE";
+    searchScore?: number;
+    losingWinProbability?: number;
     safe_turns: number;
     forced_hq_loss: boolean;
     inconclusive: boolean;
@@ -165,6 +169,9 @@ async function main() {
       )
       .map((audit) => audit.gameId)
   );
+  const auditByGame = new Map(
+    hqAudit.audits.map((audit) => [audit.gameId, audit] as const)
+  );
   if (
     approvedByAudit.size !== hqAudit.approvedTrainingGameIds.length ||
     hqAudit.approvedTrainingGameIds.some(
@@ -238,12 +245,20 @@ async function main() {
         }
         if (sample.searchBackend !== searchBackend) {
           throw new Error(
-            `Search runtime mismatch in ${sample.gameId}: expected ${searchBackend}, received ${sample.searchBackend || "missing"}`
+            `Search runtime mismatch in ${
+              sample.gameId
+            }: expected ${searchBackend}, received ${
+              sample.searchBackend || "missing"
+            }`
           );
         }
         if (sample.searchValueModelBackend !== searchValueModelBackend) {
           throw new Error(
-            `Value runtime mismatch in ${sample.gameId}: expected ${searchValueModelBackend}, received ${sample.searchValueModelBackend || "missing"}`
+            `Value runtime mismatch in ${
+              sample.gameId
+            }: expected ${searchValueModelBackend}, received ${
+              sample.searchValueModelBackend || "missing"
+            }`
           );
         }
         if (
@@ -305,6 +320,22 @@ async function main() {
     games.add(gameId);
     generations.add(record.generationId);
     for (const sample of record.samples) {
+      const audit = auditByGame.get(sample.gameId);
+      const forcedHqLossPredecessor = Boolean(
+        audit?.forced_hq_loss &&
+          audit.exhaustive &&
+          !audit.inconclusive &&
+          audit.safe_turns === 0 &&
+          audit.losingTurn === sample.turnNumber &&
+          audit.losingPlayer === sample.player
+      );
+      const tacticalValueContradiction = Boolean(
+        forcedHqLossPredecessor &&
+          typeof audit?.searchScore === "number" &&
+          audit.searchScore <= -50_000 &&
+          typeof audit.losingWinProbability === "number" &&
+          audit.losingWinProbability > 0.5
+      );
       let features = sample.features;
       if (featureSchema === "v2") {
         const state = FENtoBoardState(sample.fen!);
@@ -338,6 +369,14 @@ async function main() {
           turn: sample.turnNumber,
           perspective: sample.player,
           label: sample.outcomeValue,
+          forced_hq_loss_predecessor: forcedHqLossPredecessor,
+          tactical_value_contradiction: tacticalValueContradiction,
+          audited_search_score: forcedHqLossPredecessor
+            ? audit?.searchScore
+            : undefined,
+          audited_static_win_probability: forcedHqLossPredecessor
+            ? audit?.losingWinProbability
+            : undefined,
           features,
         })}\n`
       );

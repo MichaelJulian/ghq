@@ -126,6 +126,7 @@ async function main() {
       selectedMoves: losingDecision.selectedMoves,
       winningMoves: winningDecision.selectedMoves,
       searchScore: losingDecision.currentPlayerScore,
+      losingWinProbability: losingDecision.winProbability,
       completedDepth: losingDecision.completedDepth,
       ...exact,
     });
