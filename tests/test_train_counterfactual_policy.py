@@ -2,6 +2,7 @@ import unittest
 import json
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -12,6 +13,8 @@ from scripts.train_counterfactual_policy import (
     grouped_split,
     load_counterfactual_reports,
     offset_probabilities,
+    safe_cross_validated_linear_candidate,
+    stability_random_states,
     rank_correction_features,
 )
 from scripts.train_value_model import exported_probabilities
@@ -189,6 +192,46 @@ class CounterfactualPolicyTrainingTests(unittest.TestCase):
         self.assertTrue(all(fold_games))
         self.assertEqual(sum(len(games) for games in fold_games), 15)
         self.assertEqual(len(set.union(*fold_games)), 15)
+
+    def test_stability_random_states_are_repeatable_and_unique(self):
+        self.assertEqual(stability_random_states(42), [42, 23, 101])
+        self.assertEqual(stability_random_states(23), [23, 42, 101])
+        self.assertEqual(stability_random_states(7), [7, 42, 23, 101])
+
+    def test_safe_cross_validation_rejects_optimizer_failure(self):
+        records = [
+            {
+                "source_game_id": f"game-{index}",
+                "left_features": np.asarray([0.0]),
+                "right_features": np.asarray([0.0]),
+                "label": float(index % 2),
+                "rollout_delta": 1.0,
+                "terminal_pair": False,
+            }
+            for index in range(10)
+        ]
+        baseline = {
+            "format": "ghq-gradient-boosted-value-v1",
+            "feature_names": ["x"],
+            "base_raw_score": 0.0,
+            "learning_rate": 0.1,
+            "calibration": {"kind": "platt", "scale": 1.0, "intercept": 0.0},
+            "trees": [],
+        }
+        with mock.patch(
+            "scripts.train_counterfactual_policy.cross_validated_linear_candidate",
+            side_effect=RuntimeError("unstable"),
+        ):
+            candidate = safe_cross_validated_linear_candidate(
+                records,
+                baseline,
+                np.asarray([0]),
+                1,
+                0.1,
+                [np.arange(10)],
+            )
+        self.assertFalse(candidate["passed"])
+        self.assertEqual(candidate["error"], "unstable")
 
 
 if __name__ == "__main__":

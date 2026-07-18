@@ -332,6 +332,15 @@ def grouped_folds(
     ]
 
 
+def stability_random_states(primary: int) -> List[int]:
+    """Use the same independent fold assignments for every model candidate."""
+    states: List[int] = []
+    for value in (primary, 42, 23, 101):
+        if value not in states:
+            states.append(value)
+    return states
+
+
 def cross_validated_linear_candidate(
     records: Sequence[Dict[str, Any]],
     baseline: Dict[str, Any],
@@ -394,6 +403,43 @@ def cross_validated_linear_candidate(
             and metrics["accuracy"] >= baseline_metrics["accuracy"]
         ),
     }
+
+
+def safe_cross_validated_linear_candidate(
+    records: Sequence[Dict[str, Any]],
+    baseline: Dict[str, Any],
+    feature_indices: np.ndarray,
+    feature_count: int,
+    l2: float,
+    folds: Sequence[np.ndarray],
+) -> Dict[str, Any]:
+    """Reject an unstable optimizer configuration without aborting the sweep."""
+    try:
+        return cross_validated_linear_candidate(
+            records,
+            baseline,
+            feature_indices,
+            feature_count,
+            l2,
+            folds,
+        )
+    except RuntimeError as error:
+        offset, _vector, label, _weight = augmented_pair_arrays(
+            records, baseline, feature_indices
+        )
+        baseline_metrics = binary_metrics(label, sigmoid(offset))
+        return {
+            "feature_count": feature_count,
+            "l2": l2,
+            "metrics": {
+                "log_loss": 1_000_000.0,
+                "accuracy": 0.0,
+                "samples": int(len(label)),
+            },
+            "baseline_metrics": baseline_metrics,
+            "passed": False,
+            "error": str(error),
+        }
 
 
 def binary_metrics(labels: np.ndarray, probabilities: np.ndarray) -> Dict[str, float]:
@@ -511,12 +557,10 @@ def main() -> None:
     )
     if not len(feature_indices):
         raise ValueError("counterfactual policy training needs appended features")
-    splits = grouped_split(records, args.random_state)
-    development_indices = np.concatenate(
-        [splits["train"], splits["validation"]]
-    )
-    development_records = records_at(records, development_indices)
-    folds = grouped_folds(development_records, args.random_state)
+    cv_random_states = stability_random_states(args.random_state)
+    folds_by_state = {
+        state: grouped_folds(records, state) for state in cv_random_states
+    }
     l2_candidates = [0.1, 0.3, 1.0, 3.0, 10.0, 30.0, 100.0]
     feature_count_candidates = sorted(
         {
@@ -527,24 +571,58 @@ def main() -> None:
     candidates = []
     for feature_count in feature_count_candidates:
         for l2 in l2_candidates:
-            candidates.append(
-                cross_validated_linear_candidate(
-                    development_records,
+            runs = [
+                safe_cross_validated_linear_candidate(
+                    records,
                     baseline,
                     feature_indices,
                     feature_count,
                     l2,
-                    folds,
+                    folds_by_state[state],
                 )
+                for state in cv_random_states
+            ]
+            candidates.append(
+                {
+                    "feature_count": feature_count,
+                    "l2": l2,
+                    "runs": [
+                        {
+                            "random_state": state,
+                            "metrics": run["metrics"],
+                            "baseline_metrics": run["baseline_metrics"],
+                            "passed": run["passed"],
+                            **({"error": run["error"]} if "error" in run else {}),
+                        }
+                        for state, run in zip(cv_random_states, runs)
+                    ],
+                    "mean_log_loss": float(
+                        np.mean([run["metrics"]["log_loss"] for run in runs])
+                    ),
+                    "mean_baseline_log_loss": float(
+                        np.mean(
+                            [run["baseline_metrics"]["log_loss"] for run in runs]
+                        )
+                    ),
+                    "mean_accuracy": float(
+                        np.mean([run["metrics"]["accuracy"] for run in runs])
+                    ),
+                    "mean_baseline_accuracy": float(
+                        np.mean(
+                            [run["baseline_metrics"]["accuracy"] for run in runs]
+                        )
+                    ),
+                    "passed": all(run["passed"] for run in runs),
+                }
             )
     feasible = [candidate for candidate in candidates if candidate["passed"]]
     pool = feasible or candidates
-    best_loss = min(candidate["metrics"]["log_loss"] for candidate in pool)
+    best_loss = min(candidate["mean_log_loss"] for candidate in pool)
     selected = max(
         [
             candidate
             for candidate in pool
-            if candidate["metrics"]["log_loss"] <= best_loss + 0.001
+            if candidate["mean_log_loss"] <= best_loss + 0.001
         ],
         key=lambda candidate: (
             candidate["l2"],
@@ -552,68 +630,27 @@ def main() -> None:
         ),
     )
 
-    development_offset, development_vector, development_label, development_weight = (
-        augmented_pair_arrays(development_records, baseline, feature_indices)
+    training_offset, training_vector, training_label, training_weight = (
+        augmented_pair_arrays(records, baseline, feature_indices)
     )
-    feature_scales = np.std(development_vector, axis=0)
+    feature_scales = np.std(training_vector, axis=0)
     feature_scales[feature_scales < 1e-8] = 1.0
-    development_standardized = development_vector / feature_scales
+    training_standardized = training_vector / feature_scales
     feature_ranking = rank_correction_features(
-        development_offset,
-        development_standardized,
-        development_label,
-        development_weight,
+        training_offset,
+        training_standardized,
+        training_label,
+        training_weight,
     )
     selected_positions = feature_ranking[: selected["feature_count"]]
     selected_coefficients = fit_offset_logistic_correction(
-        development_offset,
-        development_standardized[:, selected_positions],
-        development_label,
-        development_weight,
+        training_offset,
+        training_standardized[:, selected_positions],
+        training_label,
+        training_weight,
         selected["l2"],
     )
-
-    test_records = records_at(records, splits["test"])
-    test_offset, test_vector, test_label, _ = augmented_pair_arrays(
-        test_records, baseline, feature_indices
-    )
-    test_probability = offset_probabilities(
-        test_offset,
-        (test_vector / feature_scales)[:, selected_positions],
-        selected_coefficients,
-    )
-    baseline_test_probability = sigmoid(test_offset)
-    test_metrics = binary_metrics(test_label, test_probability)
-    baseline_test_metrics = binary_metrics(test_label, baseline_test_probability)
-    bootstrap = bootstrap_loss_delta(
-        test_records,
-        np.asarray([record["label"] for record in test_records]),
-        test_probability[: len(test_records)],
-        baseline_test_probability[: len(test_records)],
-        args.random_state,
-    )
-    candidate_player = metrics_by_player(
-        test_records, test_probability[: len(test_records)]
-    )
-    baseline_player = metrics_by_player(
-        test_records, baseline_test_probability[: len(test_records)]
-    )
-    player_gates = {
-        player: (
-            player not in candidate_player
-            or candidate_player[player]["log_loss"]
-            <= baseline_player[player]["log_loss"] + 0.02
-        )
-        for player in ("RED", "BLUE")
-    }
-    approved = bool(feasible) and all(
-        [
-            test_metrics["log_loss"] < baseline_test_metrics["log_loss"],
-            test_metrics["accuracy"] >= baseline_test_metrics["accuracy"],
-            bootstrap["ci95_high"] <= 0.02,
-            *player_gates.values(),
-        ]
-    )
+    ready_for_external_holdout = bool(feasible)
     report = {
         "format": "ghq-counterfactual-policy-training-v1",
         "reports": [str(path) for path in args.report],
@@ -627,10 +664,10 @@ def main() -> None:
         "root_players": dict(root_player_counts),
         "phases": dict(phase_counts),
         "split_pairs": {
-            "development": len(development_records),
-            "test": len(test_records),
+            "training": len(records),
         },
-        "cross_validation_folds": len(folds),
+        "cross_validation_folds": 5,
+        "cross_validation_random_states": cv_random_states,
         "feature_count": len(feature_names),
         "correction_feature_scope": args.feature_scope,
         "correction_feature_count": len(feature_indices),
@@ -638,8 +675,15 @@ def main() -> None:
             {
                 "l2": candidate["l2"],
                 "feature_count": candidate["feature_count"],
-                "metrics": candidate["metrics"],
-                "baseline_metrics": candidate["baseline_metrics"],
+                "runs": candidate["runs"],
+                "mean_log_loss": round(candidate["mean_log_loss"], 6),
+                "mean_baseline_log_loss": round(
+                    candidate["mean_baseline_log_loss"], 6
+                ),
+                "mean_accuracy": round(candidate["mean_accuracy"], 6),
+                "mean_baseline_accuracy": round(
+                    candidate["mean_baseline_accuracy"], 6
+                ),
                 "passed": candidate["passed"],
             }
             for candidate in candidates
@@ -651,14 +695,8 @@ def main() -> None:
             for position in selected_positions
         ],
         "validation_constraints_passed": bool(feasible),
-        "test": {
-            "candidate": test_metrics,
-            "baseline": baseline_test_metrics,
-            "candidate_by_root_player": candidate_player,
-            "baseline_by_root_player": baseline_player,
-            "paired_game_bootstrap": bootstrap,
-        },
-        "approved_for_arena": approved,
+        "approved_for_external_holdout": ready_for_external_holdout,
+        "approved_for_arena": False,
     }
     artifact = export_policy_correction(
         raw_baseline,
@@ -674,7 +712,10 @@ def main() -> None:
             "counterfactual_selected_l2": selected["l2"],
             "counterfactual_selected_feature_count": selected["feature_count"],
             "counterfactual_feature_scope": args.feature_scope,
-            "counterfactual_approved_for_arena": approved,
+            "counterfactual_approved_for_external_holdout": (
+                ready_for_external_holdout
+            ),
+            "counterfactual_approved_for_arena": False,
             "counterfactual_training_root_ids": report["root_ids"],
             "counterfactual_training_source_game_ids": report[
                 "source_game_ids"
@@ -688,7 +729,7 @@ def main() -> None:
         json.dumps(report, indent=2) + "\n", encoding="utf-8"
     )
     print(json.dumps(report, indent=2))
-    if args.require_pass and not approved:
+    if args.require_pass and not ready_for_external_holdout:
         raise SystemExit(2)
 
 
