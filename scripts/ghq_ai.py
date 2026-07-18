@@ -3784,6 +3784,17 @@ def purposeful_complete_turn_seed(
                     purpose_penalty += 1.6 if move.to_square in vacated else 1.0
             red_score = quick_evaluation(child, turn_number)
             utility = red_score if original_turn == engine.RED else -red_score
+            latest_roles = set(candidate_purposes[-1]["roles"])
+            if "hq_defense" in latest_roles:
+                # A deadline seed is the last safety net when minimax has not
+                # completed even one root. Never let ordinary positional gain
+                # displace a move already proven to remove a forced HQ loss.
+                utility += MATE_SCORE
+            elif "hq_escape_unlock" in latest_roles:
+                # Some checks require vacating/interposing before the HQ can
+                # evacuate later in the same turn. Preserve that setup ahead
+                # of all non-terminal positional preferences.
+                utility += 0.90 * MATE_SCORE
             if turn_number <= EARLY_GAME_LAST_TURN:
                 utility += 2.5 * fallback_rules.early_plan_score(
                     candidate_purposes

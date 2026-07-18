@@ -349,6 +349,36 @@ class EvaluationTests(unittest.TestCase):
 
 
 class SearchTests(unittest.TestCase):
+    def test_deadline_seed_prioritizes_proven_hq_defenses(self):
+        positions = (
+            (
+                "8/3T→q3/8/8/8/R↑F2FIi1/H↖R↑1I2Q1/1P2F3 II - b",
+                72,
+            ),
+            (
+                "5f2/1q1i2ir↓/8/1R↑6/3F1R↗2/4I3/3IFR↖II/2IP2T↑Q II ii b",
+                36,
+            ),
+        )
+        for fen, turn_number in positions:
+            with self.subTest(turn_number=turn_number):
+                board = engine.BaseBoard(fen)
+                seed = ghq_ai.purposeful_complete_turn_seed(
+                    board,
+                    "balanced",
+                    turn_number=turn_number,
+                )
+                moves, resulting = ghq_ai.first_turn_from_pv(board, seed.pv)
+                detector = ghq_ai.Searcher(
+                    "balanced",
+                    time_ms=5000,
+                    beam_width=6,
+                    turn_number=turn_number + 1,
+                )
+
+                self.assertTrue(moves)
+                self.assertFalse(detector.has_same_turn_hq_capture(resulting))
+
     def test_seed_telemetry_cannot_leak_a_search_timeout(self):
         original = ghq_ai.Searcher.turn_purpose_breakdown
 
