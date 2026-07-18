@@ -6130,7 +6130,11 @@ def search(
     ):
         verifier = Searcher(
             personality,
-            time_ms=max(2_000, min(15_000, int(time_ms * 0.75))),
+            # Native GBDT policy scoring makes dense artillery replies take
+            # slightly more than 15 seconds on Vercel. The route owns a
+            # 60-second budget, so reserve a full 20 seconds to finish the
+            # complete reply instead of returning after nearly all the work.
+            time_ms=max(2_000, min(20_000, int(time_ms * 1.00))),
             beam_width=max(4, min(6, beam_width)),
             turn_number=turn_number,
             value_function=value_function,
