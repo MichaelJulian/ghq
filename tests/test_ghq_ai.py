@@ -195,6 +195,11 @@ AVOIDABLE_HQ_LOSS_REGRESSIONS = (
         "p5i1/r↓q1i1i2/4f1i1/5f1f/1QF2r↓2/1H↑1R↑4/3R↑I3/8 - - r",
     ),
     (
+        149,
+        "balanced",
+        "qp6/h↓i3r↓2/8/4i3/4r↓3/8/8/5PfQ - - r",
+    ),
+    (
         107,
         "tactical_gambler",
         "q5pr↓/i1i5/1i6/8/3f4/t↓1r↓1i3/QT↑2h←3/8 - - r",
