@@ -1232,9 +1232,15 @@ class Searcher:
         Making another capture legal is only a promise. The completed turn
         must actually take one of the targets unlocked by the landing (or
         capture the HQ); otherwise the para was consumed for a single trade.
+        The narrow non-capturing exception is an HQ bodyguard mission: the
+        same turn relocates the HQ, lands the para beside it, and removes an
+        immediate enemy HQ-capture combination.
         """
         working = before.copy()
         penalty = 0.0
+        hq_defense_mission = self.paratrooper_hq_defense_mission(
+            before, after, moves, mover
+        )
         for index, move in enumerate(moves):
             if self.is_paradrop(working, move):
                 direct_hq_capture = (
@@ -1250,13 +1256,51 @@ class Searcher:
                     for later in moves[index + 1 :]
                     if later.capture_preference is not None
                 )
-                if (
-                    not self.paradrop_allowed(working, move)
-                    or not (direct_hq_capture or converted_target)
+                if not (
+                    hq_defense_mission
+                    or (
+                        self.paradrop_allowed(working, move)
+                        and (direct_hq_capture or converted_target)
+                    )
                 ):
                     penalty += MISSIONLESS_PARATROOPER_PENALTY
             working.push(move)
         return penalty
+
+    def paratrooper_hq_defense_mission(
+        self,
+        before: engine.BaseBoard,
+        after: engine.BaseBoard,
+        moves: Sequence[engine.Move],
+        mover: bool,
+    ) -> bool:
+        """Whether a non-capturing paradrop completes an immediate HQ evasion."""
+        if after.turn == mover or after.is_game_over():
+            return False
+        before_hqs = list(before.pieces(engine.HQ, mover))
+        after_hqs = list(after.pieces(engine.HQ, mover))
+        if not before_hqs or not after_hqs or before_hqs == after_hqs:
+            return False
+
+        working = before.copy()
+        para_destinations: List[int] = []
+        for move in moves:
+            if self.is_paradrop(working, move) and move.to_square is not None:
+                para_destinations.append(move.to_square)
+            working.push(move)
+        if not para_destinations:
+            return False
+        if not any(
+            chebyshev(destination, hq_square) == 1
+            for destination in para_destinations
+            for hq_square in after_hqs
+        ):
+            return False
+
+        latent_attack = self.board_as_turn(before, not mover)
+        return self.has_same_turn_hq_capture(
+            latent_attack
+        ) and not self.has_same_turn_hq_capture(after)
 
     @staticmethod
     def formation_quality(board: engine.BaseBoard, color: bool) -> float:
@@ -1364,6 +1408,15 @@ class Searcher:
                 roles.append("no_new_effect")
             result.append({"move": move.uci(), "roles": list(dict.fromkeys(roles))})
             working = child
+
+        if self.paratrooper_hq_defense_mission(before, working, moves, mover):
+            replay = before.copy()
+            for index, move in enumerate(moves):
+                if self.is_paradrop(replay, move):
+                    result[index]["roles"] = list(
+                        dict.fromkeys([*result[index]["roles"], "hq_defense"])
+                    )
+                replay.push(move)
 
         if retrospective:
             # Purpose can be relational.  A quiet first action may appear to

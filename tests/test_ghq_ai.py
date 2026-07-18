@@ -190,6 +190,11 @@ MISSIONLESS_PARA_SURVIVAL_OVERRIDE_FEN = (
 )
 AVOIDABLE_HQ_LOSS_REGRESSIONS = (
     (
+        142,
+        "balanced",
+        "4qp2/8/4I1i1/2I2I2/1T↑1IH↑1R↑1/2F4Q/1I6/3P4 - - b",
+    ),
+    (
         95,
         "fortress",
         "4p3/qi6/i1i5/8/I7/6i1/1H↑I4i/5P1Q - - r",
@@ -2049,6 +2054,36 @@ class SearchTests(unittest.TestCase):
         survival = searcher.find_hq_survival_turn(board)
         self.assertIsNotNone(survival)
         self.assertIn("b2c1→", [move.uci() for move in survival[0]])
+
+    def test_non_capturing_para_can_complete_a_proven_hq_evasion(self):
+        root = engine.BaseBoard(
+            "4qp2/8/4I1i1/2I2I2/1T↑1IH↑1R↑1/2F4Q/1I6/3P4 - - b"
+        )
+        searcher = ghq_ai.Searcher(
+            "balanced", time_ms=60_000, beam_width=6, turn_number=142
+        )
+        safe = root.copy()
+        safe_moves = []
+        for uci in ("e8d8", "f8d7", "g6f7"):
+            move = next(move for move in safe.generate_legal_moves() if move.uci() == uci)
+            safe_moves.append(move)
+            safe.push(move)
+
+        self.assertTrue(
+            searcher.paratrooper_hq_defense_mission(
+                root, safe, safe_moves, engine.BLUE
+            )
+        )
+        self.assertEqual(
+            searcher.paratrooper_mission_penalty(
+                root, safe, safe_moves, engine.BLUE
+            ),
+            0.0,
+        )
+        labels = searcher.action_purpose_labels(
+            root, safe_moves, engine.BLUE, retrospective=False
+        )
+        self.assertIn("hq_defense", labels[1]["roles"])
 
     def test_deterministic_policy_floor_never_moves_a_paratrooper(self):
         board = engine.BaseBoard(MISSIONLESS_PARA_SURVIVAL_OVERRIDE_FEN)

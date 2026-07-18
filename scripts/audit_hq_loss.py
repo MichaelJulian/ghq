@@ -52,10 +52,83 @@ def complete_turn_states(
         if board.is_game_over() or board.turn != mover:
             yield board, moves
             continue
+        hq_squares = list(board.pieces(engine.HQ, mover))
+        hq_square = hq_squares[0] if hq_squares else None
+        children: list[
+            tuple[tuple[int, int, str], engine.BaseBoard, engine.Move]
+        ] = []
         for move in board.generate_legal_moves():
             child = board.copy()
             child.push(move)
+            children.append(
+                (
+                    defensive_turn_move_priority(
+                        board, child, move, mover, hq_square
+                    ),
+                    child,
+                    move,
+                )
+            )
+        # The frontier is LIFO, so ascending insertion explores the greatest
+        # defensive-effect key first. Membership is unchanged: this improves
+        # time-to-first-safe-line without weakening a forced-loss proof.
+        children.sort(key=lambda item: item[0])
+        for _, child, move in children:
             frontier.append((child, (*moves, move.uci())))
+
+
+def defensive_turn_move_priority(
+    board: engine.BaseBoard,
+    child: engine.BaseBoard,
+    move: engine.Move,
+    mover: bool,
+    hq_square: int | None,
+) -> tuple[int, int, str]:
+    """Order exact defender turns by their potential effect near the HQ."""
+    if move.name == "AutoCapture":
+        return (6, 0, move.uci())
+    if hq_square is None:
+        return (0, 0, move.uci())
+    piece_type = (
+        move.unit_type
+        if move.name == "Reinforce"
+        else board.piece_type_at(move.from_square)
+        if move.from_square is not None
+        else None
+    )
+    if piece_type == engine.HQ:
+        return (5, 0, move.uci())
+
+    hq_file = engine.square_file(hq_square)
+    hq_rank = engine.square_rank(hq_square)
+    defense_zone = engine.BB_EMPTY
+    for file_index in range(max(0, hq_file - 2), min(7, hq_file + 2) + 1):
+        for rank_index in range(max(0, hq_rank - 2), min(7, hq_rank + 2) + 1):
+            defense_zone |= engine.BB_SQUARES[
+                engine.square(file_index, rank_index)
+            ]
+    newly_bombarded = (
+        child.bombarded_co[mover]
+        & defense_zone
+        & ~board.bombarded_co[mover]
+    )
+    if move.name == "MoveAndOrient" and newly_bombarded:
+        return (4, engine.popcount(newly_bombarded), move.uci())
+    if move.capture_preference is not None:
+        return (3, 0, move.uci())
+    distances = [
+        max(
+            abs(engine.square_file(square) - hq_file),
+            abs(engine.square_rank(square) - hq_rank),
+        )
+        for square in (move.from_square, move.to_square)
+        if square is not None
+    ]
+    if distances and min(distances) <= 3:
+        return (2, -min(distances), move.uci())
+    if move.name == "Skip":
+        return (1, 0, move.uci())
+    return (0, 0, move.uci())
 
 
 def same_turn_hq_win(
@@ -164,6 +237,7 @@ def audit_hq_loss(
     safe_turns: list[dict[str, object]] = []
     budget = NodeBudget(max_nodes)
     truncated = False
+    stopped_after_safe = False
 
     try:
         for result, moves in complete_turn_states(position, budget):
@@ -180,6 +254,8 @@ def audit_hq_loss(
                                 "reason": f"terminal-{outcome.termination}",
                             }
                         )
+                    stopped_after_safe = True
+                    break
                 continue
             reply = same_turn_hq_win(result, attacker, budget)
             if reply is None:
@@ -188,6 +264,8 @@ def audit_hq_loss(
                     safe_turns.append(
                         {"moves": moves, "reason": "no-same-turn-hq-capture"}
                     )
+                stopped_after_safe = True
+                break
     except AuditLimit:
         truncated = True
 
@@ -201,7 +279,7 @@ def audit_hq_loss(
         "safe_turns": safe_count,
         "forced_hq_loss": forced,
         "inconclusive": inconclusive,
-        "exhaustive": not truncated,
+        "exhaustive": not truncated and not stopped_after_safe,
         "nodes_visited": budget.visited,
         "max_nodes": budget.maximum,
         "safe_examples": safe_turns,

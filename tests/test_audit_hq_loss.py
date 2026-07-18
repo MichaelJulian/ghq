@@ -16,6 +16,7 @@ class ExactHqLossAuditTests(unittest.TestCase):
 
         self.assertFalse(result["forced_hq_loss"])
         self.assertFalse(result["inconclusive"])
+        self.assertFalse(result["exhaustive"])
         self.assertGreater(result["safe_turns"], 0)
         self.assertLessEqual(len(result["safe_examples"]), 2)
 
@@ -59,6 +60,22 @@ class ExactHqLossAuditTests(unittest.TestCase):
                 move.name == "MoveAndOrient"
                 and move.from_square == move.to_square
                 for move in moves
+            )
+        )
+
+    def test_finds_remote_artillery_hq_interdiction_within_default_budget(self):
+        result = audit_hq_loss.audit_hq_loss(
+            "4p3/qi6/i1i5/8/I7/6i1/1H↑I4i/5P1Q - - r",
+            example_limit=2,
+        )
+
+        self.assertFalse(result["forced_hq_loss"])
+        self.assertFalse(result["inconclusive"])
+        self.assertGreater(result["safe_turns"], 0)
+        self.assertTrue(
+            any(
+                "b2c1→" in example["moves"]
+                for example in result["safe_examples"]
             )
         )
 
