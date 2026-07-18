@@ -995,6 +995,39 @@ class SearchTests(unittest.TestCase):
         )
         self.assertTrue(recovery_safety.tactically_safe)
 
+    def test_paratrooper_interposition_is_a_proven_hq_defense_mission(self):
+        root = engine.BaseBoard(
+            "q1pt↓4/3r↓i3/8/6r↓i/R↑3ifh↓1/"
+            "IH↑3i2/2I5/PT↑5Q - - r"
+        )
+        searcher = ghq_ai.Searcher(
+            "balanced", time_ms=60_000, beam_width=6, turn_number=99
+        )
+        moves = [
+            engine.Move.from_uci(uci)
+            for uci in ("h1h2", "b3c4↘", "a1f2")
+        ]
+        safe = root.copy()
+        for move in moves:
+            safe.push(move)
+
+        self.assertTrue(
+            searcher.paratrooper_hq_defense_mission(
+                root, safe, moves, root.turn
+            )
+        )
+        purpose = searcher.turn_purpose_breakdown(
+            root, safe, moves, root.turn, retrospective=False
+        )
+        self.assertEqual(purpose["paratrooper_mission_penalty"], 0.0)
+
+        survival = searcher.find_hq_survival_turn(
+            root, max_reply_nodes=100_000
+        )
+        self.assertIsNotNone(survival)
+        _, resulting = survival
+        self.assertFalse(searcher.has_same_turn_hq_capture(resulting))
+
     def test_exact_hq_probe_retains_sparse_artillery_orientation_mate(self):
         root = engine.BaseBoard(
             "4qT←2/5H↑2/4r→3/1I3R↑2/8/2R→5/1R↑2Q3/8 - - b"

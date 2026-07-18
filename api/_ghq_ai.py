@@ -1274,33 +1274,63 @@ class Searcher:
         moves: Sequence[engine.Move],
         mover: bool,
     ) -> bool:
-        """Whether a non-capturing paradrop completes an immediate HQ evasion."""
+        """Whether a non-capturing paradrop is necessary to evade HQ capture.
+
+        Geometry alone is not enough. A live game required the para to land
+        two squares from a relocated HQ, where it interdicted the final capture
+        lane.  Certify the mission causally: the complete turn must remove an
+        existing same-turn HQ capture, and omitting the paradrop must restore
+        that capture (or make the remaining defense sequence illegal).
+        """
         if after.turn == mover or after.is_game_over():
             return False
-        before_hqs = list(before.pieces(engine.HQ, mover))
-        after_hqs = list(after.pieces(engine.HQ, mover))
-        if not before_hqs or not after_hqs or before_hqs == after_hqs:
+        if not before.pieces(engine.HQ, mover) or not after.pieces(engine.HQ, mover):
             return False
 
         working = before.copy()
-        para_destinations: List[int] = []
-        for move in moves:
-            if self.is_paradrop(working, move) and move.to_square is not None:
-                para_destinations.append(move.to_square)
+        para_indexes: List[int] = []
+        for index, move in enumerate(moves):
+            if (
+                self.is_paradrop(working, move)
+                and move.capture_preference is None
+            ):
+                para_indexes.append(index)
             working.push(move)
-        if not para_destinations:
-            return False
-        if not any(
-            chebyshev(destination, hq_square) == 1
-            for destination in para_destinations
-            for hq_square in after_hqs
-        ):
+        if not para_indexes:
             return False
 
         latent_attack = self.board_as_turn(before, not mover)
-        return self.has_same_turn_hq_capture(
-            latent_attack
-        ) and not self.has_same_turn_hq_capture(after)
+        if (
+            not self.has_same_turn_hq_capture(latent_attack)
+            or self.has_same_turn_hq_capture(after)
+        ):
+            return False
+
+        for omitted_index in para_indexes:
+            without_para = before.copy()
+            legal_without_para = True
+            for index, move in enumerate(moves):
+                if index == omitted_index:
+                    continue
+                if not without_para.is_legal(move):
+                    legal_without_para = False
+                    break
+                without_para.push(move)
+            if not legal_without_para:
+                return True
+            if without_para.turn == mover and not without_para.is_game_over():
+                skip = engine.Move.from_uci("skip")
+                if not without_para.is_legal(skip):
+                    return True
+                without_para.push(skip)
+            if (
+                not without_para.is_game_over()
+                and self.has_same_turn_hq_capture(
+                    self.board_as_turn(without_para, not mover)
+                )
+            ):
+                return True
+        return False
 
     @staticmethod
     def formation_quality(board: engine.BaseBoard, color: bool) -> float:
