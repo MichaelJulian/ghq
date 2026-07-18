@@ -1,4 +1,7 @@
 import unittest
+import json
+import tempfile
+from pathlib import Path
 
 import numpy as np
 
@@ -6,12 +9,63 @@ from scripts.train_counterfactual_policy import (
     export_policy_correction,
     fit_offset_logistic_correction,
     grouped_split,
+    load_counterfactual_reports,
     offset_probabilities,
 )
 from scripts.train_value_model import exported_probabilities
 
 
 class CounterfactualPolicyTrainingTests(unittest.TestCase):
+    def test_incomplete_rollout_report_is_rejected(self):
+        report = {
+            "format": "ghq-counterfactual-rollout-report-v1",
+            "featureSchema": ["base", "shape"],
+            "expectedBranches": 2,
+            "completedBranches": 1,
+            "missingBranches": 1,
+            "pairs": [],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "partial.json"
+            path.write_text(json.dumps(report))
+            with self.assertRaisesRegex(ValueError, "report is incomplete"):
+                load_counterfactual_reports([path])
+
+    def test_unverified_pair_is_not_admitted(self):
+        branches = [
+            {
+                "status": "completed",
+                "candidateRank": rank,
+                "featuresV3": [float(rank), 0.0],
+                "rolloutValue": value,
+                "valueSource": "terminal",
+                "unverifiedFallbackDecisions": unverified,
+            }
+            for rank, value, unverified in ((1, 1.0, 1), (2, 0.0, 0))
+        ]
+        report = {
+            "format": "ghq-counterfactual-rollout-report-v1",
+            "featureSchema": ["base", "shape"],
+            "expectedBranches": 2,
+            "completedBranches": 2,
+            "missingBranches": 0,
+            "pairs": [
+                {
+                    "confident": True,
+                    "rootId": "root-1",
+                    "sourceGameId": "game-1",
+                    "rootPlayer": "RED",
+                    "sourceTurnNumber": 12,
+                    "branches": branches,
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "unsafe.json"
+            path.write_text(json.dumps(report))
+            _, records, _ = load_counterfactual_reports([path])
+        self.assertEqual(records, [])
+
     def test_offset_correction_learns_without_recalibrating_baseline(self):
         vectors = np.asarray([[1.0], [-1.0], [2.0], [-2.0]])
         labels = np.asarray([1.0, 0.0, 1.0, 0.0])

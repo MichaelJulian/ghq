@@ -175,6 +175,20 @@ def load_counterfactual_reports(
         report = json.loads(raw)
         if report.get("format") != "ghq-counterfactual-rollout-report-v1":
             raise ValueError(f"unsupported counterfactual report {path}")
+        expected_branches = report.get("expectedBranches")
+        completed_branches = report.get("completedBranches")
+        missing_branches = report.get("missingBranches")
+        if (
+            not isinstance(expected_branches, int)
+            or not isinstance(completed_branches, int)
+            or not isinstance(missing_branches, int)
+            or completed_branches != expected_branches
+            or missing_branches != 0
+        ):
+            raise ValueError(
+                f"counterfactual report is incomplete in {path}: "
+                f"{completed_branches}/{expected_branches} branches completed"
+            )
         names = report.get("featureSchema")
         if not isinstance(names, list) or not all(
             isinstance(name, str) for name in names
@@ -196,6 +210,7 @@ def load_counterfactual_reports(
                     for branch in pair.get("branches", [])
                     if branch.get("status") == "completed"
                     and isinstance(branch.get("featuresV3"), list)
+                    and int(branch.get("unverifiedFallbackDecisions", 0)) == 0
                 ],
                 key=lambda branch: int(branch["candidateRank"]),
             )
