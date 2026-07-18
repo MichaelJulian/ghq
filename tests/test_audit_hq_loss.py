@@ -15,6 +15,7 @@ class ExactHqLossAuditTests(unittest.TestCase):
         )
 
         self.assertFalse(result["forced_hq_loss"])
+        self.assertFalse(result["inconclusive"])
         self.assertGreater(result["safe_turns"], 0)
         self.assertLessEqual(len(result["safe_examples"]), 2)
 
@@ -26,6 +27,19 @@ class ExactHqLossAuditTests(unittest.TestCase):
         self.assertTrue(result["forced_hq_loss"])
         self.assertEqual(result["safe_turns"], 0)
         self.assertEqual(result["complete_turn_states"], 5)
+        self.assertTrue(result["exhaustive"])
+
+    def test_node_limit_is_inconclusive_never_a_false_forced_mate(self):
+        result = audit_hq_loss.audit_hq_loss(
+            "q7/8/8/8/8/8/8/7Q - - b",
+            example_limit=2,
+            max_nodes=1,
+        )
+
+        self.assertFalse(result["forced_hq_loss"])
+        self.assertTrue(result["inconclusive"])
+        self.assertFalse(result["exhaustive"])
+        self.assertEqual(result["nodes_visited"], 1)
 
 
 if __name__ == "__main__":

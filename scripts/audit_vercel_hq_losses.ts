@@ -17,6 +17,10 @@ interface ExactHqAudit {
   complete_turn_states: number;
   safe_turns: number;
   forced_hq_loss: boolean;
+  inconclusive: boolean;
+  exhaustive: boolean;
+  nodes_visited: number;
+  max_nodes: number;
   safe_examples: Array<{ moves: string[]; reason: string }>;
   terminal_states: number;
 }
@@ -59,11 +63,14 @@ async function readGame(blob: ListBlobResultBlob) {
   ).json()) as DurableSelfPlayGameResult;
 }
 
-async function exactAudit(fen: string): Promise<ExactHqAudit> {
+async function exactAudit(
+  fen: string,
+  maxNodes: number
+): Promise<ExactHqAudit> {
   const python = process.env.GHQ_PYTHON ?? ".venv/bin/python";
   const { stdout } = await execFileAsync(
     python,
-    ["scripts/audit_hq_loss.py", fen],
+    ["scripts/audit_hq_loss.py", fen, "--max-nodes", String(maxNodes)],
     { maxBuffer: 1024 * 1024 }
   );
   return JSON.parse(stdout) as ExactHqAudit;
@@ -73,6 +80,11 @@ async function main() {
   const generationIds = argumentsFor("--generation");
   if (!generationIds.length) {
     throw new Error("Pass at least one --generation <id>");
+  }
+  const rawMaxNodes = argumentsFor("--max-nodes").at(-1);
+  const maxNodes = rawMaxNodes ? Number.parseInt(rawMaxNodes, 10) : 100_000;
+  if (!Number.isSafeInteger(maxNodes) || maxNodes < 1) {
+    throw new Error("--max-nodes must be a positive integer");
   }
   const blobs = (await Promise.all(generationIds.map(gameBlobs))).flat();
   const games: DurableSelfPlayGameResult[] = [];
@@ -104,7 +116,7 @@ async function main() {
 
   const audits = [];
   for (const { game, losingDecision, winningDecision } of losses) {
-    const exact = await exactAudit(losingDecision.fen);
+    const exact = await exactAudit(losingDecision.fen, maxNodes);
     audits.push({
       gameId: game.gameId,
       winner: game.outcome.winner,
@@ -118,15 +130,19 @@ async function main() {
     });
   }
 
-  const avoidable = audits.filter((audit) => !audit.forced_hq_loss);
+  const avoidable = audits.filter((audit) => audit.safe_turns > 0);
+  const forced = audits.filter((audit) => audit.forced_hq_loss);
+  const inconclusive = audits.filter((audit) => audit.inconclusive);
   console.log(
     JSON.stringify(
       {
         generationIds,
         games: games.length,
         immediateHqLosses: audits.length,
-        forcedHqLosses: audits.length - avoidable.length,
+        forcedHqLosses: forced.length,
         avoidableHqLosses: avoidable.length,
+        inconclusiveHqLosses: inconclusive.length,
+        maxNodesPerAudit: maxNodes,
         audits,
       },
       null,
@@ -135,6 +151,9 @@ async function main() {
   );
   if (process.argv.includes("--fail-on-avoidable") && avoidable.length) {
     process.exitCode = 2;
+  }
+  if (process.argv.includes("--fail-on-inconclusive") && inconclusive.length) {
+    process.exitCode = 3;
   }
 }
 
