@@ -4,12 +4,25 @@ import numpy as np
 
 from scripts.evaluate_counterfactual_challenger import (
     artifact_pair_probabilities,
+    terminal_improvement_gate,
     training_source_game_overlap,
     training_root_overlap,
 )
 
 
 class CounterfactualChallengerEvaluationTests(unittest.TestCase):
+    def test_terminal_gate_requires_enough_strictly_better_outcome_pairs(self):
+        baseline = {"log_loss": 0.7, "accuracy": 0.5}
+        improved = {"log_loss": 0.6, "accuracy": 0.6}
+        tied = {"log_loss": 0.7, "accuracy": 0.6}
+        regressed = {"log_loss": 0.6, "accuracy": 0.4}
+
+        self.assertFalse(terminal_improvement_gate(None, improved, 4, 4))
+        self.assertFalse(terminal_improvement_gate(baseline, improved, 3, 4))
+        self.assertFalse(terminal_improvement_gate(baseline, tied, 4, 4))
+        self.assertFalse(terminal_improvement_gate(baseline, regressed, 4, 4))
+        self.assertTrue(terminal_improvement_gate(baseline, improved, 4, 4))
+
     def test_pair_probability_uses_frozen_artifact_scores(self):
         artifact = {
             "feature_names": ["shape"],

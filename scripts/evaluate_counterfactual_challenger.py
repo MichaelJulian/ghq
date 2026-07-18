@@ -47,6 +47,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--challenger", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--minimum-pairs", type=int, default=8)
+    parser.add_argument("--minimum-terminal-pairs", type=int, default=4)
     parser.add_argument("--random-state", type=int, default=1784390403)
     parser.add_argument("--require-pass", action="store_true")
     return parser.parse_args()
@@ -70,6 +71,21 @@ def subset_metrics(
         return None
     labels = np.asarray([record["label"] for record in records], dtype=np.float64)
     return binary_metrics(labels, probabilities)
+
+
+def terminal_improvement_gate(
+    baseline: Dict[str, Any] | None,
+    challenger: Dict[str, Any] | None,
+    pair_count: int,
+    minimum_pairs: int,
+) -> bool:
+    return bool(
+        baseline is not None
+        and challenger is not None
+        and pair_count >= minimum_pairs
+        and challenger["log_loss"] < baseline["log_loss"]
+        and challenger["accuracy"] >= baseline["accuracy"]
+    )
 
 
 def training_root_overlap(
@@ -99,6 +115,8 @@ def main() -> None:
     feature_names, records, dataset_hash = load_counterfactual_reports(args.report)
     if args.minimum_pairs < 4:
         raise ValueError("--minimum-pairs must be at least 4")
+    if args.minimum_terminal_pairs < 2:
+        raise ValueError("--minimum-terminal-pairs must be at least 2")
     if len(records) < args.minimum_pairs:
         raise ValueError(
             f"need {args.minimum_pairs} trustworthy holdout pairs, found {len(records)}"
@@ -152,10 +170,11 @@ def main() -> None:
         [records[int(index)] for index in terminal_indices],
         challenger_probability[terminal_indices],
     )
-    terminal_gate = (
-        terminal_challenger is None
-        or terminal_challenger["log_loss"]
-        <= terminal_baseline["log_loss"] + 0.02
+    terminal_gate = terminal_improvement_gate(
+        terminal_baseline,
+        terminal_challenger,
+        len(terminal_indices),
+        args.minimum_terminal_pairs,
     )
     approved = all(
         [
@@ -179,6 +198,7 @@ def main() -> None:
         "pairs": len(records),
         "source_games": len({record["source_game_id"] for record in records}),
         "terminal_pairs": int(len(terminal_indices)),
+        "minimum_terminal_pairs": args.minimum_terminal_pairs,
         "baseline": baseline_metrics,
         "challenger": challenger_metrics,
         "baseline_by_root_player": baseline_players,
