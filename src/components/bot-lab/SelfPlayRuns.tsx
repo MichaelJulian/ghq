@@ -80,6 +80,18 @@ interface GenerationSummary {
       updatedAt?: string;
     }>;
   };
+  activeProgressRuntime?: {
+    games: number;
+    decisions: number;
+    depthAtLeastTwoDecisions: number;
+    fallbackDecisions: number;
+    unverifiedFallbackDecisions: number;
+    timedOutDecisions: number;
+    depthAtLeastTwoRate: number;
+    fallbackRate: number;
+    unverifiedFallbackRate: number;
+    timedOutRate: number;
+  };
   outcomes: Record<string, number>;
   terminations: Record<string, number>;
   fallbackRate: number;
@@ -507,6 +519,35 @@ export function SelfPlayRuns() {
                         {snapshot.timedOutDecisions}
                       </div>
                     ))}
+                  </div>
+                )}
+              {generationSummary.activeProgressRuntime &&
+                generationSummary.activeProgressRuntime.decisions > 0 && (
+                  <div className="mt-2 rounded bg-white/70 p-2 font-semibold text-slate-700">
+                    Live: {generationSummary.activeProgressRuntime.decisions}{" "}
+                    decisions across {generationSummary.activeProgressRuntime.games}{" "}
+                    games · depth≥2{" "}
+                    {(
+                      100 *
+                      generationSummary.activeProgressRuntime.depthAtLeastTwoRate
+                    ).toFixed(1)}
+                    % · fallback{" "}
+                    {(
+                      100 *
+                      generationSummary.activeProgressRuntime.fallbackRate
+                    ).toFixed(1)}
+                    % · unverified{" "}
+                    {(
+                      100 *
+                      generationSummary.activeProgressRuntime
+                        .unverifiedFallbackRate
+                    ).toFixed(1)}
+                    % · timeout{" "}
+                    {(
+                      100 *
+                      generationSummary.activeProgressRuntime.timedOutRate
+                    ).toFixed(1)}
+                    %
                   </div>
                 )}
               <div className="mt-1">

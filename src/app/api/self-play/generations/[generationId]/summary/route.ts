@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getRun } from "workflow/api";
 import { summarizeValueModelArena } from "@/game/self-play/arena-results";
 import { summarizeSearchRuntime } from "@/game/self-play/search-runtime-summary";
+import { summarizeActiveProgressRuntime } from "@/game/self-play/progress-runtime-summary";
 import { auditParatrooperTrainingPolicy } from "@/game/self-play/training-policy";
 import {
   readPersistedSelfPlayGames,
@@ -154,6 +155,7 @@ export async function GET(
         games: activeProgress.length,
         snapshots: activeProgress,
       },
+      activeProgressRuntime: summarizeActiveProgressRuntime(activeProgress),
       outcomes,
       terminations,
       decisions,
