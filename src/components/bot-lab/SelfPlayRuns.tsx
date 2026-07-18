@@ -60,6 +60,10 @@ interface GenerationSummary {
   games: number;
   expectedGames?: number;
   remainingGames?: number;
+  workflowRuns?: {
+    total: number;
+    statuses: Record<string, number>;
+  };
   outcomes: Record<string, number>;
   terminations: Record<string, number>;
   fallbackRate: number;
@@ -434,6 +438,16 @@ export function SelfPlayRuns() {
                 {generationSummary.remainingGames !== undefined &&
                   generationSummary.remainingGames > 0 &&
                   ` · ${generationSummary.remainingGames} remaining`}
+                {generationSummary.workflowRuns && (
+                  <>
+                    {" "}
+                    · workflows{" "}
+                    {Object.entries(generationSummary.workflowRuns.statuses)
+                      .filter(([, count]) => count > 0)
+                      .map(([status, count]) => `${status} ${count}`)
+                      .join(", ") || "status unavailable"}
+                  </>
+                )}
                 {" · outcomes "}
                 {JSON.stringify(generationSummary.outcomes)} · terminations{" "}
                 {JSON.stringify(generationSummary.terminations)}
@@ -444,16 +458,19 @@ export function SelfPlayRuns() {
                 {(100 * generationSummary.unverifiedFallbackRate).toFixed(1)}%
                 {generationSummary.timedOutRate !== undefined && (
                   <>
-                    {" "}· timeout {(
-                      100 * generationSummary.timedOutRate
-                    ).toFixed(1)}%
+                    {" "}
+                    · timeout{" "}
+                    {(100 * generationSummary.timedOutRate).toFixed(1)}%
                   </>
                 )}
                 {generationSummary.persistentCacheHitRate !== undefined && (
                   <>
-                    {" "}· shared cache {(
-                      100 * generationSummary.persistentCacheHitRate
-                    ).toFixed(1)}%
+                    {" "}
+                    · shared cache{" "}
+                    {(100 * generationSummary.persistentCacheHitRate).toFixed(
+                      1
+                    )}
+                    %
                   </>
                 )}
               </div>
@@ -462,8 +479,8 @@ export function SelfPlayRuns() {
                   generationSummary.provenance.valueModelCheckpoints.length >
                     0) && (
                   <div className="mt-1 break-all font-mono text-[10px] text-slate-500">
-                    code {generationSummary.provenance.codeVersions.join(", ")} ·
-                    models{" "}
+                    code {generationSummary.provenance.codeVersions.join(", ")}{" "}
+                    · models{" "}
                     {generationSummary.provenance.valueModelCheckpoints.join(
                       ", "
                     )}
