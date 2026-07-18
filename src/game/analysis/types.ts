@@ -64,6 +64,7 @@ export interface GhqTurnPurpose {
   escape_actions: number;
   purposeful_actions: number;
   unpurposed_actions: number;
+  setup_actions?: number;
   development_actions: number;
   formation_actions: number;
   quiet_actions: number;

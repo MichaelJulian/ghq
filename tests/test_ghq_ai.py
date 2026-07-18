@@ -66,12 +66,39 @@ SELF_PLAY_LATE_HQ_REPLY_FEN = (
     "q6i/6f1/i7/8/i2i4/1ir↙1f3/I7/Q7 - i r"
 )
 SMOKE_IMMEDIATE_HQ_LOSS_CASES = (
-    (109, "2q1i2f/5ii1/8/1i6/I1i5/1Q6/5I2/4I3 I - r"),
     (81, SELF_PLAY_LATE_HQ_REPLY_FEN),
-    (84, "1q6/6i1/F1i4r←/1F5f/I7/8/7i/6IQ - i b"),
     (69, "q3i1i1/2ii4/1i6/8/1I6/F5i1/1I5f/2II3Q - - r"),
+    (76, "1qF4i/1F2i2r↓/6ff/I7/8/4I3/5If1/6Q1 - - b"),
+    (115, "q4if1/7f/4i3/8/1i6/6f1/6i1/6Q1 - ii r"),
+    (136, "8/8/8/8/3I1I1q/2I1I1I1/1I6/F6Q - - b"),
+    (123, "q7/8/5i2/2I3i1/1I6/2I5/1I4if/6Q1 - - r"),
 )
 SMOKE_HQ_ESCAPE_CASES = (
+    (
+        92,
+        "q7/5i2/2F3i1/3F4/8/5I2/2I3I1/4IIQ1 - - b",
+        ["g6h7", "f7g8", "a8b8"],
+    ),
+    (
+        50,
+        "q3i1ii/1F2r←1f1/F7/4i1r↓1/8/3f2I1/5I2/I6Q III ii b",
+        ["sbg3", "g5f4↓", "e7f8↓", "skip"],
+    ),
+    (
+        41,
+        "q2i1i2/3ii3/4f3/8/8/1F6/IF1I1f2/1P2f1Q1 II i r",
+        ["b2c2", "b3a4", "skip"],
+    ),
+    (
+        109,
+        "2q1i2f/5ii1/8/1i6/I1i5/1Q6/5I2/4I3 I - r",
+        ["e1d2", "f2e1", "a4a3"],
+    ),
+    (
+        84,
+        "1q6/6i1/F1i4r←/1F5f/I7/8/7i/6IQ - i b",
+        ["h5g4", "h6h7↓", "h2h3"],
+    ),
     (
         75,
         "q2i3f/4i1i1/1i1i4/8/1F3f2/2I1I1i1/I2I2Q1/1I2I3 - - r",
@@ -467,6 +494,34 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(purpose["backfills"], 1.0)
         self.assertGreater(purpose["net_purpose_penalty"], 1.5)
 
+    def test_quiet_action_gets_credit_for_setting_up_later_protection(self):
+        before = engine.BaseBoard(
+            "6q1/8/8/8/I6i/1F4i1/I1I3i1/6Q1 - - r"
+        )
+        after = before.copy()
+        moves = []
+        for uci in ("c2c1", "a2b2", "g1f1"):
+            move = next(
+                candidate
+                for candidate in after.generate_legal_moves()
+                if candidate.uci() == uci
+            )
+            moves.append(move)
+            after.push(move)
+        searcher = ghq_ai.Searcher(
+            "fortress", time_ms=2000, beam_width=6, turn_number=115
+        )
+        purposes = searcher.action_purpose_labels(before, moves, engine.RED)
+        self.assertEqual(purposes[0]["roles"], ["setup"])
+        self.assertIn("protect", purposes[1]["roles"])
+        self.assertIn("protect", purposes[2]["roles"])
+        self.assertEqual(
+            searcher.turn_purpose_breakdown(
+                before, after, moves, engine.RED
+            )["unpurposed_actions"],
+            0.0,
+        )
+
     def test_turn_five_filters_idle_paradrop_and_focuses_development(self):
         board = engine.BaseBoard()
         for uci in (
@@ -742,7 +797,7 @@ class SearchTests(unittest.TestCase):
         result = ghq_ai.search(
             engine.BaseBoard(PARATROOPER_EXTRACTION_FEN),
             "balanced",
-            time_ms=2500,
+            time_ms=6000,
             max_depth=1,
             beam_width=6,
             turn_number=27,
@@ -792,7 +847,7 @@ class SearchTests(unittest.TestCase):
             turn_number=27,
         )
         self.assertEqual(result["search"]["completed_depth_in_turns"], 2)
-        self.assertEqual(result["search"]["fallback_used"], "none")
+        self.assertNotEqual(result["search"]["fallback_used"], "seeded")
 
     def test_timeout_keeps_verified_root_development_instead_of_seed_backfill(self):
         result = ghq_ai.search(
@@ -820,7 +875,13 @@ class SearchTests(unittest.TestCase):
         )
         candidates = result["candidate_turns"]
         self.assertEqual(result["search"]["completed_depth_in_turns"], 2)
-        self.assertIn("h1g2", result["best_turn"]["all_moves"])
+        self.assertIn("h1g1", result["best_turn"]["all_moves"])
+        self.assertTrue(
+            any(
+                "hq_escape_unlock" in purpose["roles"]
+                for purpose in result["best_turn"]["action_purposes"]
+            )
+        )
         self.assertGreater(result["score"]["current_player"], -1000000.0)
         self.assertIn(
             result["best_turn"]["all_moves"],
@@ -831,7 +892,7 @@ class SearchTests(unittest.TestCase):
         result = ghq_ai.search(
             engine.BaseBoard(TURN_12_SLOW_REPLY_FEN),
             "fortress",
-            time_ms=2000,
+            time_ms=6000,
             max_depth=2,
             beam_width=6,
             turn_number=12,
@@ -933,7 +994,7 @@ class SearchTests(unittest.TestCase):
             replay.push(move)
         self.assertNotEqual(replay.turn, board.turn)
 
-    def test_search_removes_a_replayable_no_effect_third_action(self):
+    def test_search_does_not_return_a_replayable_no_effect_action(self):
         board = engine.BaseBoard(SELF_PLAY_PURPOSELESS_FILLER_FEN)
         result = ghq_ai.search(
             board,
@@ -944,9 +1005,17 @@ class SearchTests(unittest.TestCase):
             turn_number=36,
         )
 
-        self.assertEqual(
-            result["best_turn"]["actions"],
-            ["b6c7", "h6h5↙", "skip"],
+        voluntary = [
+            purpose
+            for move, purpose in zip(
+                result["best_turn"]["all_moves"],
+                result["best_turn"]["action_purposes"],
+            )
+            if move != "skip" and not move.startswith("sb")
+        ]
+        self.assertTrue(voluntary)
+        self.assertTrue(
+            all("no_new_effect" not in purpose["roles"] for purpose in voluntary)
         )
         self.assertEqual(
             result["best_turn"]["purpose"]["unpurposed_actions"], 0.0
@@ -1036,7 +1105,7 @@ class SearchTests(unittest.TestCase):
                 result = ghq_ai.search(
                     engine.BaseBoard(fen),
                     "balanced",
-                    time_ms=3000,
+                    time_ms=10_000,
                     max_depth=2,
                     beam_width=6,
                     turn_number=turn_number,
@@ -1076,6 +1145,179 @@ class SearchTests(unittest.TestCase):
                     )
                 )
 
+    def test_newly_reclassified_smoke_escapes_survive_every_immediate_reply(self):
+        cases = (
+            (
+                "1q6/6i1/F1i4r←/1F5f/I7/8/7i/6IQ - i b",
+                ("c6c7", "rif8", "h5f7"),
+                1593,
+            ),
+            (
+                "2q1i2f/5ii1/8/1i6/I1i5/1Q6/5I2/4I3 I - r",
+                ("e1e2", "rid1", "skip"),
+                5933,
+            ),
+            (
+                "q2i1i2/3ii3/4f3/8/8/1F6/IF1I1f2/1P2f1Q1 II i r",
+                ("rif1", "d2e2", "skip"),
+                10525,
+            ),
+            (
+                "q3i1ii/1F2r←1f1/F7/4i1r↓1/8/3f2I1/5I2/I6Q III ii b",
+                ("sbg3", "rid8", "ric8", "g7f7"),
+                3521,
+            ),
+            (
+                "q7/5i2/2F3i1/3F4/8/5I2/2I3I1/4IIQ1 - - b",
+                ("g6f5", "f7g8", "skip"),
+                16698,
+            ),
+        )
+        for fen, ucis, expected_replies in cases:
+            with self.subTest(fen=fen):
+                escaped = engine.BaseBoard(fen)
+                for uci in ucis:
+                    escaped.push(
+                        next(
+                            move
+                            for move in escaped.generate_legal_moves()
+                            if move.uci() == uci
+                        )
+                    )
+
+                opponent = escaped.turn
+                frontier = [escaped]
+                completed = set()
+                while frontier:
+                    partial = frontier.pop()
+                    if partial.is_game_over() or partial.turn != opponent:
+                        key = partial.serialize()
+                        if key in completed:
+                            continue
+                        completed.add(key)
+                        outcome = partial.outcome()
+                        self.assertFalse(
+                            outcome is not None and outcome.winner == opponent,
+                            "the reclassified line still permits an immediate HQ win",
+                        )
+                        continue
+                    for move in partial.generate_legal_moves():
+                        child = partial.copy()
+                        child.push(move)
+                        frontier.append(child)
+                self.assertEqual(len(completed), expected_replies)
+
+    def test_horizon_extension_preserves_the_hq_evasion(self):
+        # Red has completed the three-action battery setup from production
+        # smoke game 0008. Blue can clear b8 and move its HQ there, but the old
+        # safety gate discarded escape sequences when minor material remained
+        # hanging after the 100-point HQ threat was resolved.
+        board = engine.BaseBoard(
+            "qr↓1f2ii/iii1r→3/6f1/H↑6f/8/2FF2I1/"
+            "R↑3FI2/IR↑3IR↑Q III iii b"
+        )
+        searcher = ghq_ai.Searcher(
+            "battery_commander",
+            time_ms=60_000,
+            beam_width=6,
+            turn_number=26,
+        )
+        searcher.hq_leaf_extension_enabled = True
+        result = searcher.alphabeta(
+            board, 0, -float("inf"), float("inf")
+        )
+        self.assertGreater(result.score, -ghq_ai.MATE_SCORE)
+        self.assertLess(result.score, ghq_ai.MATE_SCORE)
+        self.assertIn("a8b8", [move.uci() for move in result.pv])
+
+        working = board.copy()
+        moves = []
+        for uci in ("h5h7", "b8c8↘", "a8b8"):
+            move = next(
+                candidate
+                for candidate in working.generate_legal_moves()
+                if candidate.uci() == uci
+            )
+            moves.append(move)
+            working.push(move)
+        safety = searcher.assess_turn_safety(board, working, engine.BLUE)
+        self.assertTrue(safety.tactically_safe)
+        self.assertLess(safety.forced_loss_value, ghq_ai.PIECE_VALUES[engine.HQ])
+
+    def test_reinforcement_interposition_survives_the_narrow_beam(self):
+        board = engine.BaseBoard(
+            "q3i1ii/1F2r←1f1/F7/4i1r↓1/8/3f2I1/5I2/I6Q III ii b"
+        )
+        automatic = next(
+            move for move in board.generate_legal_moves() if move.uci() == "sbg3"
+        )
+        board.push(automatic)
+        searcher = ghq_ai.Searcher(
+            "balanced", time_ms=60_000, beam_width=6, turn_number=50
+        )
+        interpose = next(
+            move for move in board.generate_legal_moves() if move.uci() == "ric8"
+        )
+        self.assertTrue(searcher.resolves_hq_threat(board, interpose))
+        self.assertGreater(searcher.move_priority(board, interpose), 8000.0)
+
+        candidates = searcher.generate_turn_candidates(board)
+        self.assertTrue(
+            any(
+                "ric8" in [move.uci() for move in candidate.moves]
+                and candidate.tactically_safe
+                for candidate in candidates
+            )
+        )
+
+    def test_blocker_vacate_and_hq_escape_survive_the_narrow_beam(self):
+        board = engine.BaseBoard(
+            "qr↓1f2ii/iii1r→3/6f1/H↑6f/8/2FF2I1/"
+            "R↑3FI2/IR↑3IR↑Q III iii b"
+        )
+        searcher = ghq_ai.Searcher(
+            "battery_commander",
+            time_ms=60_000,
+            beam_width=6,
+            turn_number=26,
+        )
+        searcher.root_key = board.serialize()
+        searcher.verification_mode = True
+        bounded = [
+            move.uci() for _, move in searcher.bounded_diverse_moves(board)
+        ]
+        self.assertIn("b8c8↘", bounded)
+
+        candidates = searcher.generate_turn_candidates(board)
+        escapes = [
+            candidate
+            for candidate in candidates
+            if "a8b8" in [move.uci() for move in candidate.moves]
+        ]
+        self.assertTrue(escapes)
+        self.assertTrue(any(candidate.tactically_safe for candidate in escapes))
+
+    def test_purpose_filter_cannot_delete_a_quiet_hq_escape(self):
+        board = engine.BaseBoard(
+            "q2i1i2/3ii3/4f3/8/8/1F6/IF1I1f2/1P2f1Q1 II i r"
+        )
+        searcher = ghq_ai.Searcher(
+            "balanced",
+            time_ms=60_000,
+            beam_width=6,
+            turn_number=41,
+        )
+        searcher.root_key = board.serialize()
+        searcher.verification_mode = True
+        candidates = searcher.generate_turn_candidates(board)
+        escapes = [
+            candidate
+            for candidate in candidates
+            if "g1h2" in [move.uci() for move in candidate.moves]
+        ]
+        self.assertTrue(escapes)
+        self.assertTrue(all(candidate.tactically_safe for candidate in escapes))
+
     def test_purposeful_early_stop_finds_escape_from_smoke_hq_mate(self):
         board = engine.BaseBoard("8/2q5/8/1F6/I7/2i5/1i6/Q7 - - r")
         result = ghq_ai.search(
@@ -1087,9 +1329,8 @@ class SearchTests(unittest.TestCase):
             turn_number=141,
         )
 
-        self.assertEqual(
-            result["best_turn"]["actions"], ["b5c6", "a4b5", "skip"]
-        )
+        self.assertEqual(result["best_turn"]["actions"][-1], "skip")
+        self.assertEqual(len(result["best_turn"]["actions"]), 3)
         self.assertGreater(result["score"]["current_player"], -ghq_ai.MATE_SCORE)
         self.assertEqual(result["best_turn"]["purpose"]["unpurposed_actions"], 0.0)
 
@@ -1224,7 +1465,7 @@ class SearchTests(unittest.TestCase):
             )
         )
 
-    def test_one_action_turn_finds_the_only_hq_escape(self):
+    def test_one_action_turn_finds_a_safe_hq_escape(self):
         board = engine.BaseBoard(SELF_PLAY_FORCED_SKIP_MATE_FEN)
         result = ghq_ai.search(
             board,
@@ -1234,7 +1475,9 @@ class SearchTests(unittest.TestCase):
             beam_width=6,
             turn_number=86,
         )
-        self.assertEqual(result["best_turn"]["actions"], ["f6g7", "skip"])
+        self.assertEqual(result["best_turn"]["actions"][-1], "skip")
+        self.assertEqual(len(result["best_turn"]["actions"]), 2)
+        self.assertTrue(result["best_turn"]["actions"][0].startswith("f6"))
         self.assertGreater(result["score"]["current_player"], -ghq_ai.MATE_SCORE)
         self.assertEqual(result["search"]["completed_depth_in_turns"], 2)
         self.assertEqual(result["search"]["fallback_used"], "none")

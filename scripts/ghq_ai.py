@@ -851,6 +851,7 @@ class Searcher:
         self.safety_cache: Dict[Tuple[str, bool], Tuple[float, float, float]] = {}
         self.immediate_hq_capture_cache: Dict[str, bool] = {}
         self.same_turn_hq_capture_cache: Dict[str, bool] = {}
+        self.hq_defense_move_cache: Dict[Tuple[str, str], bool] = {}
         self.root_key: Optional[str] = None
         self.root_fallback: Optional[TurnCandidate] = None
         self.root_ranked_turns: List[Tuple[float, TurnCandidate]] = []
@@ -864,6 +865,10 @@ class Searcher:
         # every retained root has a complete opponent reply may the broader
         # user-requested beam consume the remaining budget.
         self.verification_mode = False
+        # Enabled by the production depth-two path. Depth-one analysis keeps
+        # its historical cost envelope instead of silently becoming a
+        # selective depth-two search.
+        self.hq_leaf_extension_enabled = False
 
     def stagnation_factor(self) -> float:
         """Escalate only after several consecutive non-progress turns."""
@@ -1122,6 +1127,8 @@ class Searcher:
         before: engine.BaseBoard,
         moves: Sequence[engine.Move],
         mover: bool,
+        retrospective: bool = True,
+        include_tactical_roles: bool = True,
     ) -> List[Dict[str, Any]]:
         """Explain the concrete job performed by every action in a turn."""
         working = before.copy()
@@ -1135,7 +1142,13 @@ class Searcher:
                 roles.append("develop")
             if self.unlocks_airborne_extraction(working, move):
                 roles.append("unlock")
-            if self.unlocks_immediate_hq_capture(working, move):
+            if include_tactical_roles and self.unlocks_hq_escape(working, move):
+                roles.append("hq_escape_unlock")
+            if include_tactical_roles and self.resolves_hq_threat(working, move):
+                roles.append("hq_defense")
+            if include_tactical_roles and self.unlocks_immediate_hq_capture(
+                working, move
+            ):
                 roles.append("hq_capture_unlock")
             if move.from_square is not None and move.to_square is not None:
                 if (
@@ -1191,6 +1204,77 @@ class Searcher:
                 roles.append("no_new_effect")
             result.append({"move": move.uci(), "roles": list(dict.fromkeys(roles))})
             working = child
+
+        if retrospective:
+            # Purpose can be relational.  A quiet first action may appear to
+            # do nothing in isolation while creating the geometry that makes
+            # a later protection, threat, or formation action work.  Replay
+            # the turn without each apparent filler and credit such moves as
+            # setup instead of letting the no-effect filter discard them.
+            meaningful_roles = {
+                "capture",
+                "save",
+                "develop",
+                "unlock",
+                "extract",
+                "threat",
+                "protect",
+                "form",
+                "mobilize",
+                "advance",
+            }
+            for omitted, item in enumerate(result):
+                if item["roles"] != ["no_new_effect"]:
+                    continue
+                counter = before.copy()
+                counter_moves: List[engine.Move] = []
+                counter_index: Dict[int, int] = {}
+                replayable = True
+                for original_index, original_move in enumerate(moves):
+                    if original_index == omitted:
+                        continue
+                    replay_move = next(
+                        (
+                            legal
+                            for legal in counter.generate_legal_moves()
+                            if legal.uci() == original_move.uci()
+                        ),
+                        None,
+                    )
+                    if replay_move is None:
+                        replayable = False
+                        break
+                    counter_index[original_index] = len(counter_moves)
+                    counter_moves.append(replay_move)
+                    counter.push(replay_move)
+                if not replayable:
+                    # Keep this separate from the concrete airborne/HQ
+                    # ``unlock`` roles detected above.  It is retrospective,
+                    # dependent purpose and should not receive forcing-line
+                    # priority merely because a later quiet move becomes
+                    # illegal without it.
+                    item["roles"] = ["setup"]
+                    continue
+                counter_labels = self.action_purpose_labels(
+                    before,
+                    counter_moves,
+                    mover,
+                    retrospective=False,
+                    include_tactical_roles=False,
+                )
+                for original_index in range(omitted + 1, len(moves)):
+                    replay_index = counter_index.get(original_index)
+                    if replay_index is None:
+                        continue
+                    original_roles = meaningful_roles.intersection(
+                        result[original_index]["roles"]
+                    )
+                    replay_roles = meaningful_roles.intersection(
+                        counter_labels[replay_index]["roles"]
+                    )
+                    if original_roles - replay_roles:
+                        item["roles"] = ["setup"]
+                        break
         return result
 
     def early_plan_score(self, action_purposes: Sequence[Dict[str, Any]]) -> float:
@@ -1204,6 +1288,8 @@ class Searcher:
             "protect": 1.5,
             "extract": 2.5,
             "unlock": 1.5,
+            "hq_escape_unlock": 5.0,
+            "hq_defense": 5.0,
             "hq_capture_unlock": 5.0,
             "mobilize": 1.8,
             "advance": 1.5,
@@ -1219,9 +1305,12 @@ class Searcher:
         after: engine.BaseBoard,
         moves: Sequence[engine.Move],
         mover: bool,
+        retrospective: bool = True,
     ) -> Dict[str, float]:
         """Measure what a full turn changed, beyond merely spending actions."""
-        action_purposes = self.action_purpose_labels(before, moves, mover)
+        action_purposes = self.action_purpose_labels(
+            before, moves, mover, retrospective=retrospective
+        )
         counted_actions = sum(
             move.name not in ("AutoCapture", "Skip") for move in moves
         )
@@ -1235,6 +1324,9 @@ class Searcher:
         )
         unpurposed_actions = sum(
             1 for item in action_purposes if item["roles"] == ["no_new_effect"]
+        )
+        setup_actions = sum(
+            1 for item in action_purposes if item["roles"] == ["setup"]
         )
         development_actions = sum(
             1 for item in action_purposes if "develop" in item["roles"]
@@ -1369,6 +1461,11 @@ class Searcher:
         )
         waste = (
             1.4 * unpurposed_actions
+            # Retrospective setup is useful evidence for explanation and
+            # training, but it is still dependent on a later action.  Keep
+            # its search cost equal to the former no-effect label until a
+            # tactical arena proves that relaxing it cannot crowd out mates.
+            + 1.4 * setup_actions
             + 1.6 * backfills
             + 1.0 * reversals
             + 0.9 * pure_rotations
@@ -1407,6 +1504,7 @@ class Searcher:
             "escape_actions": float(extractions),
             "purposeful_actions": float(purposeful_actions),
             "unpurposed_actions": float(unpurposed_actions),
+            "setup_actions": float(setup_actions),
             "development_actions": float(development_actions),
             "formation_actions": float(formation_actions),
             "quiet_actions": float(quiet_actions),
@@ -1569,7 +1667,7 @@ class Searcher:
     ) -> TacticalSafety:
         if after.is_game_over():
             return TacticalSafety(0.0, 0.0, 100.0, 0.0, 0.0, True)
-        baseline, _, _ = self.tactical_risk(before, mover)
+        baseline, baseline_forced, _ = self.tactical_risk(before, mover)
         risk, forced, critical = self.tactical_risk(after, mover)
         opponent = not mover
         opponent_turn = (
@@ -1589,10 +1687,17 @@ class Searcher:
         # An existing mate threat is not a baseline risk the mover may simply
         # preserve. If the completed turn still permits an HQ capture, it is
         # objectively unsafe regardless of material compensation.
-        safe = (
-            not loses_hq_this_turn
-            and uncovered <= 0.75
-            and forced <= compensation + 0.75
+        resolved_hq_threat = (
+            baseline_forced >= PIECE_VALUES[engine.HQ]
+            and not loses_hq_this_turn
+            and forced < PIECE_VALUES[engine.HQ]
+        )
+        safe = not loses_hq_this_turn and (
+            resolved_hq_threat
+            or (
+                uncovered <= 0.75
+                and forced <= compensation + 0.75
+            )
         )
         forced_loss = max(
             forced,
@@ -1763,6 +1868,78 @@ class Searcher:
             if self.home_distance(destination, board.turn) < self.home_distance(source, board.turn):
                 return True
         return False
+
+    def unlocks_hq_escape(
+        self, board: engine.BaseBoard, move: engine.Move
+    ) -> bool:
+        """Whether vacating a neighboring square creates an HQ escape.
+
+        A direct HQ move already receives forcing priority.  This covers the
+        preceding action when a friendly blocker must first clear the only
+        safe destination, as in ``b7-b6, HQ a8-b7`` from production smoke.
+        """
+        if (
+            move.name in ("AutoCapture", "Skip")
+            or move.from_square is None
+            or move.to_square is None
+            or move.from_square == move.to_square
+            or board.turn_moves >= self.max_actions - 1
+            or board.piece_type_at(move.from_square) == engine.HQ
+        ):
+            return False
+        own_hqs = board.pieces(engine.HQ, board.turn)
+        if not any(
+            chebyshev(move.from_square, hq_square) == 1
+            for hq_square in own_hqs
+        ):
+            return False
+        _, baseline_forced, _ = self.tactical_risk(board, board.turn)
+        if baseline_forced < PIECE_VALUES[engine.HQ]:
+            return False
+
+        child = board.copy()
+        child.push(move)
+        if child.turn != board.turn or child.is_game_over():
+            return False
+        for hq_move in child.generate_legal_moves():
+            if (
+                hq_move.from_square is None
+                or hq_move.to_square != move.from_square
+                or child.piece_type_at(hq_move.from_square) != engine.HQ
+            ):
+                continue
+            escaped = child.copy()
+            escaped.push(hq_move)
+            _, escaped_forced, _ = self.tactical_risk(escaped, board.turn)
+            if escaped_forced < PIECE_VALUES[engine.HQ]:
+                return True
+        return False
+
+    def resolves_hq_threat(
+        self, board: engine.BaseBoard, move: engine.Move
+    ) -> bool:
+        """Whether this action removes an otherwise forced HQ loss.
+
+        A reinforcement can interpose on an artillery line without moving the
+        HQ or vacating an escape square. Such actions need check-evasion
+        priority while a complete turn is still being assembled.
+        """
+        if move.name in ("AutoCapture", "Skip"):
+            return False
+        cache_key = (board.serialize(), move.uci())
+        cached = self.hq_defense_move_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        _, baseline_forced, _ = self.tactical_risk(board, board.turn)
+        if baseline_forced < PIECE_VALUES[engine.HQ]:
+            self.hq_defense_move_cache[cache_key] = False
+            return False
+        child = board.copy()
+        child.push(move)
+        _, child_forced, _ = self.tactical_risk(child, board.turn)
+        resolved = child_forced < PIECE_VALUES[engine.HQ]
+        self.hq_defense_move_cache[cache_key] = resolved
+        return resolved
 
     def has_immediate_hq_capture(self, board: engine.BaseBoard) -> bool:
         """Whether the side to act can take the enemy HQ with one legal action."""
@@ -1959,6 +2136,15 @@ class Searcher:
             # Quiet blocker-vacating moves such as g3-f4 must survive long
             # enough for the next action, h2-g3, to be considered.
             priority += 4800.0
+        if self.unlocks_hq_escape(board, move):
+            # Clearing the only HQ flight square is part of the escape, not a
+            # generic infantry shuffle. It must survive even the narrow
+            # verification beam.
+            priority += 8200.0
+        if self.resolves_hq_threat(board, move):
+            # Interpositions and engagements that turn off a forced HQ loss
+            # are check evasions even when they capture nothing.
+            priority += 8500.0
         if self.unlocks_immediate_hq_capture(board, move):
             # A quiet action that makes mate legal on the next action is more
             # forcing than ordinary captures and must not be lost to the
@@ -2136,6 +2322,8 @@ class Searcher:
                     key[0]
                     in (
                         "hq_escape",
+                        "hq_escape_unlock",
+                        "hq_defense",
                         "airborne_extraction",
                         "unlock_and_extract",
                         "escape_and_extract",
@@ -2193,11 +2381,17 @@ class Searcher:
         airborne_extractions: List[Tuple[int, int]] = []
         hq_escapes: List[Tuple[int, int]] = []
         extraction_unlocks: List[str] = []
+        hq_escape_unlocks: List[str] = []
+        hq_defenses: List[str] = []
         hq_capture_unlocks: List[str] = []
         for move in moves:
             piece_type = self.move_piece_type(working, move)
             if self.unlocks_airborne_extraction(working, move):
                 extraction_unlocks.append(move.uci())
+            if self.unlocks_hq_escape(working, move):
+                hq_escape_unlocks.append(move.uci())
+            if self.resolves_hq_threat(working, move):
+                hq_defenses.append(move.uci())
             if self.unlocks_immediate_hq_capture(working, move):
                 hq_capture_unlocks.append(move.uci())
             if move.from_square is not None and move.to_square is not None:
@@ -2232,6 +2426,8 @@ class Searcher:
         keys.extend(("artillery_escape", source, destination) for source, destination in artillery_escapes)
         keys.extend(("airborne_extraction", source, destination) for source, destination in airborne_extractions)
         keys.extend(("airborne_unlock", uci) for uci in extraction_unlocks)
+        keys.extend(("hq_escape_unlock", uci) for uci in hq_escape_unlocks)
+        keys.extend(("hq_defense", uci) for uci in hq_defenses)
         keys.extend(("hq_capture_unlock", uci) for uci in hq_capture_unlocks)
         for unlock in extraction_unlocks:
             for airborne_extraction in airborne_extractions:
@@ -2267,7 +2463,9 @@ class Searcher:
                 else:
                     classes.add("artillery_relocation")
             working.push(move)
-        purposes = self.action_purpose_labels(board, moves, board.turn)
+        purposes = self.action_purpose_labels(
+            board, moves, board.turn, retrospective=False
+        )
         if any("develop" in item["roles"] for item in purposes):
             classes.add("development")
         if any("form" in item["roles"] for item in purposes):
@@ -2425,8 +2623,12 @@ class Searcher:
         except SearchTimeout:
             return
         if safety.tactically_safe:
-            purpose = self.turn_purpose_breakdown(root, partial.board, partial.moves, mover)
-            action_purposes = self.action_purpose_labels(root, partial.moves, mover)
+            purpose = self.turn_purpose_breakdown(
+                root, partial.board, partial.moves, mover, retrospective=False
+            )
+            action_purposes = self.action_purpose_labels(
+                root, partial.moves, mover, retrospective=False
+            )
             if any("no_new_effect" in item["roles"] for item in action_purposes):
                 return
             if self.turn_number <= EARLY_GAME_LAST_TURN:
@@ -2481,10 +2683,66 @@ class Searcher:
                 zip(candidate.moves, candidate.action_purposes)
             )
             if move.name not in ("AutoCapture", "Skip")
-            and "no_new_effect" in purpose["roles"]
+            and bool(
+                {"no_new_effect", "setup"}.intersection(purpose["roles"])
+            )
         ]
-        if len(removable) != 1:
+        if not removable:
             return None
+        if len(removable) > 1:
+            viable_removals: List[int] = []
+            for omitted in removable:
+                probe = root.copy()
+                probe_moves: List[engine.Move] = []
+                replayable = True
+                for index, original_move in enumerate(candidate.moves):
+                    if index == omitted:
+                        continue
+                    replay_move = next(
+                        (
+                            move
+                            for move in probe.generate_legal_moves()
+                            if move.uci() == original_move.uci()
+                        ),
+                        None,
+                    )
+                    if replay_move is None:
+                        replayable = False
+                        break
+                    probe_moves.append(replay_move)
+                    probe.push(replay_move)
+                if not replayable or probe.turn != mover or probe.is_game_over():
+                    continue
+                probe_skip = next(
+                    (
+                        move
+                        for move in probe.generate_legal_moves()
+                        if move.name == "Skip"
+                    ),
+                    None,
+                )
+                if probe_skip is None:
+                    continue
+                probe_moves.append(probe_skip)
+                probe.push(probe_skip)
+                probe_purposes = self.action_purpose_labels(
+                    root, probe_moves, mover, retrospective=True
+                )
+                voluntary = [
+                    purpose
+                    for move, purpose in zip(probe_moves, probe_purposes)
+                    if move.name not in ("AutoCapture", "Skip")
+                ]
+                if len(voluntary) == 2 and all(
+                    "no_new_effect" not in purpose["roles"]
+                    for purpose in voluntary
+                ):
+                    viable_removals.append(omitted)
+            if not viable_removals:
+                return None
+            # Prefer deleting the latest disposable action. Earlier quiet
+            # moves are more likely to be setup for what follows.
+            removable = [max(viable_removals)]
 
         working = root.copy()
         cleaned_moves: List[engine.Move] = []
@@ -2519,7 +2777,9 @@ class Searcher:
         cleaned_moves.append(skip)
         working.push(skip)
 
-        action_purposes = self.action_purpose_labels(root, cleaned_moves, mover)
+        action_purposes = self.action_purpose_labels(
+            root, cleaned_moves, mover, retrospective=True
+        )
         voluntary_purposes = [
             purpose
             for move, purpose in zip(cleaned_moves, action_purposes)
@@ -2530,7 +2790,7 @@ class Searcher:
         ):
             return None
         purpose = self.turn_purpose_breakdown(
-            root, working, cleaned_moves, mover
+            root, working, cleaned_moves, mover, retrospective=True
         )
         if purpose["paratrooper_mission_penalty"] > 0.0:
             return None
@@ -2733,10 +2993,17 @@ class Searcher:
                 safety = self.assess_turn_safety(board, partial.board, original_turn)
                 if safety.tactically_safe:
                     purpose = self.turn_purpose_breakdown(
-                        board, partial.board, partial.moves, original_turn
+                        board,
+                        partial.board,
+                        partial.moves,
+                        original_turn,
+                        retrospective=False,
                     )
                     action_purposes = self.action_purpose_labels(
-                        board, partial.moves, original_turn
+                        board,
+                        partial.moves,
+                        original_turn,
+                        retrospective=False,
                     )
                     if self.turn_number <= EARLY_GAME_LAST_TURN:
                         if not self.early_structure_allowed(
@@ -2774,7 +3041,11 @@ class Searcher:
                         candidate.purpose_penalty
                         + candidate.paratrooper_mission_penalty,
                         sum(
-                            "no_new_effect" in item["roles"]
+                            bool(
+                                {"no_new_effect", "setup"}.intersection(
+                                    item["roles"]
+                                )
+                            )
                             for item in candidate.action_purposes
                         ),
                         -candidate.early_plan_score,
@@ -2790,10 +3061,17 @@ class Searcher:
             terminal = self.terminal_score(partial.board, 0)
             safety = self.assess_turn_safety(board, partial.board, original_turn)
             purpose = self.turn_purpose_breakdown(
-                board, partial.board, partial.moves, original_turn
+                board,
+                partial.board,
+                partial.moves,
+                original_turn,
+                retrospective=False,
             )
             action_purposes = self.action_purpose_labels(
-                board, partial.moves, original_turn
+                board,
+                partial.moves,
+                original_turn,
+                retrospective=False,
             )
             candidates.append(
                 TurnCandidate(
@@ -2859,14 +3137,22 @@ class Searcher:
         # Purpose is a lexicographic constraint at every phase, not merely a
         # small evaluation term. If a fully purposeful legal turn exists, a
         # square swap/rotation/filler action cannot crowd it out. If every turn
-        # has filler, retain only those with the fewest such actions.
+        # has filler, retain only those with the fewest such actions. Safety is
+        # the higher-order constraint: a tidy losing turn must never cause a
+        # messy HQ escape to be deleted before minimax sees it.
         if candidates:
+            safety_pool = [
+                candidate for candidate in candidates if candidate.tactically_safe
+            ]
+            purpose_pool = safety_pool if safety_pool else candidates
             no_effect_counts = [
                 sum(
-                    "no_new_effect" in item["roles"]
+                    bool(
+                        {"no_new_effect", "setup"}.intersection(item["roles"])
+                    )
                     for item in candidate.action_purposes
                 )
-                for candidate in candidates
+                for candidate in purpose_pool
             ]
             minimum_no_effect = min(no_effect_counts)
             permitted_no_effect = minimum_no_effect
@@ -2874,7 +3160,7 @@ class Searcher:
                 permitted_no_effect += 1
             focused = [
                 candidate
-                for candidate, count in zip(candidates, no_effect_counts)
+                for candidate, count in zip(purpose_pool, no_effect_counts)
                 if count <= permitted_no_effect
             ]
             self.purpose_filtered_turns += len(candidates) - len(focused)
@@ -2919,7 +3205,13 @@ class Searcher:
             key=lambda item: (
                 0
                 if item[0][0]
-                in ("hq_escape", "unlock_and_extract", "escape_and_extract")
+                in (
+                    "hq_escape",
+                    "hq_escape_unlock",
+                    "hq_defense",
+                    "unlock_and_extract",
+                    "escape_and_extract",
+                )
                 else 1,
                 self.candidate_sort_key(item[1], original_turn),
             ),
@@ -2991,6 +3283,62 @@ class Searcher:
             return best
 
         if turns_left <= 0:
+            # GHQ has check-like threats even though the rules do not name a
+            # check state.  A battery or infantry combination can finish a
+            # turn with an HQ capture already legal for its next turn while
+            # the defender receives exactly one chance to disrupt it.  A
+            # plain depth-two leaf used to stop here and miss the forced mate.
+            if self.has_same_turn_hq_capture(board):
+                return SearchResult(
+                    MATE_SCORE if board.turn == engine.RED else -MATE_SCORE,
+                    [],
+                )
+
+            latent_attacker = not board.turn
+            latent_probe = self.board_as_turn(board, latent_attacker)
+            if (
+                self.hq_leaf_extension_enabled
+                and self.has_same_turn_hq_capture(latent_probe)
+            ):
+                evasions = self.generate_turn_candidates(board)
+                if evasions:
+                    maximizing = board.turn == engine.RED
+                    best = SearchResult(
+                        -math.inf if maximizing else math.inf,
+                        [],
+                    )
+                    for turn in evasions:
+                        self.check_time()
+                        if self.has_same_turn_hq_capture(turn.board):
+                            leaf_score = (
+                                MATE_SCORE
+                                if turn.board.turn == engine.RED
+                                else -MATE_SCORE
+                            )
+                        else:
+                            leaf_score = self.static_score(turn.board)
+                        transition_penalty = (
+                            turn.purpose_penalty
+                            + turn.paratrooper_mission_penalty
+                        )
+                        candidate = (
+                            leaf_score - transition_penalty
+                            if maximizing
+                            else leaf_score + transition_penalty
+                        )
+                        if (
+                            maximizing and candidate > best.score
+                        ) or (
+                            not maximizing and candidate < best.score
+                        ):
+                            best = SearchResult(candidate, list(turn.moves))
+                        if maximizing:
+                            alpha = max(alpha, best.score)
+                        else:
+                            beta = min(beta, best.score)
+                        if beta <= alpha:
+                            break
+                    return best
             return SearchResult(self.static_score(board), [])
 
         key = (board.serialize(), turns_left)
@@ -3128,7 +3476,10 @@ def purposeful_complete_turn_seed(
             child.push(move)
             candidate_moves = moves + [move]
             candidate_purposes = fallback_rules.action_purpose_labels(
-                board, candidate_moves, original_turn
+                board,
+                candidate_moves,
+                original_turn,
+                retrospective=False,
             )
             if not fallback_rules.early_structure_allowed(
                 board,
@@ -3235,7 +3586,10 @@ def purposeful_complete_turn_seed(
                 red_score = quick_evaluation(child, turn_number)
                 utility = red_score if original_turn == engine.RED else -red_score
                 candidate_purposes = fallback_rules.action_purpose_labels(
-                    board, moves + [move], original_turn
+                    board,
+                    moves + [move],
+                    original_turn,
+                    retrospective=False,
                 )
                 if turn_number <= EARLY_GAME_LAST_TURN:
                     utility += 2.5 * fallback_rules.early_plan_score(
@@ -3273,6 +3627,32 @@ def purposeful_complete_turn_seed(
             vacated.add(chosen.from_square)
         moves.append(chosen)
         working.push(chosen)
+
+    # The greedy seed is allowed to use a quiet action to unlock a later one,
+    # but once the full turn exists we can distinguish that setup from a truly
+    # disposable third action. Apply the same replay-and-skip cleanup used by
+    # searched candidates so a deadline fallback cannot reintroduce filler.
+    if (
+        max_actions == 3
+        and not working.is_game_over()
+        and working.turn != original_turn
+    ):
+        action_purposes = fallback_rules.action_purpose_labels(
+            board, moves, original_turn, retrospective=False
+        )
+        seed_candidate = TurnCandidate(
+            moves=list(moves),
+            board=working,
+            priority=0.0,
+            static_score=quick_evaluation(working, turn_number),
+            action_purposes=action_purposes,
+        )
+        trimmed = fallback_rules.trim_filler_action(
+            board, seed_candidate, original_turn
+        )
+        if trimmed is not None:
+            moves = list(trimmed.moves)
+            working = trimmed.board
     return SearchResult(quick_evaluation(working, turn_number), moves)
 
 
@@ -3399,8 +3779,12 @@ def opening_book_turn(
             continue
         if not safety.tactically_safe:
             continue
-        purpose = searcher.turn_purpose_breakdown(board, working, moves, mover)
-        action_purposes = searcher.action_purpose_labels(board, moves, mover)
+        purpose = searcher.turn_purpose_breakdown(
+            board, working, moves, mover, retrospective=False
+        )
+        action_purposes = searcher.action_purpose_labels(
+            board, moves, mover, retrospective=False
+        )
         valid.append((TurnCandidate(
             moves=moves,
             board=working,
@@ -3471,7 +3855,11 @@ def search(
         )
         seed_moves, seed_board = first_turn_from_pv(board, emergency_seed.pv)
         seed_purpose = searcher.turn_purpose_breakdown(
-            board, seed_board, seed_moves, board.turn
+            board,
+            seed_board,
+            seed_moves,
+            board.turn,
+            retrospective=False,
         )
         seed_penalty = seed_purpose["total_penalty"]
         emergency_seed.score += (
@@ -3489,7 +3877,7 @@ def search(
                 seed_safety = None
             if seed_safety is not None and seed_safety.tactically_safe:
                 seed_action_purposes = searcher.action_purpose_labels(
-                    board, seed_moves, board.turn
+                    board, seed_moves, board.turn, retrospective=False
                 )
                 searcher.root_fallback = TurnCandidate(
                     seed_moves,
@@ -3510,6 +3898,7 @@ def search(
         requested_depth = max(1, max_depth)
         final_deadline = searcher.deadline
         if requested_depth >= 2:
+            searcher.hq_leaf_extension_enabled = True
             # First verify the purposeful emergency turn against one complete
             # opponent reply. This produces a tactically checked floor even if
             # enumerating alternative root turns later exhausts the budget.
@@ -3530,7 +3919,10 @@ def search(
                     early_bonus = (
                         0.40 * searcher.early_plan_score(
                             searcher.action_purpose_labels(
-                                board, seed_moves, board.turn
+                                board,
+                                seed_moves,
+                                board.turn,
+                                retrospective=False,
                             )
                         )
                         if turn_number <= EARLY_GAME_LAST_TURN
@@ -3652,7 +4044,11 @@ def search(
         first_turn, resulting_board = first_turn_from_pv(board, fallback.pv)
         best = fallback
         seed_purpose = searcher.turn_purpose_breakdown(
-            board, resulting_board, first_turn, board.turn
+            board,
+            resulting_board,
+            first_turn,
+            board.turn,
+            retrospective=False,
         )
         seed_penalty = seed_purpose["total_penalty"]
         best.score += -seed_penalty if board.turn == engine.RED else seed_penalty

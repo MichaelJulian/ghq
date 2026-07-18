@@ -113,6 +113,8 @@ async function main() {
     decisions: 0,
     decisionsWithNoNewEffect: 0,
     noNewEffectActions: 0,
+    decisionsWithSetup: 0,
+    setupActions: 0,
     unpurposedActions: 0,
     reversals: 0,
     pureRotations: 0,
@@ -130,6 +132,7 @@ async function main() {
     fen: string;
     moves: string[];
     actionPurposes: Array<{ move: string; roles: string[] }>;
+    setupActions: number;
     unpurposedActions: number;
     reversals: number;
     pureRotations: number;
@@ -300,8 +303,12 @@ async function main() {
         const noNewEffectActions = selectedActionPurposes.filter(
           (action) => action.roles.includes("no_new_effect")
         ).length;
+        const setupActions = selectedActionPurposes.filter(
+          (action) => action.roles.includes("setup")
+        ).length;
         purposeTelemetry.decisions++;
         purposeTelemetry.noNewEffectActions += noNewEffectActions;
+        purposeTelemetry.setupActions += setupActions;
         purposeTelemetry.unpurposedActions += purpose.unpurposed_actions;
         purposeTelemetry.reversals += purpose.reversals;
         purposeTelemetry.pureRotations += purpose.pure_rotations;
@@ -327,12 +334,16 @@ async function main() {
         if (noNewEffectActions) {
           purposeTelemetry.decisionsWithNoNewEffect++;
         }
+        if (setupActions) {
+          purposeTelemetry.decisionsWithSetup++;
+        }
         if (purpose.paratrooper_mission_penalty > 0) {
           purposeTelemetry.paratrooperMissionPenaltyDecisions++;
         }
         if (
           purposeExamples.length < 40 &&
           (noNewEffectActions > 0 ||
+            setupActions > 0 ||
             purpose.unpurposed_actions > 0 ||
             purpose.reversals > 0 ||
             purpose.pure_rotations > 0 ||
@@ -345,6 +356,7 @@ async function main() {
             fen: decision.fen,
             moves: decision.selectedMoves,
             actionPurposes: selectedActionPurposes,
+            setupActions,
             unpurposedActions: purpose.unpurposed_actions,
             reversals: purpose.reversals,
             pureRotations: purpose.pure_rotations,
@@ -540,6 +552,18 @@ async function main() {
           noNewEffectActionsPerDecision: Number(
             (
               purposeTelemetry.noNewEffectActions /
+              Math.max(1, purposeTelemetry.decisions)
+            ).toFixed(4)
+          ),
+          decisionsWithSetupRate: Number(
+            (
+              purposeTelemetry.decisionsWithSetup /
+              Math.max(1, purposeTelemetry.decisions)
+            ).toFixed(4)
+          ),
+          setupActionsPerDecision: Number(
+            (
+              purposeTelemetry.setupActions /
               Math.max(1, purposeTelemetry.decisions)
             ).toFixed(4)
           ),
