@@ -74,6 +74,17 @@ interface GenerationSummary {
     codeVersions: string[];
     valueModelCheckpoints: string[];
   };
+  searchRuntime?: {
+    decisions: number;
+    backendCounts: Record<string, number>;
+    valueModelBackendCounts: Record<string, number>;
+    completedDepthCounts: Record<string, number>;
+    averageCompletedDepth: number;
+    depthAtLeastTwoRate: number;
+    zeroDepthRate: number;
+    averageNodes?: number;
+    averageCompleteTurnsGenerated?: number;
+  };
   valueModelArena?: {
     challenger: {
       scoreRate: number;
@@ -474,6 +485,54 @@ export function SelfPlayRuns() {
                   </>
                 )}
               </div>
+              {generationSummary.searchRuntime &&
+                generationSummary.searchRuntime.decisions > 0 && (
+                  <div className="mt-1">
+                    backend{" "}
+                    {JSON.stringify(
+                      generationSummary.searchRuntime.backendCounts
+                    )}{" "}
+                    · value runtime{" "}
+                    {JSON.stringify(
+                      generationSummary.searchRuntime.valueModelBackendCounts
+                    )}{" "}
+                    · depth avg{" "}
+                    {generationSummary.searchRuntime.averageCompletedDepth.toFixed(
+                      2
+                    )}{" "}
+                    ({
+                      generationSummary.searchRuntime.completedDepthCounts["2"] ??
+                      0
+                    }{" "}
+                    at depth 2) · depth≥2{" "}
+                    {(
+                      100 *
+                      generationSummary.searchRuntime.depthAtLeastTwoRate
+                    ).toFixed(1)}
+                    % · depth 0{" "}
+                    {(
+                      100 * generationSummary.searchRuntime.zeroDepthRate
+                    ).toFixed(1)}
+                    %
+                    {generationSummary.searchRuntime.averageNodes !== undefined && (
+                      <>
+                        {" "}
+                        · avg nodes{" "}
+                        {generationSummary.searchRuntime.averageNodes.toFixed(0)}
+                      </>
+                    )}
+                    {generationSummary.searchRuntime
+                      .averageCompleteTurnsGenerated !== undefined && (
+                      <>
+                        {" "}
+                        · avg complete turns{" "}
+                        {generationSummary.searchRuntime.averageCompleteTurnsGenerated.toFixed(
+                          1
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
               {generationSummary.provenance &&
                 (generationSummary.provenance.codeVersions.length > 0 ||
                   generationSummary.provenance.valueModelCheckpoints.length >

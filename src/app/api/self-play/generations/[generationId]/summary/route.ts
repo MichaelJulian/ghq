@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getRun } from "workflow/api";
 import { summarizeValueModelArena } from "@/game/self-play/arena-results";
+import { summarizeSearchRuntime } from "@/game/self-play/search-runtime-summary";
 import {
   readPersistedSelfPlayGames,
   readSelfPlayGenerationManifest,
@@ -124,6 +125,7 @@ export async function GET(
         codeVersions: [...codeVersions].sort(),
         valueModelCheckpoints: [...valueModelCheckpoints].sort(),
       },
+      searchRuntime: summarizeSearchRuntime(games),
       valueModelArena: summarizeValueModelArena(
         games,
         5_000,
