@@ -1227,12 +1227,34 @@ class Searcher:
         moves: Sequence[engine.Move],
         mover: bool,
     ) -> float:
-        """Flag any paradrop that did not arrive with a legal capture mission."""
+        """Flag a paradrop unless its concrete combination is executed.
+
+        Making another capture legal is only a promise. The completed turn
+        must actually take one of the targets unlocked by the landing (or
+        capture the HQ); otherwise the para was consumed for a single trade.
+        """
         working = before.copy()
         penalty = 0.0
-        for move in moves:
-            if self.is_paradrop(working, move) and not self.paradrop_allowed(working, move):
-                penalty += MISSIONLESS_PARATROOPER_PENALTY
+        for index, move in enumerate(moves):
+            if self.is_paradrop(working, move):
+                direct_hq_capture = (
+                    move.capture_preference is not None
+                    and working.piece_type_at(move.capture_preference)
+                    == engine.HQ
+                )
+                unlocked_targets = set(
+                    self.paradrop_capture_targets(working, move)
+                )
+                converted_target = any(
+                    later.capture_preference in unlocked_targets
+                    for later in moves[index + 1 :]
+                    if later.capture_preference is not None
+                )
+                if (
+                    not self.paradrop_allowed(working, move)
+                    or not (direct_hq_capture or converted_target)
+                ):
+                    penalty += MISSIONLESS_PARATROOPER_PENALTY
             working.push(move)
         return penalty
 
@@ -3619,6 +3641,8 @@ class Searcher:
             purpose = self.turn_purpose_breakdown(
                 root, partial.board, partial.moves, mover, retrospective=False
             )
+            if purpose["paratrooper_mission_penalty"] > 0.0:
+                return
             action_purposes = self.action_purpose_labels(
                 root, partial.moves, mover, retrospective=False
             )
@@ -3981,6 +4005,8 @@ class Searcher:
                         original_turn,
                         retrospective=False,
                     )
+                    if purpose["paratrooper_mission_penalty"] > 0.0:
+                        continue
                     action_purposes = self.action_purpose_labels(
                         board,
                         partial.moves,
@@ -4103,6 +4129,17 @@ class Searcher:
                 # Make that safety floor an actual minimax branch instead of
                 # using it only when root generation returns nothing at all.
                 candidates.append(self.root_fallback)
+        mission_complete_candidates = [
+            candidate
+            for candidate in candidates
+            if candidate.paratrooper_mission_penalty <= 0.0
+        ]
+        if len(mission_complete_candidates) != len(candidates):
+            self.purpose_filtered_turns += (
+                len(candidates) - len(mission_complete_candidates)
+            )
+            self.exhaustive_within_horizon = False
+            candidates = mission_complete_candidates
         candidates.sort(
             key=lambda item: self.candidate_sort_key(
                 item, original_turn, is_root_generation
@@ -4434,6 +4471,7 @@ def purposeful_complete_turn_seed(
     original_turn = working.turn
     moves: List[engine.Move] = []
     vacated: set[int] = set()
+    pending_para_targets: set[int] = set()
     fallback_rules = Searcher(
         personality,
         # This is a deadline floor, not a second full search.  The historical
@@ -4460,6 +4498,14 @@ def purposeful_complete_turn_seed(
         candidates: List[Tuple[float, float, str, engine.Move]] = []
         for move in legal:
             piece_type = Searcher.move_piece_type(working, move)
+            if (
+                pending_para_targets
+                and move.name != "AutoCapture"
+                and move.capture_preference not in pending_para_targets
+            ):
+                # A para commitment is not a completed mission until the
+                # immediately unlocked second capture is actually converted.
+                continue
             if move.name == "Skip" and working.turn_moves < max_actions:
                 continue
             if (
@@ -4479,17 +4525,9 @@ def purposeful_complete_turn_seed(
                 working, move
             ):
                 continue
-            if not fallback_rules.early_extension_allowed(working, move):
+            if not fallback_rules.paradrop_allowed(working, move):
                 continue
-            if (
-                piece_type == engine.AIRBORNE_INFANTRY
-                and move.name != "Reinforce"
-                and move.capture_preference is None
-                and move.from_square is not None
-                and move.to_square is not None
-                and fallback_rules.home_distance(move.to_square, working.turn)
-                >= fallback_rules.home_distance(move.from_square, working.turn)
-            ):
+            if not fallback_rules.early_extension_allowed(working, move):
                 continue
 
             child = working.copy()
@@ -4610,6 +4648,12 @@ def purposeful_complete_turn_seed(
             # the serialized position is mid-turn and must still be completed.
             for move in legal:
                 piece_type = Searcher.move_piece_type(working, move)
+                if (
+                    pending_para_targets
+                    and move.name != "AutoCapture"
+                    and move.capture_preference not in pending_para_targets
+                ):
+                    continue
                 if move.name in ("Skip", "AutoCapture"):
                     continue
                 if (
@@ -4620,15 +4664,7 @@ def purposeful_complete_turn_seed(
                     continue
                 if not fallback_rules.early_extension_allowed(working, move):
                     continue
-                if (
-                    piece_type == engine.AIRBORNE_INFANTRY
-                    and move.name != "Reinforce"
-                    and move.capture_preference is None
-                    and move.from_square is not None
-                    and move.to_square is not None
-                    and fallback_rules.home_distance(move.to_square, working.turn)
-                    >= fallback_rules.home_distance(move.from_square, working.turn)
-                ):
+                if not fallback_rules.paradrop_allowed(working, move):
                     continue
                 child = working.copy()
                 child.push(move)
@@ -4668,6 +4704,12 @@ def purposeful_complete_turn_seed(
                 skip,
             ))
         chosen = max(candidates, key=lambda item: (item[0], item[1], item[2]))[3]
+        if chosen.capture_preference in pending_para_targets:
+            pending_para_targets.clear()
+        if fallback_rules.is_paradrop(working, chosen):
+            pending_para_targets = set(
+                fallback_rules.paradrop_capture_targets(working, chosen)
+            )
         if (
             chosen.from_square is not None
             and chosen.to_square is not None
@@ -4838,6 +4880,8 @@ def opening_book_turn(
             mover,
             retrospective=False,
         )
+        if purpose["paratrooper_mission_penalty"] > 0.0:
+            continue
         action_purposes = searcher.deadline_safe_action_purpose_labels(
             board,
             moves,
@@ -5011,7 +5055,11 @@ def search(
                 max_actions,
                 seed_time_ms,
             )
-            if seed_safety is not None and seed_safety.tactically_safe:
+            if (
+                seed_safety is not None
+                and seed_safety.tactically_safe
+                and seed_purpose["paratrooper_mission_penalty"] <= 0.0
+            ):
                 emergency_seed_safe = True
                 seed_action_purposes = searcher.deadline_safe_action_purpose_labels(
                     board,

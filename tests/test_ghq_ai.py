@@ -857,6 +857,76 @@ class SearchTests(unittest.TestCase):
             )
         )
 
+    def test_deadline_seed_cannot_bypass_single_capture_para_rule(self):
+        cases = (
+            (
+                "qr↓f1ffpi/1ir←2r↓2/i1i3h↓1/5t↓2/8/3FT↑1I1/"
+                "FR↑IH↑IIR→I/1P1I1R↑FQ II iiii r",
+                "tactical_gambler",
+                15,
+                "b1h6xg6",
+            ),
+            (
+                "q1f1f1p1/1ir↓r↓3i/i1i4f/8/4IP2/1FH↑FT↑R↑2/"
+                "1R↑I1II1I/1I1I1R↑FQ I iiii b",
+                "battery_commander",
+                20,
+                "g8g3xf3",
+            ),
+        )
+        for fen, personality, turn_number, rejected_move in cases:
+            with self.subTest(turn_number=turn_number):
+                board = engine.BaseBoard(fen)
+                seed = ghq_ai.purposeful_complete_turn_seed(
+                    board,
+                    personality,
+                    turn_number=turn_number,
+                    max_actions=3,
+                    time_ms=500,
+                )
+                moves, _ = ghq_ai.first_turn_from_pv(board, seed.pv)
+                self.assertNotIn(rejected_move, [move.uci() for move in moves])
+
+    def test_para_capture_setup_must_be_converted_in_the_same_turn(self):
+        before = engine.BaseBoard(
+            "q2fi1i1/1ir↓2i1i/i1F3f1/4F3/3IT↑2I/R→FH↑2R→2/"
+            "2I2I1Q/1I1I1PI1 - - r"
+        )
+        searcher = ghq_ai.Searcher(
+            "tactical_gambler", time_ms=2000, beam_width=6, turn_number=35
+        )
+
+        def replay(ucis):
+            board = before.copy()
+            moves = []
+            for uci in ucis:
+                move = next(
+                    move
+                    for move in board.generate_legal_moves()
+                    if move.uci() == uci
+                )
+                moves.append(move)
+                board.push(move)
+            return board, moves
+
+        converted, converted_moves = replay(
+            ("e4g4↑", "f1c8", "c6d7xc7")
+        )
+        abandoned, abandoned_moves = replay(("e4g4↑", "f1c8", "skip"))
+
+        self.assertEqual(
+            searcher.paratrooper_mission_penalty(
+                before, converted, converted_moves, engine.RED
+            ),
+            0.0,
+        )
+        self.assertGreaterEqual(
+            searcher.paratrooper_mission_penalty(
+                before, abandoned, abandoned_moves, engine.RED
+            ),
+            ghq_ai.MISSIONLESS_PARATROOPER_PENALTY,
+        )
+
     def test_square_swapping_turn_has_net_purpose_penalty(self):
         before = engine.BaseBoard("7q/8/8/8/8/8/1P6/2T↑H↑3Q - - r")
         after = before.copy()
