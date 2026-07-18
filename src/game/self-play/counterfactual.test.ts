@@ -181,4 +181,19 @@ describe("counterfactual rollout selection", () => {
       8
     );
   });
+
+  it("excludes roots already used for training or evaluation", () => {
+    const games = Array.from({ length: 4 }, (_, index) =>
+      game(`freshness-${index}`, [decision(10 + index, [1, 1.1])])
+    );
+    const first = selectCounterfactualRoots(games, { maxRoots: 2 });
+    const excluded = new Set(first.map((root) => root.rootId));
+    const fresh = selectCounterfactualRoots(games, {
+      maxRoots: 2,
+      excludeRootIds: excluded,
+    });
+
+    expect(fresh).toHaveLength(2);
+    expect(fresh.every((root) => !excluded.has(root.rootId))).toBe(true);
+  });
 });

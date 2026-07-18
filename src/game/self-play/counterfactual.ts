@@ -37,6 +37,7 @@ export interface CounterfactualSelectionOptions {
   candidatesPerRoot?: number;
   maxScoreMargin?: number;
   minTurnNumber?: number;
+  excludeRootIds?: ReadonlySet<string>;
 }
 
 function personalityFor(
@@ -98,8 +99,11 @@ export function selectCounterfactualRoots(
     candidatesPerRoot: rawOptions.candidatesPerRoot ?? 2,
     maxScoreMargin: rawOptions.maxScoreMargin ?? 1,
     minTurnNumber: rawOptions.minTurnNumber ?? 5,
+    excludeRootIds: rawOptions.excludeRootIds ?? new Set<string>(),
   };
-  for (const [name, value] of Object.entries(options)) {
+  for (const [name, value] of Object.entries(options).filter(
+    ([name]) => name !== "excludeRootIds"
+  )) {
     if (
       !Number.isFinite(value) ||
       value < 0 ||
@@ -144,6 +148,7 @@ export function selectCounterfactualRoots(
       );
       if (scoreMargin > options.maxScoreMargin) return [];
       const rootId = `${game.gameId}:t${decision.turnNumber}`;
+      if (options.excludeRootIds.has(rootId)) return [];
       const redPersonality = personalityFor(game, "RED");
       const bluePersonality = personalityFor(game, "BLUE");
       return [

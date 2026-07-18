@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 /** Mine close production-search candidates into a paired rollout request. */
 
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { config } from "dotenv";
 
 import { selectCounterfactualRoots } from "../src/game/self-play/counterfactual";
@@ -13,6 +13,28 @@ config({ path: ".env.local" });
 function argument(name: string): string | undefined {
   const index = process.argv.lastIndexOf(name);
   return index >= 0 ? process.argv[index + 1] : undefined;
+}
+
+function argumentsFor(name: string): string[] {
+  return process.argv.flatMap((value, index) =>
+    value === name && process.argv[index + 1] ? [process.argv[index + 1]] : []
+  );
+}
+
+async function excludedRootIds(): Promise<Set<string>> {
+  const excluded = new Set<string>();
+  for (const path of argumentsFor("--exclude-report")) {
+    const report = JSON.parse(await readFile(path, "utf8")) as {
+      pairs?: Array<{ rootId?: unknown }>;
+    };
+    if (!Array.isArray(report.pairs)) {
+      throw new Error(`${path} is not a counterfactual rollout report`);
+    }
+    for (const pair of report.pairs) {
+      if (typeof pair.rootId === "string") excluded.add(pair.rootId);
+    }
+  }
+  return excluded;
 }
 
 function integerArgument(
@@ -59,6 +81,7 @@ async function main() {
     throw new Error(`No completed games found for ${generationId}`);
   }
 
+  const excluded = await excludedRootIds();
   const roots = selectCounterfactualRoots(games, {
     maxRoots: integerArgument("--max-roots", 8, 1, 16),
     skipRoots: integerArgument("--skip-roots", 0, 0, 10_000),
@@ -66,6 +89,7 @@ async function main() {
     candidatesPerRoot: integerArgument("--candidates", 2, 2, 4),
     maxScoreMargin: numberArgument("--max-margin", 1, 0.000_001, 100),
     minTurnNumber: integerArgument("--min-turn", 5, 1, 399),
+    excludeRootIds: excluded,
   });
   if (!roots.length) {
     throw new Error("No eligible near-tied candidate roots found");
@@ -98,7 +122,7 @@ async function main() {
   const outputPath = argument("--output");
   if (outputPath) await writeFile(outputPath, rendered, "utf8");
   process.stderr.write(
-    `Selected ${roots.length} roots / ${request.branches.length} branches from ${games.length} games\n`
+    `Selected ${roots.length} roots / ${request.branches.length} branches from ${games.length} games; excluded ${excluded.size} prior roots\n`
   );
   process.stdout.write(rendered);
 }
