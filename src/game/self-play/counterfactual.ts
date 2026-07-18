@@ -248,3 +248,47 @@ export function counterfactualReplicateSeed(
     `replicate:${replicate}`
   );
 }
+
+interface ReplicateValue {
+  replicate: number;
+  rolloutValue: number;
+}
+
+/** Require repeated matched continuations to support the same policy label. */
+export function counterfactualReplicateEvidence(
+  preferred: ReplicateValue[],
+  runnerUp: ReplicateValue[],
+  expectedReplicates: number,
+  minimumDelta: number
+) {
+  const runnerUpByReplicate = new Map(
+    runnerUp.map((replicate) => [replicate.replicate, replicate.rolloutValue])
+  );
+  const replicateDeltas = preferred.flatMap((replicate) => {
+    const other = runnerUpByReplicate.get(replicate.replicate);
+    return other === undefined
+      ? []
+      : [
+          {
+            replicate: replicate.replicate,
+            preferredMinusRunnerUp: replicate.rolloutValue - other,
+          },
+        ];
+  });
+  const supportingReplicates = replicateDeltas.filter(
+    (replicate) => replicate.preferredMinusRunnerUp >= minimumDelta
+  ).length;
+  const conflictingReplicates = replicateDeltas.filter(
+    (replicate) => replicate.preferredMinusRunnerUp <= -minimumDelta
+  ).length;
+  const requiredReplicateSupport = Math.min(2, expectedReplicates);
+  return {
+    replicateDeltas,
+    supportingReplicates,
+    conflictingReplicates,
+    requiredReplicateSupport,
+    replicateReliable:
+      supportingReplicates >= requiredReplicateSupport &&
+      conflictingReplicates === 0,
+  };
+}

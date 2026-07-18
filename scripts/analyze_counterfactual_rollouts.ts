@@ -12,6 +12,9 @@ import {
 } from "../src/game/value-model/features";
 import { predictZeroSumWinProbability } from "../src/game/value-model/inference";
 import {
+  counterfactualReplicateEvidence,
+} from "../src/game/self-play/counterfactual";
+import {
   readPersistedSelfPlayGames,
   readSelfPlayGenerationManifest,
 } from "../src/server/self-play-storage";
@@ -197,36 +200,18 @@ async function main() {
     const runnerUp = ranked[1];
     const delta = best.rolloutValue - runnerUp.rolloutValue;
     const confident = delta >= minimumDeltaRaw;
-    const runnerUpByReplicate = new Map(
-      runnerUp.replicateValues.map((replicate) => [
-        replicate.replicate,
-        replicate.rolloutValue,
-      ])
+    const {
+      replicateDeltas,
+      supportingReplicates,
+      conflictingReplicates,
+      requiredReplicateSupport,
+      replicateReliable,
+    } = counterfactualReplicateEvidence(
+      best.replicateValues,
+      runnerUp.replicateValues,
+      Math.max(...siblings.map((branch) => branch.expectedReplicates)),
+      minimumDeltaRaw
     );
-    const replicateDeltas = best.replicateValues.flatMap((replicate) => {
-      const other = runnerUpByReplicate.get(replicate.replicate);
-      return other === undefined
-        ? []
-        : [
-            {
-              replicate: replicate.replicate,
-              preferredMinusRunnerUp: replicate.rolloutValue - other,
-            },
-          ];
-    });
-    const supportingReplicates = replicateDeltas.filter(
-      (replicate) => replicate.preferredMinusRunnerUp >= minimumDeltaRaw
-    ).length;
-    const conflictingReplicates = replicateDeltas.filter(
-      (replicate) => replicate.preferredMinusRunnerUp <= -minimumDeltaRaw
-    ).length;
-    const requiredReplicateSupport = Math.min(
-      2,
-      Math.max(...siblings.map((branch) => branch.expectedReplicates))
-    );
-    const replicateReliable =
-      supportingReplicates >= requiredReplicateSupport &&
-      conflictingReplicates === 0;
     const hasUnverifiedFallback = siblings.some(
       (branch) => branch.unverifiedFallbackDecisions > 0
     );

@@ -6,6 +6,7 @@ import type {
 } from "@/workflows/self-play-game";
 import {
   counterfactualReplicateSeed,
+  counterfactualReplicateEvidence,
   counterfactualRootSeed,
   selectCounterfactualRoots,
 } from "./counterfactual";
@@ -111,6 +112,46 @@ describe("counterfactual rollout selection", () => {
     expect(() => counterfactualReplicateSeed(42, "game:t9", -1)).toThrow(
       "non-negative integer"
     );
+  });
+
+  it("requires consistent matched-replicate evidence", () => {
+    expect(
+      counterfactualReplicateEvidence(
+        [
+          { replicate: 0, rolloutValue: 1 },
+          { replicate: 1, rolloutValue: 0.8 },
+        ],
+        [
+          { replicate: 0, rolloutValue: 0 },
+          { replicate: 1, rolloutValue: 0.4 },
+        ],
+        2,
+        0.02
+      )
+    ).toMatchObject({
+      supportingReplicates: 2,
+      conflictingReplicates: 0,
+      requiredReplicateSupport: 2,
+      replicateReliable: true,
+    });
+    expect(
+      counterfactualReplicateEvidence(
+        [
+          { replicate: 0, rolloutValue: 1 },
+          { replicate: 1, rolloutValue: 0 },
+        ],
+        [
+          { replicate: 0, rolloutValue: 0 },
+          { replicate: 1, rolloutValue: 1 },
+        ],
+        2,
+        0.02
+      )
+    ).toMatchObject({
+      supportingReplicates: 1,
+      conflictingReplicates: 1,
+      replicateReliable: false,
+    });
   });
 
   it("skips duplicate resulting states and balances roots across phases", () => {
