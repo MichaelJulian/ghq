@@ -2916,6 +2916,19 @@ class Searcher:
             ),
         )
         for board, line in ranked:
+            purpose = self.deadline_safe_turn_purpose_breakdown(
+                root,
+                board,
+                line,
+                mover,
+                retrospective=False,
+            )
+            if purpose["paratrooper_mission_penalty"] > 0.0:
+                # This exact-survival pass runs after approximate minimax has
+                # selected an immediately losing line. It may delay mate, but
+                # it is not permission to bypass the global para doctrine for
+                # a speculative one-piece trade.
+                continue
             if self.has_same_turn_hq_capture(board):
                 continue
             capture = self.exact_same_turn_hq_capture(
@@ -4762,6 +4775,37 @@ def first_turn_from_pv(board: engine.BaseBoard, pv: Sequence[engine.Move]) -> Tu
     return selected, working
 
 
+def deterministic_skip_turn(
+    board: engine.BaseBoard,
+) -> Tuple[List[engine.Move], engine.BaseBoard]:
+    """End a turn without inventing a voluntary tactical mission.
+
+    Auto-captures are mandatory GHQ bookkeeping and must be resolved before a
+    Skip can end the turn.  This is the last-resort policy floor used only when
+    every scored/fallback line somehow violates an objective return invariant.
+    It deliberately cannot deploy or move a paratrooper.
+    """
+    working = board.copy()
+    mover = working.turn
+    moves: List[engine.Move] = []
+    while working.turn == mover and not working.is_game_over():
+        legal = list(working.generate_legal_moves())
+        forced = sorted(
+            (move for move in legal if move.name == "AutoCapture"),
+            key=lambda move: normalized_move_uci(move, mover),
+        )
+        if forced:
+            move = forced[0]
+        else:
+            skips = [move for move in legal if move.name == "Skip"]
+            if not skips:
+                raise RuntimeError("GHQ engine exposed no legal Skip action")
+            move = skips[0]
+        moves.append(move)
+        working.push(move)
+    return moves, working
+
+
 def rotate_opening_uci(uci: str) -> str:
     move = engine.Move.from_uci(uci)
     rotated = engine.Move(
@@ -4957,6 +5001,7 @@ def search(
     fallback_kind = "none"
     hq_survival_override_used = False
     hq_survival_reply_verified = False
+    policy_return_guard_used = False
     emergency_seed: Optional[SearchResult] = None
     emergency_seed_safe = False
     seed_reply_retry_used = False
@@ -5360,6 +5405,52 @@ def search(
             finally:
                 searcher.verification_mode = previous_verification_mode
             fallback_kind = "safe"
+
+    selected_policy = searcher.deadline_safe_turn_purpose_breakdown(
+        board,
+        resulting_board,
+        first_turn,
+        board.turn,
+        retrospective=False,
+    )
+    if selected_policy["paratrooper_mission_penalty"] > 0.0:
+        policy_return_guard_used = True
+        # HQ-survival and deadline recovery are deliberately allowed to
+        # override approximate score ordering, but never the objective para
+        # mission policy. Restore the already screened root fallback before
+        # response serialization so no return path can leak a violating turn.
+        replacement = searcher.root_fallback
+        if (
+            replacement is not None
+            and replacement.paratrooper_mission_penalty <= 0.0
+        ):
+            first_turn = list(replacement.moves)
+            resulting_board = replacement.board
+            best = SearchResult(replacement.static_score, list(first_turn))
+            completed_depth = 0
+            fallback_kind = "safe"
+        else:
+            clean_seed = purposeful_complete_turn_seed(
+                board,
+                personality,
+                turn_number,
+                max_actions=max_actions,
+                time_ms=seed_time_ms,
+            )
+            clean_moves, clean_board = first_turn_from_pv(board, clean_seed.pv)
+            clean_purpose = searcher.deadline_safe_turn_purpose_breakdown(
+                board,
+                clean_board,
+                clean_moves,
+                board.turn,
+                retrospective=False,
+            )
+            if clean_purpose["paratrooper_mission_penalty"] <= 0.0:
+                first_turn = clean_moves
+                resulting_board = clean_board
+                best = clean_seed
+                completed_depth = 0
+                fallback_kind = "seeded"
     if not first_turn and not board.is_game_over():
         fallback = purposeful_complete_turn_seed(
             board,
@@ -5386,6 +5477,27 @@ def search(
         )
         best.score += seed_quality if board.turn == engine.RED else -seed_quality
         fallback_kind = "seeded"
+
+    # This check intentionally lives after every ordinary fallback.  Candidate
+    # filters, opening books, deadline seeds, and HQ-survival overrides may be
+    # refactored independently, but none may return a missionless paratrooper
+    # action to the caller.  The deterministic floor resolves only mandatory
+    # captures and then ends the turn, so the invariant is unconditional.
+    final_policy = searcher.deadline_safe_turn_purpose_breakdown(
+        board,
+        resulting_board,
+        first_turn,
+        board.turn,
+        retrospective=False,
+    )
+    if final_policy["paratrooper_mission_penalty"] > 0.0:
+        policy_return_guard_used = True
+        first_turn, resulting_board = deterministic_skip_turn(board)
+        best = SearchResult(
+            searcher.quick_score(resulting_board), list(first_turn)
+        )
+        completed_depth = 0
+        fallback_kind = "safe"
 
     automatic = [move.uci() for move in first_turn if move.name == "AutoCapture"]
     actions = [move.uci() for move in first_turn if move.name != "AutoCapture"]
@@ -5598,6 +5710,7 @@ def search(
             "hq_survival_reply_nodes": searcher.hq_survival_reply_nodes,
             "hq_survival_override_used": hq_survival_override_used,
             "hq_survival_reply_verified": hq_survival_reply_verified,
+            "policy_return_guard_used": policy_return_guard_used,
             "seed_reply_verified": verified_seed is not None,
             "seed_reply_retry_used": seed_reply_retry_used,
         },

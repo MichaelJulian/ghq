@@ -184,6 +184,10 @@ SELF_PLAY_FORCED_IMMEDIATE_HQ_LOSS = (
     76,
     "qI2f3/2F2i2/2I5/8/6I1/5I2/6I1/7Q - - b",
 )
+MISSIONLESS_PARA_SURVIVAL_OVERRIDE_FEN = (
+    "p5i1/r↓q3i1f/1i1if3/2it↓r↓fi1/1Q3r↓2/IFR↑5/"
+    "1H↑1R↑1I2/2P1I3 - - r"
+)
 LIVE_MATE_DELAY_REPLY_CASES = (
     (
         99,
@@ -1937,6 +1941,35 @@ class SearchTests(unittest.TestCase):
                         escaped, not mover, reply_budget
                     )
                 )
+
+    def test_hq_survival_floor_cannot_cash_para_for_one_piece(self):
+        board = engine.BaseBoard(MISSIONLESS_PARA_SURVIVAL_OVERRIDE_FEN)
+        searcher = ghq_ai.Searcher(
+            "para_specialist", time_ms=60_000, beam_width=6, turn_number=63
+        )
+
+        survival = searcher.find_hq_survival_turn(board)
+
+        self.assertIsNotNone(survival)
+        moves, escaped = survival
+        self.assertNotIn("c1c5xd5", [move.uci() for move in moves])
+        self.assertEqual(
+            searcher.paratrooper_mission_penalty(
+                board, escaped, moves, engine.RED
+            ),
+            0.0,
+        )
+
+    def test_deterministic_policy_floor_never_moves_a_paratrooper(self):
+        board = engine.BaseBoard(MISSIONLESS_PARA_SURVIVAL_OVERRIDE_FEN)
+
+        moves, after = ghq_ai.deterministic_skip_turn(board)
+
+        self.assertNotEqual(after.turn, board.turn)
+        self.assertTrue(moves)
+        self.assertTrue(
+            all(move.name in ("AutoCapture", "Skip") for move in moves)
+        )
 
     def test_exact_hq_capture_moves_collapse_artillery_and_prune_remote_actions(self):
         board = engine.BaseBoard("q7/8/2R5/8/8/8/8/7Q - - r")

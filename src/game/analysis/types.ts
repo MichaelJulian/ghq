@@ -157,6 +157,8 @@ export interface GhqSearchResult {
     hq_survival_override_used?: boolean;
     /** The selected survival turn also completed a full opponent reply. */
     hq_survival_reply_verified?: boolean;
+    /** A final invariant replaced a missionless paratrooper return line. */
+    policy_return_guard_used?: boolean;
     /** The emergency complete-turn floor received one complete opponent reply. */
     seed_reply_verified?: boolean;
     /** The reserved final deadline slice was needed to certify that reply. */
