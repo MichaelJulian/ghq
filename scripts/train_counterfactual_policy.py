@@ -40,6 +40,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--training-report", required=True, type=Path)
     parser.add_argument("--minimum-pairs", type=int, default=48)
     parser.add_argument("--random-state", type=int, default=42)
+    parser.add_argument(
+        "--feature-scope",
+        choices=("all", "appended"),
+        default="all",
+        help="Features eligible for the sparse residual correction",
+    )
     parser.add_argument("--require-pass", action="store_true")
     return parser.parse_args()
 
@@ -402,7 +408,11 @@ def main() -> None:
     raw_baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
     baseline_names = list(raw_baseline.get("feature_names") or [])
     baseline = align_append_only_baseline_schema(raw_baseline, feature_names)
-    feature_indices = np.arange(len(baseline_names), len(feature_names))
+    feature_indices = (
+        np.arange(len(feature_names))
+        if args.feature_scope == "all"
+        else np.arange(len(baseline_names), len(feature_names))
+    )
     if not len(feature_indices):
         raise ValueError("counterfactual policy training needs appended features")
     splits = grouped_split(records, args.random_state)
@@ -536,6 +546,7 @@ def main() -> None:
         "phases": dict(phase_counts),
         "split_pairs": {name: int(len(indices)) for name, indices in splits.items()},
         "feature_count": len(feature_names),
+        "correction_feature_scope": args.feature_scope,
         "correction_feature_count": len(feature_indices),
         "candidate_validation": [
             {
@@ -576,6 +587,7 @@ def main() -> None:
             "counterfactual_source_games": report["source_games"],
             "counterfactual_selected_l2": selected["l2"],
             "counterfactual_selected_feature_count": selected["feature_count"],
+            "counterfactual_feature_scope": args.feature_scope,
             "counterfactual_approved_for_arena": approved,
         },
     )
