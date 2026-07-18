@@ -66,6 +66,9 @@ SELF_PLAY_PURPOSELESS_FILLER_FEN = (
 SELF_PLAY_LATE_HQ_REPLY_FEN = (
     "q6i/6f1/i7/8/i2i4/1ir↙1f3/I7/Q7 - i r"
 )
+SLOW_VERCEL_REPLY_FEN = (
+    "i1if2i1/qi2fi2/i7/2h↓5/5r↙2/1I1I1r↓2/3R↑2Q1/8 - i b"
+)
 SMOKE_IMMEDIATE_HQ_LOSS_CASES = (
     (81, SELF_PLAY_LATE_HQ_REPLY_FEN),
     (69, "q3i1i1/2ii4/1i6/8/1I6/F5i1/1I5f/2II3Q - - r"),
@@ -138,6 +141,14 @@ SELF_PLAY_FORCED_IMMEDIATE_HQ_LOSS = (
 
 
 class EvaluationTests(unittest.TestCase):
+    def test_chebyshev_lookup_matches_production_engine(self):
+        for left in range(64):
+            for right in range(64):
+                self.assertEqual(
+                    ghq_ai.chebyshev(left, right),
+                    engine.square_distance(left, right),
+                )
+
     def test_mirror_clears_empty_orientation_bits_and_reinforces_forward(self):
         board = engine.BaseBoard(TURN_6_FEN)
         mirrored = board.mirror()
@@ -1324,6 +1335,11 @@ class SearchTests(unittest.TestCase):
         self.assertTrue(
             searcher.unlocks_immediate_hq_capture(reply, first_setup)
         )
+        self.assertEqual(len(searcher.hq_capture_unlock_move_cache), 1)
+        self.assertTrue(
+            searcher.unlocks_immediate_hq_capture(reply, first_setup)
+        )
+        self.assertEqual(len(searcher.hq_capture_unlock_move_cache), 1)
 
         searcher.root_key = root.serialize()
         searcher.verification_mode = True
@@ -1332,6 +1348,21 @@ class SearchTests(unittest.TestCase):
             ["g4h4", "f5g5", "b1g6xh6"],
             [[move.uci() for move in candidate.moves] for candidate in replies],
         )
+
+    def test_slow_vercel_reply_position_completes_tactical_floor(self):
+        result = ghq_ai.search(
+            engine.BaseBoard(SLOW_VERCEL_REPLY_FEN),
+            "fortress",
+            time_ms=5_000,
+            max_depth=2,
+            beam_width=6,
+            turn_number=44,
+            stagnation_turns=4,
+        )
+
+        self.assertEqual(result["search"]["completed_depth_in_turns"], 2)
+        self.assertEqual(result["search"]["fallback_used"], "none")
+        self.assertNotEqual(result["recommendation_label"], "complete-turn seed")
 
     def test_search_escapes_two_quiet_setup_paratrooper_mate(self):
         board = engine.BaseBoard(THREE_ACTION_PARATROOPER_MATE_FEN)

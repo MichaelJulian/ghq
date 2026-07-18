@@ -202,8 +202,55 @@ def squares(mask: int) -> List[int]:
     return list(engine.scan_reversed(mask))
 
 
+BoardKey = Tuple[int, ...]
+
+
+def board_key(board: engine.BaseBoard) -> BoardKey:
+    """Exact uncompressed state key for hot in-search caches."""
+    return (
+        board.occupied,
+        board.infantry,
+        board.armored_infantry,
+        board.airborne_infantry,
+        board.artillery,
+        board.armored_artillery,
+        board.heavy_artillery,
+        board.hq,
+        *board.occupied_co,
+        *board.bombarded_co,
+        *board.adjacent_infantry_squares_co,
+        board.orientation_bit0,
+        board.orientation_bit1,
+        board.orientation_bit2,
+        board.turn_pieces,
+        board.free_capture_clusters,
+        board.free_capture_enemies,
+        board.free_capture_num_allowed,
+        int(board.turn),
+        board.turn_moves,
+        board.turn_auto_moves,
+        *board.reserves[0].to_ints(),
+        *board.reserves[1].to_ints(),
+        int(board.did_offer_draw),
+        int(board.did_accept_draw),
+    )
+
+
+CHEBYSHEV_DISTANCES = tuple(
+    tuple(
+        max(abs((left & 7) - (right & 7)), abs((left >> 3) - (right >> 3)))
+        for right in range(64)
+    )
+    for left in range(64)
+)
+
+
 def chebyshev(a: int, b: int) -> int:
-    return max(abs(engine.square_file(a) - engine.square_file(b)), abs(engine.square_rank(a) - engine.square_rank(b)))
+    # This sits on the hottest tactical-safety path (millions of calls per
+    # search). Precomputing the engine's ordinary 0..63 rank-major distance
+    # avoids repeated coordinate extraction while preserving exactly the
+    # engine.square_distance result.
+    return CHEBYSHEV_DISTANCES[a][b]
 
 
 def color_name(color: bool) -> str:
@@ -831,7 +878,7 @@ class Searcher:
         self.deadline = time.monotonic() + max(1, time_ms) / 1000.0
         self.beam_width = max(1, beam_width)
         self.nodes = 0
-        self.table: Dict[Tuple[str, int], SearchResult] = {}
+        self.table: Dict[Tuple[BoardKey, int], SearchResult] = {}
         self.transposition_hits = 0
         self.turn_cache_hits = 0
         self.exhaustive_within_horizon = True
@@ -846,20 +893,21 @@ class Searcher:
         self.rotation_quota_pruned = 0
         self.purpose_filtered_turns = 0
         self.value_model_evaluations = 0
-        self.turn_cache: Dict[str, List[TurnCandidate]] = {}
+        self.turn_cache: Dict[BoardKey, List[TurnCandidate]] = {}
         self.value_cache: Dict[str, float] = {}
-        self.safety_cache: Dict[Tuple[str, bool], Tuple[float, float, float]] = {}
-        self.immediate_hq_capture_cache: Dict[str, bool] = {}
-        self.exact_same_turn_hq_capture_cache: Dict[Tuple[str, bool], bool] = {}
+        self.safety_cache: Dict[Tuple[BoardKey, bool], Tuple[float, float, float]] = {}
+        self.immediate_hq_capture_cache: Dict[BoardKey, bool] = {}
+        self.exact_same_turn_hq_capture_cache: Dict[Tuple[BoardKey, bool], bool] = {}
         self.hq_survival_probe_nodes = 0
         self.hq_survival_reply_nodes = 0
-        self.same_turn_hq_capture_cache: Dict[str, bool] = {}
-        self.hq_defense_move_cache: Dict[Tuple[str, str], bool] = {}
-        self.hq_defense_unlock_move_cache: Dict[Tuple[str, str], bool] = {}
-        self.atomic_hq_defense_cache: Dict[str, bool] = {}
-        self.hq_escape_unlock_move_cache: Dict[Tuple[str, str], bool] = {}
-        self.capture_setup_move_cache: Dict[Tuple[str, str], bool] = {}
-        self.root_key: Optional[str] = None
+        self.same_turn_hq_capture_cache: Dict[BoardKey, bool] = {}
+        self.hq_capture_unlock_move_cache: Dict[Tuple[BoardKey, str], bool] = {}
+        self.hq_defense_move_cache: Dict[Tuple[BoardKey, str], bool] = {}
+        self.hq_defense_unlock_move_cache: Dict[Tuple[BoardKey, str], bool] = {}
+        self.atomic_hq_defense_cache: Dict[BoardKey, bool] = {}
+        self.hq_escape_unlock_move_cache: Dict[Tuple[BoardKey, str], bool] = {}
+        self.capture_setup_move_cache: Dict[Tuple[BoardKey, str], bool] = {}
+        self.root_key: Optional[BoardKey] = None
         self.root_fallback: Optional[TurnCandidate] = None
         self.root_ranked_turns: List[Tuple[float, TurnCandidate]] = []
         # Each entry has completed the opponent reply at the requested root
@@ -1649,7 +1697,7 @@ class Searcher:
         available to a para and a para left inside a bombardment even when a
         different automatic capture must happen first.
         """
-        cache_key = (board.serialize(), defender)
+        cache_key = (board_key(board), defender)
         cached = self.safety_cache.get(cache_key)
         if cached is not None:
             return cached
@@ -1999,7 +2047,7 @@ class Searcher:
             or board.turn_moves >= self.max_actions - 1
         ):
             return False
-        cache_key = (board.serialize(), move.uci())
+        cache_key = (board_key(board), move.uci())
         cached = self.capture_setup_move_cache.get(cache_key)
         if cached is not None:
             return cached
@@ -2068,7 +2116,7 @@ class Searcher:
             )
         ):
             return False
-        cache_key = (board.serialize(), move.uci())
+        cache_key = (board_key(board), move.uci())
         cached = self.hq_escape_unlock_move_cache.get(cache_key)
         if cached is not None:
             return cached
@@ -2131,7 +2179,7 @@ class Searcher:
         """
         if move.name in ("AutoCapture", "Skip"):
             return False
-        cache_key = (board.serialize(), move.uci())
+        cache_key = (board_key(board), move.uci())
         cached = self.hq_defense_move_cache.get(cache_key)
         if cached is not None:
             return cached
@@ -2162,7 +2210,7 @@ class Searcher:
             or board.turn_moves != 0
         ):
             return False
-        cache_key = (board.serialize(), move.uci())
+        cache_key = (board_key(board), move.uci())
         cached = self.hq_defense_unlock_move_cache.get(cache_key)
         if cached is not None:
             return cached
@@ -2233,7 +2281,7 @@ class Searcher:
 
     def has_atomic_hq_defense(self, board: engine.BaseBoard) -> bool:
         """Whether one legal action resolves the HQ threat or unlocks escape."""
-        key = board.serialize()
+        key = board_key(board)
         cached = self.atomic_hq_defense_cache.get(key)
         if cached is not None:
             return cached
@@ -2248,7 +2296,7 @@ class Searcher:
 
     def has_immediate_hq_capture(self, board: engine.BaseBoard) -> bool:
         """Whether the side to act can take the enemy HQ with one legal action."""
-        key = board.serialize()
+        key = board_key(board)
         cached = self.immediate_hq_capture_cache.get(key)
         if cached is not None:
             return cached
@@ -2281,7 +2329,7 @@ class Searcher:
         tactical combinations that an atomic-action beam is most likely to
         discard.
         """
-        key = board.serialize()
+        key = board_key(board)
         cached = self.same_turn_hq_capture_cache.get(key)
         if cached is not None:
             return cached
@@ -2291,10 +2339,63 @@ class Searcher:
         if board.turn_moves >= self.max_actions - 1:
             self.same_turn_hq_capture_cache[key] = False
             return False
+
+        enemy_hqs = board.pieces(engine.HQ, not board.turn)
+        actions_remaining = self.max_actions - board.turn_moves
+        setup_radius = 2 if actions_remaining >= 3 else 1
+        first_positions: Dict[BoardKey, engine.BaseBoard] = {}
         for move in board.generate_legal_moves():
-            if self.unlocks_immediate_hq_capture(board, move):
+            if (
+                move.name in ("AutoCapture", "Skip")
+                or move.from_square is None
+                or move.to_square is None
+                or move.from_square == move.to_square
+                or not any(
+                    chebyshev(move.from_square, hq_square) <= setup_radius
+                    or chebyshev(move.to_square, hq_square) <= setup_radius
+                    for hq_square in enemy_hqs
+                )
+            ):
+                continue
+            child = board.copy()
+            child.push(move)
+            if child.turn != board.turn or child.is_game_over():
+                continue
+            if self.has_immediate_hq_capture(child):
                 self.same_turn_hq_capture_cache[key] = True
                 return True
+            first_positions.setdefault(board_key(child), child)
+
+        if actions_remaining >= 3:
+            # Search the two-setup case once per unique intermediate board.
+            # Calling ``unlocks_immediate_hq_capture`` for every first move
+            # regenerated the same move-order permutations hundreds of times
+            # inside each safety check, which could consume the entire Vercel
+            # turn budget before minimax completed one opponent reply.
+            for child in first_positions.values():
+                for follow_up in child.generate_legal_moves():
+                    if (
+                        follow_up.name in ("AutoCapture", "Skip")
+                        or follow_up.from_square is None
+                        or follow_up.to_square is None
+                    ):
+                        continue
+                    near_hq = any(
+                        chebyshev(follow_up.from_square, hq_square) == 1
+                        or chebyshev(follow_up.to_square, hq_square) == 1
+                        for hq_square in enemy_hqs
+                    )
+                    if follow_up.capture_preference is None and not near_hq:
+                        continue
+                    grandchild = child.copy()
+                    grandchild.push(follow_up)
+                    if (
+                        grandchild.turn == board.turn
+                        and not grandchild.is_game_over()
+                        and self.has_immediate_hq_capture(grandchild)
+                    ):
+                        self.same_turn_hq_capture_cache[key] = True
+                        return True
         self.same_turn_hq_capture_cache[key] = False
         return False
 
@@ -2311,7 +2412,7 @@ class Searcher:
         tradeoff: it may call this bounded complete-turn enumeration, but it
         must never certify safety from an incomplete probe.
         """
-        cache_key = (board.serialize(), attacker)
+        cache_key = (board_key(board), attacker)
         cached = self.exact_same_turn_hq_capture_cache.get(cache_key)
         if cached is not None:
             return cached
@@ -2324,7 +2425,7 @@ class Searcher:
             remaining_nodes[0] -= 1
             self.hq_survival_reply_nodes += 1
             current = frontier.pop()
-            key = current.serialize()
+            key = board_key(current)
             if key in seen:
                 continue
             seen.add(key)
@@ -2459,15 +2560,15 @@ class Searcher:
         frontier: List[Tuple[engine.BaseBoard, List[engine.Move]]] = [
             (root.copy(), [])
         ]
-        seen: set[str] = set()
-        completed: Dict[str, Tuple[engine.BaseBoard, List[engine.Move]]] = {}
+        seen: set[BoardKey] = set()
+        completed: Dict[BoardKey, Tuple[engine.BaseBoard, List[engine.Move]]] = {}
         reply_budget = [max_reply_nodes]
         probe_nodes = 0
         while frontier and probe_nodes < max_probe_nodes:
             board, line = frontier.pop()
             probe_nodes += 1
             self.hq_survival_probe_nodes += 1
-            key = board.serialize()
+            key = board_key(board)
             if key in seen:
                 continue
             seen.add(key)
@@ -2574,16 +2675,23 @@ class Searcher:
             # cheap geometric gate keeps unlock detection from regenerating
             # moves for every quiet action in an ordinary position.
             return False
+        cache_key = (board_key(board), move.uci())
+        cached = self.hq_capture_unlock_move_cache.get(cache_key)
+        if cached is not None:
+            return cached
         if self.has_immediate_hq_capture(board):
             # The capture was already legal; this action did not unlock it
             # and must not receive forcing priority merely for preserving it.
+            self.hq_capture_unlock_move_cache[cache_key] = False
             return False
 
         child = board.copy()
         child.push(move)
         if child.turn != board.turn or child.is_game_over():
+            self.hq_capture_unlock_move_cache[cache_key] = False
             return False
         if self.has_immediate_hq_capture(child):
+            self.hq_capture_unlock_move_cache[cache_key] = True
             return True
 
         # Some three-action mates need one more setup before the HQ capture
@@ -2593,6 +2701,7 @@ class Searcher:
         # around the target HQ, and only when two counted actions remain, so
         # this tactical extension stays narrow and deterministic.
         if child.turn_moves >= self.max_actions - 1:
+            self.hq_capture_unlock_move_cache[cache_key] = False
             return False
         for follow_up in child.generate_legal_moves():
             if follow_up.name in ("AutoCapture", "Skip"):
@@ -2615,7 +2724,9 @@ class Searcher:
                 and not grandchild.is_game_over()
                 and self.has_immediate_hq_capture(grandchild)
             ):
+                self.hq_capture_unlock_move_cache[cache_key] = True
                 return True
+        self.hq_capture_unlock_move_cache[cache_key] = False
         return False
 
     def move_priority(self, board: engine.BaseBoard, move: engine.Move) -> float:
@@ -3141,7 +3252,7 @@ class Searcher:
             add(terminal[0])
 
         if (
-            board.serialize() == self.root_key
+            board_key(board) == self.root_key
             and self.stagnation_factor() >= 0.20
         ):
             # Keep genuinely progressive root alternatives in the minimax
@@ -3434,7 +3545,7 @@ class Searcher:
         A wider, first-action-diverse frontier is carried until the side changes;
         only complete resulting positions become minimax branches.
         """
-        cache_key = board.serialize()
+        cache_key = board_key(board)
         cached = self.turn_cache.get(cache_key)
         if cached is not None:
             self.turn_cache_hits += 1
@@ -3553,7 +3664,7 @@ class Searcher:
                         self.consider_early_root_fallback(
                             board, cache_key, candidate, original_turn
                         )
-                    key = child.serialize()
+                    key = board_key(child)
                     incumbent = expanded.get(key)
                     if incumbent is not None:
                         self.complete_turns_deduplicated += 1
@@ -3583,7 +3694,7 @@ class Searcher:
         self.complete_turns_generated += len(completed)
         unique: Dict[str, PartialTurn] = {}
         for partial in completed:
-            key = partial.board.serialize()
+            key = board_key(partial.board)
             incumbent = unique.get(key)
             if incumbent is None or self._prefer_partial(
                 partial, incumbent, original_turn
@@ -3720,7 +3831,7 @@ class Searcher:
             cleaned = self.trim_filler_action(board, candidate, original_turn)
             if cleaned is None:
                 continue
-            key = cleaned.board.serialize()
+            key = board_key(cleaned.board)
             incumbent = cleaned_by_position.get(key)
             if incumbent is None or self.candidate_sort_key(
                 cleaned, original_turn, is_root_generation
@@ -3732,9 +3843,9 @@ class Searcher:
             candidates.extend(cleaned_by_position.values())
             self.purposeful_early_stops_generated += len(cleaned_by_position)
         if is_root_generation and self.root_fallback is not None:
-            fallback_key = self.root_fallback.board.serialize()
+            fallback_key = board_key(self.root_fallback.board)
             if not any(
-                candidate.board.serialize() == fallback_key
+                board_key(candidate.board) == fallback_key
                 for candidate in candidates
             ):
                 # The deadline seed is generated before minimax precisely so
@@ -3975,7 +4086,7 @@ class Searcher:
                     return best
             return SearchResult(self.static_score(board), [])
 
-        key = (board.serialize(), turns_left)
+        key = (board_key(board), turns_left)
         cached = self.table.get(key)
         if cached is not None:
             self.transposition_hits += 1
@@ -3988,7 +4099,7 @@ class Searcher:
         maximizing = board.turn == engine.RED
         best = SearchResult(-math.inf if maximizing else math.inf, [])
         complete = True
-        is_root = board.serialize() == self.root_key
+        is_root = board_key(board) == self.root_key
         root_scores: List[Tuple[float, TurnCandidate]] = []
         for turn in turns:
             result = self.alphabeta(turn.board, turns_left - 1, alpha, beta)
@@ -4531,7 +4642,7 @@ def search(
         max_actions=max_actions,
         stagnation_turns=stagnation_turns,
     )
-    searcher.root_key = board.serialize()
+    searcher.root_key = board_key(board)
     best: Optional[SearchResult] = None
     completed_depth = 0
     timed_out = False
@@ -4626,7 +4737,14 @@ def search(
                     searcher.early_plan_score(seed_action_purposes),
                 )
         requested_depth = max(1, max_depth)
-        final_deadline = searcher.deadline
+        # Seed construction and its isolated safety probe are a prerequisite,
+        # not part of minimax. Reset the main deadline here so a slow Vercel
+        # worker still receives the requested tactical-search budget. Before
+        # this reset the separate seed searcher could consume most of the
+        # absolute deadline, leaving zero time to generate root alternatives.
+        main_search_started = time.monotonic()
+        final_deadline = main_search_started + max(1, time_ms) / 1000.0
+        searcher.deadline = final_deadline
         if requested_depth >= 2:
             searcher.hq_leaf_extension_enabled = True
             # First verify the purposeful emergency turn against one complete
@@ -4640,7 +4758,8 @@ def search(
                 searcher.verification_mode = True
                 searcher.deadline = min(
                     final_deadline,
-                    started + max(0.05, time_ms / 1000.0 * 0.12),
+                    main_search_started
+                    + max(0.05, time_ms / 1000.0 * 0.12),
                 )
                 try:
                     reply = searcher.alphabeta(
@@ -4681,7 +4800,8 @@ def search(
             searcher.root_ranked_turns = []
             searcher.deadline = min(
                 final_deadline,
-                started + max(0.05, time_ms / 1000.0 * 0.90),
+                main_search_started
+                + max(0.05, time_ms / 1000.0 * 0.90),
             )
             try:
                 best = searcher.alphabeta(board, 2, -math.inf, math.inf)
