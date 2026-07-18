@@ -65,6 +65,23 @@ export interface DurableSelfPlayDecision {
   currentPlayerScore: number;
   winProbability: number;
   completedDepth: number;
+  /** Search-shape telemetry for diagnosing budget and branching failures. */
+  searchTelemetry?: {
+    nodes: number;
+    elapsedMs: number;
+    ruleFilteredActions: number;
+    beamPrunedActions: number;
+    partialTurnsPruned: number;
+    completeTurnsGenerated: number;
+    completeTurnsDeduplicated: number;
+    completeTurnsPruned: number;
+    tacticallyUnsafeTurns: number;
+    rotationQuotaPruned: number;
+    purposeFilteredTurns: number;
+    valueModelEvaluations: number;
+    turnCacheHits: number;
+    transpositionHits: number;
+  };
   persistentCacheHit?: boolean;
   timedOut: boolean;
   fallback: "none" | "safe" | "seeded";
@@ -205,6 +222,23 @@ async function playDurableTurn(
         ? analysis.model.before.redWinProbability
         : analysis.model.before.blueWinProbability,
     completedDepth: analysis.search.search.completed_depth_in_turns,
+    searchTelemetry: {
+      nodes: analysis.search.search.nodes,
+      elapsedMs: analysis.search.search.elapsed_ms,
+      ruleFilteredActions: analysis.search.search.rule_filtered_actions,
+      beamPrunedActions: analysis.search.search.beam_pruned_actions,
+      partialTurnsPruned: analysis.search.search.partial_turns_pruned,
+      completeTurnsGenerated: analysis.search.search.complete_turns_generated,
+      completeTurnsDeduplicated:
+        analysis.search.search.complete_turns_deduplicated,
+      completeTurnsPruned: analysis.search.search.complete_turns_pruned,
+      tacticallyUnsafeTurns: analysis.search.search.tactically_unsafe_turns,
+      rotationQuotaPruned: analysis.search.search.rotation_quota_pruned,
+      purposeFilteredTurns: analysis.search.search.purpose_filtered_turns,
+      valueModelEvaluations: analysis.search.search.value_model_evaluations,
+      turnCacheHits: analysis.search.search.turn_cache_hits,
+      transpositionHits: analysis.search.search.transposition_hits,
+    },
     persistentCacheHit: analysis.search.search.persistent_cache_hit === true,
     timedOut: analysis.search.search.timed_out,
     fallback: analysis.search.search.fallback_used,

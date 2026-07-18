@@ -74,6 +74,21 @@ function percentile(values: number[], fraction: number): number {
   return sorted[Math.round((sorted.length - 1) * fraction)];
 }
 
+function distribution(values: number[]) {
+  if (!values.length) return { count: 0 };
+  return {
+    count: values.length,
+    min: Math.min(...values),
+    median: percentile(values, 0.5),
+    p90: percentile(values, 0.9),
+    p99: percentile(values, 0.99),
+    max: Math.max(...values),
+    mean: Number(
+      (values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(1)
+    ),
+  };
+}
+
 async function main() {
   const generationIds = argumentsFor("--generation");
   if (!generationIds.length) {
@@ -107,6 +122,10 @@ async function main() {
     depth: number;
     candidates: number;
     score: number;
+    nodes?: number;
+    elapsedMs?: number;
+    completeTurnsGenerated?: number;
+    beamPrunedActions?: number;
   }> = [];
   const historyAvoidanceByTurn: Record<string, number> = {};
   const purposeTelemetry = {
@@ -211,6 +230,10 @@ async function main() {
     };
   }> = [];
   const lengths: number[] = [];
+  const searchElapsedMs: number[] = [];
+  const searchNodes: number[] = [];
+  const completeTurnsGenerated: number[] = [];
+  const fallbackElapsedMs: number[] = [];
   let decisions = 0;
   let trainingPositions = 0;
   let fallbackDecisions = 0;
@@ -257,6 +280,16 @@ async function main() {
         )
       );
       increment(depths, String(decision.completedDepth));
+      if (decision.searchTelemetry) {
+        searchElapsedMs.push(decision.searchTelemetry.elapsedMs);
+        searchNodes.push(decision.searchTelemetry.nodes);
+        completeTurnsGenerated.push(
+          decision.searchTelemetry.completeTurnsGenerated
+        );
+        if (decision.fallback !== "none") {
+          fallbackElapsedMs.push(decision.searchTelemetry.elapsedMs);
+        }
+      }
       if (decision.persistentCacheHit) persistentCacheHits++;
       increment(
         depthByColor,
@@ -284,6 +317,11 @@ async function main() {
             depth: decision.completedDepth,
             candidates: decision.candidateTurns?.length ?? 0,
             score: decision.currentPlayerScore,
+            nodes: decision.searchTelemetry?.nodes,
+            elapsedMs: decision.searchTelemetry?.elapsedMs,
+            completeTurnsGenerated:
+              decision.searchTelemetry?.completeTurnsGenerated,
+            beamPrunedActions: decision.searchTelemetry?.beamPrunedActions,
           });
         }
       }
@@ -532,6 +570,13 @@ async function main() {
         countedActionCounts,
         completedDepths: depths,
         depthByColor,
+        searchTelemetry: {
+          coverageRate: Number((searchElapsedMs.length / decisions).toFixed(4)),
+          elapsedMs: distribution(searchElapsedMs),
+          nodes: distribution(searchNodes),
+          completeTurnsGenerated: distribution(completeTurnsGenerated),
+          fallbackElapsedMs: distribution(fallbackElapsedMs),
+        },
         fallbackTypes,
         fallbackByColor,
         fallbackByPhase,
