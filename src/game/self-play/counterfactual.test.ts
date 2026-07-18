@@ -123,4 +123,27 @@ describe("counterfactual rollout selection", () => {
       1, 3,
     ]);
   });
+
+  it("interleaves both root players within each phase", () => {
+    const roots = selectCounterfactualRoots(
+      [
+        game("early-red", [decision(10, [1, 1.1], "RED")]),
+        game("early-blue", [decision(11, [1, 1.1], "BLUE")]),
+        game("middle-red", [decision(40, [1, 1.1], "RED")]),
+        game("middle-blue", [decision(41, [1, 1.1], "BLUE")]),
+        game("late-red", [decision(70, [1, 1.1], "RED")]),
+        game("late-blue", [decision(71, [1, 1.1], "BLUE")]),
+      ],
+      { maxRoots: 6, maxRootsPerGame: 1 }
+    );
+
+    expect(roots.map((root) => root.rootPlayer)).toEqual([
+      "RED",
+      "BLUE",
+      "RED",
+      "BLUE",
+      "RED",
+      "BLUE",
+    ]);
+  });
 });

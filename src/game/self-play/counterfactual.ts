@@ -169,13 +169,17 @@ export function selectCounterfactualRoots(
   // Interleave opening/early, middle, and late roots. A pure smallest-margin
   // sort over-samples late sparse positions, even though the search also
   // needs policy supervision for development and formation decisions.
-  const phaseBuckets = [
-    possible.filter((root) => root.sourceTurnNumber <= 24),
-    possible.filter(
-      (root) => root.sourceTurnNumber > 24 && root.sourceTurnNumber <= 59
-    ),
-    possible.filter((root) => root.sourceTurnNumber > 59),
+  const phasePredicates = [
+    (root: CounterfactualRoot) => root.sourceTurnNumber <= 24,
+    (root: CounterfactualRoot) =>
+      root.sourceTurnNumber > 24 && root.sourceTurnNumber <= 59,
+    (root: CounterfactualRoot) => root.sourceTurnNumber > 59,
   ];
+  const phaseBuckets = phasePredicates.flatMap((inPhase) =>
+    (["RED", "BLUE"] as const).map((player) =>
+      possible.filter((root) => inPhase(root) && root.rootPlayer === player)
+    )
+  );
   const selected: CounterfactualRoot[] = [];
   const perGame = new Map<string, number>();
   while (selected.length < options.maxRoots) {
