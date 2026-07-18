@@ -117,6 +117,25 @@ class ValueModelWeightTests(unittest.TestCase):
             )["passed"]
         )
 
+    def test_validation_selection_gates_support_human_only_baselines(self):
+        def human(log_loss):
+            return {
+                "human": {
+                    "log_loss": log_loss,
+                    "by_perspective": {
+                        "RED": {"log_loss": log_loss},
+                        "BLUE": {"log_loss": log_loss},
+                    },
+                }
+            }
+
+        gates = validation_selection_gates(human(0.39), human(0.40))
+        self.assertEqual(
+            [gate["name"] for gate in gates],
+            ["human-log-loss", "human-red-log-loss", "human-blue-log-loss"],
+        )
+        self.assertTrue(all(gate["passed"] for gate in gates))
+
     def test_share_grid_is_selected_on_validation_and_exported_once(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

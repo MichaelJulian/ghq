@@ -1,5 +1,10 @@
 import { endgame } from "@/game/variants";
-import { extractValueFeatures, VALUE_FEATURE_NAMES } from "./features";
+import {
+  extractValueFeatures,
+  extractValueFeaturesV2,
+  VALUE_FEATURE_NAMES,
+  VALUE_FEATURE_NAMES_V2,
+} from "./features";
 import {
   assertValueModelCompatible,
   CHALLENGER_VALUE_MODEL_METADATA,
@@ -8,6 +13,7 @@ import {
   predictZeroSumWinProbability,
   TWO_ACTION_VALUE_MODEL_METADATA,
   valueModelCheckpointId,
+  type ValueModelArtifact,
 } from "./inference";
 
 const position = {
@@ -87,6 +93,25 @@ describe("gradient-boosted value model", () => {
       extractValueFeatures(position, "RED")
     );
     expect(Number.isFinite(probability)).toBe(true);
+  });
+
+  it("accepts the append-only v2 schema without changing incumbent indices", () => {
+    expect(VALUE_FEATURE_NAMES_V2.slice(0, VALUE_FEATURE_NAMES.length)).toEqual(
+      [...VALUE_FEATURE_NAMES]
+    );
+    const artifact: ValueModelArtifact = {
+      format: "ghq-gradient-boosted-value-v1",
+      feature_names: [...VALUE_FEATURE_NAMES_V2],
+      base_raw_score: 0,
+      learning_rate: 0.1,
+      calibration: { kind: "platt", scale: 1, intercept: 0 },
+      trees: [],
+      metadata: {},
+    };
+    expect(() => assertValueModelCompatible(artifact)).not.toThrow();
+    expect(
+      predictFromFeatures(extractValueFeaturesV2(position, "RED"), artifact)
+    ).toBeCloseTo(0.5, 12);
   });
 
   it("overrides the model for a captured HQ", () => {

@@ -399,6 +399,14 @@ def validation_selection_gates(
     gates: List[Dict[str, Any]] = []
 
     def add(name: str, source: str, maximum: float, perspective: Optional[str] = None) -> None:
+        candidate_has_source = source in candidate
+        baseline_has_source = source in baseline
+        if not candidate_has_source and not baseline_has_source:
+            return
+        if candidate_has_source != baseline_has_source:
+            raise ValueError(
+                f"candidate and baseline validation sources differ for {source}"
+            )
         candidate_record = candidate[source]
         baseline_record = baseline[source]
         if perspective is not None:

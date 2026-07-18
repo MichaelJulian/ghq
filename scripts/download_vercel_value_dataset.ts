@@ -6,7 +6,12 @@ import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { get, list, type ListBlobResultBlob } from "@vercel/blob";
 
-import { VALUE_FEATURE_NAMES } from "../src/game/value-model/features";
+import { FENtoBoardState } from "../src/game/notation";
+import {
+  extractValueFeaturesV2,
+  VALUE_FEATURE_NAMES,
+  VALUE_FEATURE_NAMES_V2,
+} from "../src/game/value-model/features";
 
 interface DurableTrainingSample {
   generationId: string;
@@ -15,6 +20,7 @@ interface DurableTrainingSample {
   player: "RED" | "BLUE";
   outcomeValue: number;
   features: number[];
+  fen?: string;
   codeVersion: string;
   valueModel?: "incumbent" | "challenger";
   valueModelCheckpoint?: string;
@@ -50,6 +56,11 @@ function argument(name: string): string {
     throw new Error(`Missing required argument ${name}`);
   }
   return process.argv[index + 1];
+}
+
+function optionalArgument(name: string): string | undefined {
+  const index = process.argv.indexOf(name);
+  return index === -1 ? undefined : process.argv[index + 1];
 }
 
 async function selectedBlobs(generationPrefix: string) {
@@ -95,6 +106,12 @@ async function main() {
   const codeVersion = argument("--code-version");
   const valueModelCheckpoint = argument("--value-model-checkpoint");
   const outputPath = argument("--output");
+  const featureSchema = optionalArgument("--feature-schema") ?? "v1";
+  if (featureSchema !== "v1" && featureSchema !== "v2") {
+    throw new Error("--feature-schema must be v1 or v2");
+  }
+  const featureNames =
+    featureSchema === "v2" ? VALUE_FEATURE_NAMES_V2 : VALUE_FEATURE_NAMES;
   const blobs = await selectedBlobs(generationPrefix);
   if (!blobs.length) throw new Error("No matching training artifacts found");
   await mkdir(dirname(outputPath), { recursive: true });
@@ -103,7 +120,8 @@ async function main() {
     `${JSON.stringify({
       type: "schema",
       format: "ghq-value-features-v1",
-      feature_names: VALUE_FEATURE_NAMES,
+      feature_names: featureNames,
+      feature_schema: featureSchema,
       ruleset: "three-actions",
       source: "vercel-self-play",
       generation_prefix: generationPrefix,
@@ -146,8 +164,14 @@ async function main() {
             }`
           );
         }
-        if (sample.features.length !== VALUE_FEATURE_NAMES.length) {
+        if (
+          featureSchema === "v1" &&
+          sample.features.length !== VALUE_FEATURE_NAMES.length
+        ) {
           throw new Error(`Feature mismatch in ${sample.gameId}`);
+        }
+        if (featureSchema === "v2" && !sample.fen) {
+          throw new Error(`Missing FEN for v2 features in ${sample.gameId}`);
         }
         const pairId = pairedGameId(sample.generationId, sample.gameId);
         const record = recordsByGame.get(sample.gameId);
@@ -198,6 +222,20 @@ async function main() {
     games.add(gameId);
     generations.add(record.generationId);
     for (const sample of record.samples) {
+      let features = sample.features;
+      if (featureSchema === "v2") {
+        const state = FENtoBoardState(sample.fen!);
+        features = extractValueFeaturesV2(
+          {
+            board: state.board,
+            redReserve: state.redReserve,
+            blueReserve: state.blueReserve,
+            currentPlayer: state.currentPlayerTurn ?? sample.player,
+            turnNumber: sample.turnNumber,
+          },
+          sample.player
+        );
+      }
       output.write(
         `${JSON.stringify({
           type: "sample",
@@ -214,7 +252,7 @@ async function main() {
           turn: sample.turnNumber,
           perspective: sample.player,
           label: sample.outcomeValue,
-          features: sample.features,
+          features,
         })}\n`
       );
       samples++;
@@ -236,6 +274,7 @@ async function main() {
       excludedGames: recordsByGame.size - games.size,
       excludedIncompletePairs: gamesByPair.size - completePairs.size,
       samples,
+      featureSchema,
       outputPath,
     })}\n`
   );

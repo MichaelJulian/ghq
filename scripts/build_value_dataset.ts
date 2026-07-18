@@ -9,7 +9,9 @@ import { createInterface } from "node:readline";
 import type { Board, Player, ReserveFleet } from "../src/game/engine";
 import {
   extractValueFeatures,
+  extractValueFeaturesV2,
   VALUE_FEATURE_NAMES,
+  VALUE_FEATURE_NAMES_V2,
 } from "../src/game/value-model/features";
 
 type RawPosition = {
@@ -33,16 +35,30 @@ function argument(name: string): string {
   return process.argv[index + 1];
 }
 
+function optionalArgument(name: string): string | undefined {
+  const index = process.argv.indexOf(name);
+  return index === -1 ? undefined : process.argv[index + 1];
+}
+
 async function main() {
   const positionsPath = argument("--positions");
   const outputPath = argument("--output");
+  const featureSchema = optionalArgument("--feature-schema") ?? "v1";
+  if (featureSchema !== "v1" && featureSchema !== "v2") {
+    throw new Error("--feature-schema must be v1 or v2");
+  }
+  const featureNames =
+    featureSchema === "v2" ? VALUE_FEATURE_NAMES_V2 : VALUE_FEATURE_NAMES;
+  const extractFeatures =
+    featureSchema === "v2" ? extractValueFeaturesV2 : extractValueFeatures;
   await mkdir(dirname(outputPath), { recursive: true });
   const output = createWriteStream(outputPath, { encoding: "utf8" });
   output.write(
     `${JSON.stringify({
       type: "schema",
       format: "ghq-value-features-v1",
-      feature_names: VALUE_FEATURE_NAMES,
+      feature_names: featureNames,
+      feature_schema: featureSchema,
     })}\n`
   );
 
@@ -64,7 +80,7 @@ async function main() {
       turnNumber: raw.turn,
     };
     for (const perspective of ["RED", "BLUE"] as const) {
-      const features = extractValueFeatures(position, perspective);
+      const features = extractFeatures(position, perspective);
       output.write(
         `${JSON.stringify({
           type: "sample",
@@ -87,7 +103,13 @@ async function main() {
     output.on("error", reject);
   });
   process.stderr.write(
-    `${JSON.stringify({ games: games.size, positions, samples, features: VALUE_FEATURE_NAMES.length })}\n`
+    `${JSON.stringify({
+      games: games.size,
+      positions,
+      samples,
+      features: featureNames.length,
+      featureSchema,
+    })}\n`
   );
 }
 

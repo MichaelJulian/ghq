@@ -1,7 +1,9 @@
 import type { Player } from "@/game/engine";
 import {
   extractValueFeatures,
+  extractValueFeaturesV2,
   VALUE_FEATURE_NAMES,
+  VALUE_FEATURE_NAMES_V2,
   ValuePosition,
 } from "@/game/value-model/features";
 import generatedModel from "@/game/value-model/model.generated.json";
@@ -90,16 +92,27 @@ export function assertValueModelCompatible(
   if (artifact.format !== "ghq-gradient-boosted-value-v1") {
     throw new Error(`Unsupported GHQ value model format: ${artifact.format}`);
   }
-  if (
-    artifact.feature_names.length !== VALUE_FEATURE_NAMES.length ||
-    artifact.feature_names.some(
-      (feature, index) => feature !== VALUE_FEATURE_NAMES[index]
-    )
-  ) {
+  const matches = (featureNames: readonly string[]) =>
+    artifact.feature_names.length === featureNames.length &&
+    artifact.feature_names.every(
+      (feature, index) => feature === featureNames[index]
+    );
+  if (!matches(VALUE_FEATURE_NAMES) && !matches(VALUE_FEATURE_NAMES_V2)) {
     throw new Error(
       "GHQ value model feature schema does not match the runtime"
     );
   }
+}
+
+function featuresForArtifact(
+  position: ValuePosition,
+  perspective: Player,
+  artifact: ValueModelArtifact
+): number[] {
+  assertValueModelCompatible(artifact);
+  return artifact.feature_names.length === VALUE_FEATURE_NAMES_V2.length
+    ? extractValueFeaturesV2(position, perspective)
+    : extractValueFeatures(position, perspective);
 }
 
 export function predictFromFeatures(
@@ -136,9 +149,10 @@ export function predictWinProbability(
     .some((piece) => piece?.type === "HQ" && piece.player === opponent);
   if (!ownHq) return 0;
   if (!opponentHq) return 1;
+  const artifact = modelForRuleset(ruleset, version);
   return predictFromFeatures(
-    extractValueFeatures(position, perspective),
-    modelForRuleset(ruleset, version)
+    featuresForArtifact(position, perspective, artifact),
+    artifact
   );
 }
 

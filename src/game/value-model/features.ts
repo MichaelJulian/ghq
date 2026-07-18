@@ -85,6 +85,24 @@ const SIDE_FEATURE_NAMES = [
   "pseudo_mobility",
 ] as const;
 
+/**
+ * Formation features added for the next challenger. Keep these separate from
+ * SIDE_FEATURE_NAMES so the deployed incumbent retains its exact feature
+ * schema and checkpoint compatibility while a v2 challenger is trained.
+ */
+const STRUCTURE_V2_SIDE_FEATURE_NAMES = [
+  "infantry_vertical_adjacent_pairs",
+  "infantry_diagonal_adjacent_pairs",
+  "infantry_isolated_count",
+  "infantry_distinct_files",
+  "infantry_file_span",
+  "infantry_rank_span",
+  "infantry_frontier_count",
+  "material_pair_distance_mean",
+  "material_file_span",
+  "material_rank_span",
+] as const;
+
 const DIFFERENCE_FEATURES = [
   "material_board",
   "material_total",
@@ -118,6 +136,15 @@ export const VALUE_FEATURE_NAMES = [
   ...DIFFERENCE_FEATURES.map((name) => `diff_${name}`),
 ] as const;
 
+export const VALUE_FEATURE_NAMES_V2 = [
+  // Preserve every incumbent index so its exact trees can serve as a fair
+  // baseline against v2. New evidence is append-only.
+  ...VALUE_FEATURE_NAMES,
+  ...STRUCTURE_V2_SIDE_FEATURE_NAMES.map((name) => `own_${name}`),
+  ...STRUCTURE_V2_SIDE_FEATURE_NAMES.map((name) => `opp_${name}`),
+  ...STRUCTURE_V2_SIDE_FEATURE_NAMES.map((name) => `diff_${name}`),
+] as const;
+
 export type ValueFeatureName = (typeof VALUE_FEATURE_NAMES)[number];
 export type ValueFeatureRecord = Record<ValueFeatureName, number>;
 
@@ -135,7 +162,10 @@ type PlacedPiece = {
 };
 
 type SideFeatureName = (typeof SIDE_FEATURE_NAMES)[number];
+type StructureV2SideFeatureName =
+  (typeof STRUCTURE_V2_SIDE_FEATURE_NAMES)[number];
 type SideFeatures = Record<SideFeatureName, number>;
+type StructureV2SideFeatures = Record<StructureV2SideFeatureName, number>;
 
 function otherPlayer(player: Player): Player {
   return player === "RED" ? "BLUE" : "RED";
@@ -313,6 +343,91 @@ function structureAndOptionMetrics(
   };
 }
 
+function extractStructureV2SideFeatures(
+  position: ValuePosition,
+  player: Player
+): StructureV2SideFeatures {
+  const friendly = piecesFor(position.board, player);
+  const ownHomeRank = homeRank(player);
+  const formationInfantry = friendly.filter(
+    ({ piece }) =>
+      INFANTRY_TYPES.has(piece.type) && piece.type !== "AIRBORNE_INFANTRY"
+  );
+  const formationMaterial = friendly.filter(
+    ({ piece }) => piece.type !== "HQ" && piece.type !== "AIRBORNE_INFANTRY"
+  );
+  const result = Object.fromEntries(
+    STRUCTURE_V2_SIDE_FEATURE_NAMES.map((name) => [name, 0])
+  ) as StructureV2SideFeatures;
+
+  // A staggered infantry screen has diagonal adjacency without forming an
+  // easily penetrated same-file column. These raw counts let the model learn
+  // the phase-dependent trade-off instead of baking a fixed score into search.
+  for (let first = 0; first < formationInfantry.length; first++) {
+    for (let second = first + 1; second < formationInfantry.length; second++) {
+      const rowDistance = Math.abs(
+        formationInfantry[first].at[0] - formationInfantry[second].at[0]
+      );
+      const columnDistance = Math.abs(
+        formationInfantry[first].at[1] - formationInfantry[second].at[1]
+      );
+      if (rowDistance === 1 && columnDistance === 0) {
+        result.infantry_vertical_adjacent_pairs++;
+      }
+      if (rowDistance === 1 && columnDistance === 1) {
+        result.infantry_diagonal_adjacent_pairs++;
+      }
+    }
+  }
+  result.infantry_isolated_count = formationInfantry.filter((candidate) =>
+    formationMaterial.every(
+      (other) => other === candidate || chebyshev(candidate.at, other.at) > 1
+    )
+  ).length;
+
+  const infantryFiles = formationInfantry.map(({ at }) => at[1]);
+  const infantryRanks = formationInfantry.map(({ at }) => at[0]);
+  result.infantry_distinct_files = new Set(infantryFiles).size;
+  result.infantry_file_span = infantryFiles.length
+    ? Math.max(...infantryFiles) - Math.min(...infantryFiles)
+    : 0;
+  result.infantry_rank_span = infantryRanks.length
+    ? Math.max(...infantryRanks) - Math.min(...infantryRanks)
+    : 0;
+  if (formationInfantry.length) {
+    const frontierAdvance = Math.max(
+      ...formationInfantry.map(({ at }) => Math.abs(at[0] - ownHomeRank))
+    );
+    result.infantry_frontier_count = formationInfantry.filter(
+      ({ at }) => Math.abs(at[0] - ownHomeRank) === frontierAdvance
+    ).length;
+  }
+
+  const materialFiles = formationMaterial.map(({ at }) => at[1]);
+  const materialRanks = formationMaterial.map(({ at }) => at[0]);
+  result.material_file_span = materialFiles.length
+    ? Math.max(...materialFiles) - Math.min(...materialFiles)
+    : 0;
+  result.material_rank_span = materialRanks.length
+    ? Math.max(...materialRanks) - Math.min(...materialRanks)
+    : 0;
+  let materialPairDistance = 0;
+  let materialPairs = 0;
+  for (let first = 0; first < formationMaterial.length; first++) {
+    for (let second = first + 1; second < formationMaterial.length; second++) {
+      materialPairDistance += chebyshev(
+        formationMaterial[first].at,
+        formationMaterial[second].at
+      );
+      materialPairs++;
+    }
+  }
+  result.material_pair_distance_mean = materialPairs
+    ? materialPairDistance / materialPairs
+    : 0;
+  return result;
+}
+
 function extractSideFeatures(
   position: ValuePosition,
   player: Player
@@ -330,7 +445,9 @@ function extractSideFeatures(
     (typeof PIECE_TYPES)[number],
     number
   >;
-  friendly.forEach(({ piece }) => counts[piece.type]++);
+  friendly.forEach(
+    ({ piece }) => counts[piece.type as (typeof PIECE_TYPES)[number]]++
+  );
 
   const result = Object.fromEntries(
     SIDE_FEATURE_NAMES.map((name) => [name, 0])
@@ -527,6 +644,44 @@ export function extractValueFeatures(
   position: ValuePosition,
   perspective: Player
 ): number[] {
+  return extractValueFeaturesWithSchema(
+    position,
+    perspective,
+    SIDE_FEATURE_NAMES,
+    DIFFERENCE_FEATURES,
+    VALUE_FEATURE_NAMES.length
+  );
+}
+
+export function extractValueFeaturesV2(
+  position: ValuePosition,
+  perspective: Player
+): number[] {
+  const opponent = otherPlayer(perspective);
+  const own = extractStructureV2SideFeatures(position, perspective);
+  const opp = extractStructureV2SideFeatures(position, opponent);
+  const values = [
+    ...extractValueFeatures(position, perspective),
+    ...STRUCTURE_V2_SIDE_FEATURE_NAMES.map((name) => own[name]),
+    ...STRUCTURE_V2_SIDE_FEATURE_NAMES.map((name) => opp[name]),
+    ...STRUCTURE_V2_SIDE_FEATURE_NAMES.map((name) => own[name] - opp[name]),
+  ];
+  if (
+    values.length !== VALUE_FEATURE_NAMES_V2.length ||
+    values.some((value) => !Number.isFinite(value))
+  ) {
+    throw new Error("Invalid GHQ v2 value feature vector");
+  }
+  return values;
+}
+
+function extractValueFeaturesWithSchema(
+  position: ValuePosition,
+  perspective: Player,
+  sideFeatureNames: readonly SideFeatureName[],
+  differenceFeatures: readonly SideFeatureName[],
+  expectedLength: number
+): number[] {
   const opponent = otherPlayer(perspective);
   const own = extractSideFeatures(position, perspective);
   const opp = extractSideFeatures(position, opponent);
@@ -549,12 +704,12 @@ export function extractValueFeatures(
     // Standard GHQ begins with 13 non-HQ units per player.
     (nonHqOnBoard + totalReserve) / 26,
     position.currentPlayer === perspective ? 1 : 0,
-    ...SIDE_FEATURE_NAMES.map((name) => own[name]),
-    ...SIDE_FEATURE_NAMES.map((name) => opp[name]),
-    ...DIFFERENCE_FEATURES.map((name) => own[name] - opp[name]),
+    ...sideFeatureNames.map((name) => own[name]),
+    ...sideFeatureNames.map((name) => opp[name]),
+    ...differenceFeatures.map((name) => own[name] - opp[name]),
   ];
   if (
-    values.length !== VALUE_FEATURE_NAMES.length ||
+    values.length !== expectedLength ||
     values.some((value) => !Number.isFinite(value))
   ) {
     throw new Error("Invalid GHQ value feature vector");
