@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getRun } from "workflow/api";
 import { summarizeValueModelArena } from "@/game/self-play/arena-results";
 import {
   readPersistedSelfPlayGames,
@@ -14,6 +15,27 @@ function increment(counts: Record<string, number>, key: string) {
   counts[key] = (counts[key] ?? 0) + 1;
 }
 
+async function unresolvedWorkflowRunStatuses(
+  runIds: string[]
+): Promise<Record<string, number>> {
+  const statuses: Record<string, number> = {};
+  for (let index = 0; index < runIds.length; index += 20) {
+    const chunk = await Promise.all(
+      runIds.slice(index, index + 20).map(async (runId) => {
+        try {
+          const run = getRun(runId);
+          if (!(await run.exists)) return "missing";
+          return await run.status;
+        } catch {
+          return "unavailable";
+        }
+      })
+    );
+    for (const status of chunk) increment(statuses, status);
+  }
+  return statuses;
+}
+
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ generationId: string }> }
@@ -24,6 +46,18 @@ export async function GET(
       readPersistedSelfPlayGames<DurableSelfPlayGameResult>(generationId),
       readSelfPlayGenerationManifest(generationId),
     ]);
+    const persistedGameIds = new Set(games.map((game) => game.gameId));
+    const unresolvedRunIds =
+      manifest?.runs
+        .filter((run) => !persistedGameIds.has(run.gameId))
+        .map((run) => run.runId) ?? [];
+    const workflowRunStatuses = manifest
+      ? await unresolvedWorkflowRunStatuses(unresolvedRunIds)
+      : undefined;
+    if (workflowRunStatuses && games.length > 0) {
+      workflowRunStatuses.completed =
+        (workflowRunStatuses.completed ?? 0) + games.length;
+    }
     const outcomes: Record<string, number> = {};
     const terminations: Record<string, number> = {};
     let decisions = 0;
@@ -71,6 +105,12 @@ export async function GET(
           : Math.max(0, manifest.expectedGames - games.length),
       createdAt: manifest?.createdAt,
       manifestStorage: manifest ? "saved" : "historical-or-missing",
+      workflowRuns: manifest
+        ? {
+            total: manifest.runs.length,
+            statuses: workflowRunStatuses,
+          }
+        : undefined,
       outcomes,
       terminations,
       decisions,
