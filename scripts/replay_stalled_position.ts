@@ -5,6 +5,12 @@ import "dotenv/config";
 import { get } from "@vercel/blob";
 
 import type { Player } from "../src/game/engine-v2";
+import {
+  extendsStrategicBest,
+  mergeStrategicBest,
+  strategicProgress,
+  type StrategicProgress,
+} from "../src/game/self-play/strategic-progress";
 import { analyzeFen } from "../src/server/fen-analysis";
 import {
   actionMadeProgress,
@@ -42,10 +48,27 @@ async function main() {
 
   const recentFens = [game.initialFen];
   const ownTurns: Record<Player, string[][]> = { RED: [], BLUE: [] };
+  const strategicBest: Record<Player, StrategicProgress> = {
+    RED: strategicProgress(game.initialFen, "RED"),
+    BLUE: strategicProgress(game.initialFen, "BLUE"),
+  };
   let turnsWithoutProgress = 0;
   for (const decision of game.decisions) {
     if (decision === target) break;
-    const madeProgress = decision.selectedMoves.some(actionMadeProgress);
+    const currentStrategicProgress = strategicProgress(
+      decision.resultingFen,
+      decision.player
+    );
+    const madeStrategicProgress = extendsStrategicBest(
+      strategicBest[decision.player],
+      currentStrategicProgress
+    );
+    strategicBest[decision.player] = mergeStrategicBest(
+      strategicBest[decision.player],
+      currentStrategicProgress
+    );
+    const madeProgress =
+      decision.selectedMoves.some(actionMadeProgress) || madeStrategicProgress;
     turnsWithoutProgress = madeProgress ? 0 : turnsWithoutProgress + 1;
     recentFens.push(decision.resultingFen);
     ownTurns[decision.player].push(decision.selectedMoves);
