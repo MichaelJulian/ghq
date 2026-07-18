@@ -78,10 +78,22 @@ async function main() {
     maxDepth: integerArgument("--max-depth", 2, 1, 3),
     beamWidth: integerArgument("--beam", 6, 2, 16),
     rolloutTurns: integerArgument("--rollout-turns", 24, 2, 120),
+    replicates: integerArgument("--replicates", 1, 1, 4),
+    explorationTemperature: numberArgument(
+      "--exploration-temperature",
+      0,
+      0,
+      0.5
+    ),
     repetitionLimit: integerArgument("--repetition", 3, 2, 10),
     noProgressTurns: integerArgument("--no-progress", 24, 4, 100),
     branches: roots.flatMap((root) => root.branches),
   };
+  if (request.branches.length * request.replicates > 32) {
+    throw new RangeError(
+      `selected ${request.branches.length} branches x ${request.replicates} replicates; Vercel permits at most 32 runs`
+    );
+  }
   const rendered = `${JSON.stringify(request, null, 2)}\n`;
   const outputPath = argument("--output");
   if (outputPath) await writeFile(outputPath, rendered, "utf8");

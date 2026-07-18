@@ -5,6 +5,7 @@ import type {
   DurableSelfPlayGameResult,
 } from "@/workflows/self-play-game";
 import {
+  counterfactualReplicateSeed,
   counterfactualRootSeed,
   selectCounterfactualRoots,
 } from "./counterfactual";
@@ -97,6 +98,18 @@ describe("counterfactual rollout selection", () => {
     );
     expect(counterfactualRootSeed(42, "game:t9")).not.toBe(
       counterfactualRootSeed(42, "game:t10")
+    );
+  });
+
+  it("uses matched seeds within a stochastic replicate", () => {
+    expect(counterfactualReplicateSeed(42, "game:t9", 0)).toBe(
+      counterfactualReplicateSeed(42, "game:t9", 0)
+    );
+    expect(counterfactualReplicateSeed(42, "game:t9", 0)).not.toBe(
+      counterfactualReplicateSeed(42, "game:t9", 1)
+    );
+    expect(() => counterfactualReplicateSeed(42, "game:t9", -1)).toThrow(
+      "non-negative integer"
     );
   });
 

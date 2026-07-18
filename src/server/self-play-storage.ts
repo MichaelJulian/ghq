@@ -49,6 +49,7 @@ export interface SelfPlayGenerationManifest {
     redMaxActions: number;
     blueMaxActions: number;
     seed: number;
+    explorationTemperature?: number;
   };
   expectedProvenance: {
     incumbentCheckpoints: string[];
@@ -57,6 +58,8 @@ export interface SelfPlayGenerationManifest {
   counterfactual?: {
     sourceGenerationId?: string;
     rolloutTurns: number;
+    replicates?: number;
+    explorationTemperature?: number;
     branches: Array<{
       gameId: string;
       rootId: string;
@@ -68,6 +71,7 @@ export interface SelfPlayGenerationManifest {
       candidateMoves: string[];
       initialFen: string;
       initialTurnNumber: number;
+      replicate?: number;
     }>;
   };
   runs: Array<{

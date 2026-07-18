@@ -4,7 +4,7 @@ import { PERSONALITIES } from "@/game/value-model/personalities";
 import type { PersonalityId } from "@/game/analysis/types";
 import { FENtoBoardState } from "@/game/notation";
 import {
-  counterfactualRootSeed,
+  counterfactualReplicateSeed,
   type CounterfactualBranch,
 } from "@/game/self-play/counterfactual";
 import { valueModelCheckpointId } from "@/game/value-model/inference";
@@ -28,6 +28,8 @@ interface CounterfactualStartRequest {
   maxDepth?: number;
   beamWidth?: number;
   rolloutTurns?: number;
+  replicates?: number;
+  explorationTemperature?: number;
   repetitionLimit?: number;
   noProgressTurns?: number;
   branches?: CounterfactualBranch[];
@@ -201,7 +203,8 @@ function competitor(
   personalityId: PersonalityId,
   timeMs: number,
   maxDepth: number,
-  beamWidth: number
+  beamWidth: number,
+  explorationTemperature: number
 ): DurableSelfPlayCompetitor {
   return {
     id: `${personalityId}-counterfactual-incumbent-a3`,
@@ -209,9 +212,9 @@ function competitor(
     timeMs,
     maxDepth,
     beamWidth,
-    // Paired continuations must differ only in their root candidate, not in
-    // random style sampling during the rollout.
-    explorationTemperature: 0,
+    // Candidate branches use the same random seed within each replicate, so
+    // optional exploration remains a matched source of variation.
+    explorationTemperature,
     maxActions: 3,
     valueModel: "incumbent",
     valueModelCheckpoint: valueModelCheckpointId("three-actions", "incumbent"),
@@ -233,6 +236,19 @@ export async function POST(request: Request) {
       120,
       "rolloutTurns"
     );
+    const replicates = integer(input.replicates, 1, 1, 4, "replicates");
+    const explorationTemperature = Number(
+      input.explorationTemperature ?? 0
+    );
+    if (
+      !Number.isFinite(explorationTemperature) ||
+      explorationTemperature < 0 ||
+      explorationTemperature > 0.5
+    ) {
+      throw new RangeError(
+        "explorationTemperature must be between zero and 0.5"
+      );
+    }
     const repetitionLimit = integer(
       input.repetitionLimit,
       3,
@@ -256,31 +272,42 @@ export async function POST(request: Request) {
         "initialTurnNumber plus rolloutTurns may not exceed turn 400"
       );
     }
+    if (branches.length * replicates > 32) {
+      throw new RangeError("branches times replicates may not exceed 32 runs");
+    }
 
     const generationId = `vercel-cf-r3b3-${seed.toString(
       16
     )}-${Date.now().toString(36)}`;
     const codeVersion = process.env.VERCEL_GIT_COMMIT_SHA ?? "local";
+    const runSpecs = branches.flatMap((branch) =>
+      Array.from({ length: replicates }, (_, replicate) => ({
+        branch,
+        replicate,
+      }))
+    );
     const runs = await Promise.all(
-      branches.map(async (branch, index) => {
+      runSpecs.map(async ({ branch, replicate }, index) => {
         const red = competitor(
           branch.redPersonality,
           timeMs,
           maxDepth,
-          beamWidth
+          beamWidth,
+          explorationTemperature
         );
         const blue = competitor(
           branch.bluePersonality,
           timeMs,
           maxDepth,
-          beamWidth
+          beamWidth,
+          explorationTemperature
         );
         const gameId = `${generationId}-${String(index + 1).padStart(4, "0")}`;
         const run = await start(playDurableSelfPlayGame, [
           {
             generationId,
             gameId,
-            seed: counterfactualRootSeed(seed, branch.rootId),
+            seed: counterfactualReplicateSeed(seed, branch.rootId, replicate),
             red,
             blue,
             initialFen: branch.initialFen,
@@ -292,7 +319,7 @@ export async function POST(request: Request) {
             codeVersion,
           },
         ]);
-        return { gameId, runId: run.runId, red, blue, branch };
+        return { gameId, runId: run.runId, red, blue, branch, replicate };
       })
     );
 
@@ -318,6 +345,7 @@ export async function POST(request: Request) {
         redMaxActions: 3,
         blueMaxActions: 3,
         seed,
+        explorationTemperature,
       },
       expectedProvenance: {
         incumbentCheckpoints: [checkpoint],
@@ -332,7 +360,9 @@ export async function POST(request: Request) {
       counterfactual: {
         sourceGenerationId: input.sourceGenerationId,
         rolloutTurns,
-        branches: runs.map(({ gameId, branch }) => ({
+        replicates,
+        explorationTemperature,
+        branches: runs.map(({ gameId, branch, replicate }) => ({
           gameId,
           rootId: branch.rootId,
           sourceGameId: branch.sourceGameId,
@@ -343,6 +373,7 @@ export async function POST(request: Request) {
           candidateMoves: branch.candidateMoves,
           initialFen: branch.initialFen,
           initialTurnNumber: branch.initialTurnNumber,
+          replicate,
         })),
       },
     };
@@ -359,12 +390,15 @@ export async function POST(request: Request) {
         games: runs.length,
         roots: new Set(branches.map((branch) => branch.rootId)).size,
         rolloutTurns,
+        replicates,
+        explorationTemperature,
         manifestStorage,
-        runs: runs.map(({ gameId, runId, branch }) => ({
+        runs: runs.map(({ gameId, runId, branch, replicate }) => ({
           gameId,
           runId,
           rootId: branch.rootId,
           candidateRank: branch.candidateRank,
+          replicate,
         })),
       },
       { status: 202 }

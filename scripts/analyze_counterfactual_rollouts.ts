@@ -77,7 +77,7 @@ async function main() {
     throw new Error(`${generationId} has no counterfactual manifest metadata`);
   }
   const gameById = new Map(games.map((game) => [game.gameId, game]));
-  const branches = manifest.counterfactual.branches.map((branch) => {
+  const rollouts = manifest.counterfactual.branches.map((branch) => {
     const game = gameById.get(branch.gameId);
     if (!game) return { ...branch, status: "missing" as const };
     const scored = rolloutValue(game, branch.rootPlayer);
@@ -94,6 +94,76 @@ async function main() {
       fallbackDecisions: game.quality.fallbackDecisions,
       unverifiedFallbackDecisions: game.quality.unverifiedFallbackDecisions,
       featuresV3: extractValueFeaturesV3(start, branch.rootPlayer),
+    };
+  });
+  const completedRollouts = rollouts.filter(
+    (
+      branch
+    ): branch is Extract<(typeof rollouts)[number], { status: "completed" }> =>
+      branch.status === "completed"
+  );
+  const rolloutGroups = new Map<string, typeof rollouts>();
+  for (const branch of rollouts) {
+    const key = `${branch.rootId}:${branch.candidateRank}`;
+    const replicates = rolloutGroups.get(key) ?? [];
+    replicates.push(branch);
+    rolloutGroups.set(key, replicates);
+  }
+  const branches = [...rolloutGroups.values()].map((replicates) => {
+    const first = replicates[0];
+    const completed = replicates.filter(
+      (
+        branch
+      ): branch is Extract<(typeof rollouts)[number], { status: "completed" }> =>
+        branch.status === "completed"
+    );
+    if (completed.length !== replicates.length) {
+      return {
+        rootId: first.rootId,
+        sourceGameId: first.sourceGameId,
+        sourceTurnNumber: first.sourceTurnNumber,
+        rootPlayer: first.rootPlayer,
+        candidateRank: first.candidateRank,
+        status: "missing" as const,
+        expectedReplicates: replicates.length,
+        completedReplicates: completed.length,
+      };
+    }
+    const representative = completed[0];
+    return {
+      ...representative,
+      gameId: representative.gameId,
+      status: "completed" as const,
+      rolloutValue:
+        completed.reduce((sum, branch) => sum + branch.rolloutValue, 0) /
+        completed.length,
+      valueSource: completed.every(
+        (branch) => branch.valueSource === "terminal"
+      )
+        ? ("terminal" as const)
+        : ("leaf-model" as const),
+      leafTurnNumber: Math.max(
+        ...completed.map((branch) => branch.leafTurnNumber)
+      ),
+      decisions: completed.reduce((sum, branch) => sum + branch.decisions, 0),
+      fallbackDecisions: completed.reduce(
+        (sum, branch) => sum + branch.fallbackDecisions,
+        0
+      ),
+      unverifiedFallbackDecisions: completed.reduce(
+        (sum, branch) => sum + branch.unverifiedFallbackDecisions,
+        0
+      ),
+      expectedReplicates: replicates.length,
+      completedReplicates: completed.length,
+      replicateValues: completed.map((branch) => ({
+        replicate: branch.replicate ?? 0,
+        gameId: branch.gameId,
+        rolloutValue: branch.rolloutValue,
+        valueSource: branch.valueSource,
+        outcome: branch.outcome,
+        finalFen: branch.finalFen,
+      })),
     };
   });
   const completed = branches.filter(
@@ -160,9 +230,12 @@ async function main() {
     format: "ghq-counterfactual-rollout-report-v1",
     generationId,
     sourceGenerationId: manifest.counterfactual.sourceGenerationId,
-    expectedBranches: manifest.counterfactual.branches.length,
+    expectedBranches: branches.length,
     completedBranches: completed.length,
     missingBranches: branches.length - completed.length,
+    expectedRollouts: rollouts.length,
+    completedRollouts: completedRollouts.length,
+    missingRollouts: rollouts.length - completedRollouts.length,
     rootsWithCompletePairs: pairs.length,
     confidentPairs: confident.length,
     trainingEligiblePairs: trainingEligible.length,
@@ -183,10 +256,20 @@ async function main() {
       (pair) =>
         pair.preferredCandidateRank !== pair.searchPreferredCandidateRank
     ).length,
-    terminalBranches: completed.filter(
+    terminalBranches: completed.filter((branch) =>
+      branch.replicateValues.every(
+        (replicate) => replicate.valueSource === "terminal"
+      )
+    ).length,
+    leafModelBranches: completed.filter((branch) =>
+      branch.replicateValues.some(
+        (replicate) => replicate.valueSource === "leaf-model"
+      )
+    ).length,
+    terminalRollouts: completedRollouts.filter(
       (branch) => branch.valueSource === "terminal"
     ).length,
-    leafModelBranches: completed.filter(
+    leafModelRollouts: completedRollouts.filter(
       (branch) => branch.valueSource === "leaf-model"
     ).length,
     fallbackDecisions: completed.reduce(

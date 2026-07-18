@@ -228,3 +228,18 @@ export function counterfactualRootSeed(
   }
   return hash;
 }
+
+/** Matched candidates share a seed within each replicate, while replicates vary. */
+export function counterfactualReplicateSeed(
+  batchSeed: number,
+  rootId: string,
+  replicate: number
+): number {
+  if (!Number.isSafeInteger(replicate) || replicate < 0) {
+    throw new RangeError("counterfactual replicate must be a non-negative integer");
+  }
+  return counterfactualRootSeed(
+    counterfactualRootSeed(batchSeed, rootId),
+    `replicate:${replicate}`
+  );
+}
