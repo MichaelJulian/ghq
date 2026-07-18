@@ -117,6 +117,12 @@ async function main() {
     candidatesPerRoot: integerArgument("--candidates", 2, 2, 4),
     maxScoreMargin: numberArgument("--max-margin", 1, 0.000_001, 100),
     minTurnNumber: integerArgument("--min-turn", 5, 1, 399),
+    minStrategicDivergence: numberArgument(
+      "--min-divergence",
+      0,
+      0,
+      100
+    ),
     excludeRootIds: excluded,
     excludeSourceGameIds: excludedSourceGames,
   });
@@ -126,6 +132,14 @@ async function main() {
 
   const request = {
     sourceGenerationId: generationId,
+    selection: roots.map((root) => ({
+      rootId: root.rootId,
+      sourceGameId: root.sourceGameId,
+      sourceTurnNumber: root.sourceTurnNumber,
+      rootPlayer: root.rootPlayer,
+      scoreMargin: root.scoreMargin,
+      strategicDivergence: root.strategicDivergence,
+    })),
     seed: integerArgument("--seed", Date.now() >>> 0, 0, 0xffff_ffff),
     timeMs: integerArgument("--time-ms", 20_000, 50, 30_000),
     maxDepth: integerArgument("--max-depth", 2, 1, 3),

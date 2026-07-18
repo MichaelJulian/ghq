@@ -40,6 +40,11 @@ export interface ValueModelArtifact {
     feature_indices: number[];
     coefficients: number[];
   };
+  /** Move-ranking logit applied to completed-turn transitions, never leaves. */
+  policy_correction?: {
+    feature_indices: number[];
+    coefficients: number[];
+  };
   /** Shallow post-calibration trees trained under a pairwise ranking loss. */
   tree_correction?: {
     learning_rate: number;
@@ -140,6 +145,24 @@ export function assertValueModelCompatible(
       throw new Error("GHQ value model linear correction is invalid");
     }
   }
+  const policyCorrection = artifact.policy_correction;
+  if (policyCorrection) {
+    if (
+      policyCorrection.feature_indices.length !==
+        policyCorrection.coefficients.length ||
+      policyCorrection.feature_indices.some(
+        (index) =>
+          !Number.isInteger(index) ||
+          index < 0 ||
+          index >= artifact.feature_names.length
+      ) ||
+      policyCorrection.coefficients.some(
+        (coefficient) => !Number.isFinite(coefficient)
+      )
+    ) {
+      throw new Error("GHQ value model policy correction is invalid");
+    }
+  }
   const treeCorrection = artifact.tree_correction;
   if (correction && treeCorrection) {
     throw new Error("GHQ value model cannot combine correction kinds");
@@ -232,6 +255,38 @@ export function predictFromFeatures(
     }
   }
   return sigmoid(calibrated);
+}
+
+export function policyAdjustmentFromFeatures(
+  features: number[],
+  artifact: ValueModelArtifact = model
+): number {
+  assertValueModelCompatible(artifact);
+  if (features.length !== artifact.feature_names.length) {
+    throw new Error(
+      `Expected ${artifact.feature_names.length} value features, received ${features.length}`
+    );
+  }
+  const correction = artifact.policy_correction;
+  if (!correction) return 0;
+  return correction.feature_indices.reduce(
+    (score, featureIndex, index) =>
+      score + correction.coefficients[index] * features[featureIndex],
+    0
+  );
+}
+
+export function predictPolicyAdjustment(
+  position: ValuePosition,
+  perspective: Player,
+  ruleset: ValueModelRuleset = "three-actions",
+  version: ValueModelVersion = "incumbent"
+): number {
+  const artifact = modelForRuleset(ruleset, version);
+  return policyAdjustmentFromFeatures(
+    featuresForArtifact(position, perspective, artifact),
+    artifact
+  );
 }
 
 export function predictWinProbability(

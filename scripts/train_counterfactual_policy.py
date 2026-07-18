@@ -50,6 +50,15 @@ def parse_args() -> argparse.Namespace:
             "features."
         ),
     )
+    parser.add_argument(
+        "--correction-target",
+        choices=("policy", "value"),
+        default="policy",
+        help=(
+            "Export a move-ranking policy head by default. The legacy value "
+            "target directly changes calibrated win probabilities."
+        ),
+    )
     parser.add_argument("--require-pass", action="store_true")
     return parser.parse_args()
 
@@ -147,9 +156,15 @@ def export_policy_correction(
     standardized_coefficients: np.ndarray,
     dataset_hash: str,
     metadata: Dict[str, Any],
+    correction_target: str = "value",
 ) -> Dict[str, Any]:
-    if baseline.get("linear_correction"):
-        raise ValueError("nested linear corrections are not supported")
+    if correction_target not in ("policy", "value"):
+        raise ValueError(f"unsupported correction target: {correction_target}")
+    correction_key = (
+        "policy_correction" if correction_target == "policy" else "linear_correction"
+    )
+    if baseline.get(correction_key):
+        raise ValueError(f"nested {correction_target} corrections are not supported")
     baseline_names = list(baseline.get("feature_names") or [])
     if feature_names[: len(baseline_names)] != baseline_names:
         raise ValueError("counterfactual features are not append-only")
@@ -159,7 +174,7 @@ def export_policy_correction(
     artifact = copy.deepcopy(baseline)
     artifact["generated_at"] = datetime.now(timezone.utc).isoformat()
     artifact["feature_names"] = feature_names
-    artifact["linear_correction"] = {
+    artifact[correction_key] = {
         "feature_indices": feature_indices.astype(int).tolist(),
         "coefficients": coefficients.astype(float).tolist(),
     }
@@ -167,7 +182,12 @@ def export_policy_correction(
         **baseline.get("metadata", {}),
         **metadata,
         "correction_dataset_sha256": dataset_hash,
-        "correction_kind": "paired-counterfactual-offset-logistic",
+        "correction_kind": (
+            "paired-counterfactual-policy-logistic"
+            if correction_target == "policy"
+            else "paired-counterfactual-offset-logistic"
+        ),
+        "correction_target": correction_target,
         "correction_base_feature_count": len(baseline_names),
         "correction_feature_count": len(feature_indices),
     }
@@ -696,6 +716,7 @@ def main() -> None:
         "cross_validation_random_states": cv_random_states,
         "feature_count": len(feature_names),
         "correction_feature_scope": args.feature_scope,
+        "correction_target": args.correction_target,
         "correction_feature_count": len(feature_indices),
         "candidate_cross_validation": [
             {
@@ -738,6 +759,7 @@ def main() -> None:
             "counterfactual_selected_l2": selected["l2"],
             "counterfactual_selected_feature_count": selected["feature_count"],
             "counterfactual_feature_scope": args.feature_scope,
+            "counterfactual_correction_target": args.correction_target,
             "counterfactual_approved_for_external_holdout": (
                 ready_for_external_holdout
             ),
@@ -747,6 +769,7 @@ def main() -> None:
                 "source_game_ids"
             ],
         },
+        correction_target=args.correction_target,
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.training_report.parent.mkdir(parents=True, exist_ok=True)

@@ -684,6 +684,22 @@ def exported_probabilities(artifact: Dict[str, Any], vectors: np.ndarray) -> np.
     return sigmoid(calibrated)
 
 
+def exported_policy_adjustments(
+    artifact: Dict[str, Any], vectors: np.ndarray
+) -> np.ndarray:
+    """Return move-ranking logits without changing calibrated value output."""
+    correction = artifact.get("policy_correction")
+    if not correction:
+        return np.zeros(len(vectors), dtype=np.float64)
+    indices = np.asarray(correction["feature_indices"], dtype=np.int64)
+    coefficients = np.asarray(correction["coefficients"], dtype=np.float64)
+    if len(indices) != len(coefficients):
+        raise ValueError("policy correction schema mismatch")
+    if len(indices) and (indices.min() < 0 or indices.max() >= vectors.shape[1]):
+        raise ValueError("policy correction feature index is out of range")
+    return vectors[:, indices] @ coefficients
+
+
 def main() -> None:
     args = parse_args()
     self_play_train_shares = requested_self_play_shares(

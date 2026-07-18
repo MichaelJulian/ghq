@@ -20,6 +20,7 @@ try:
     from scripts.train_pairwise_tree_correction import phase_metrics
     from scripts.train_value_model import (
         align_append_only_baseline_schema,
+        exported_policy_adjustments,
         exported_probabilities,
         safe_logit,
         sigmoid,
@@ -34,6 +35,7 @@ except ModuleNotFoundError:  # Direct `python scripts/...` execution.
     from train_pairwise_tree_correction import phase_metrics
     from train_value_model import (
         align_append_only_baseline_schema,
+        exported_policy_adjustments,
         exported_probabilities,
         safe_logit,
         sigmoid,
@@ -58,10 +60,11 @@ def artifact_pair_probabilities(
 ) -> np.ndarray:
     left = np.vstack([record["left_features"] for record in records])
     right = np.vstack([record["right_features"] for record in records])
-    return sigmoid(
-        safe_logit(exported_probabilities(artifact, left))
-        - safe_logit(exported_probabilities(artifact, right))
-    )
+    left_logit = safe_logit(exported_probabilities(artifact, left))
+    right_logit = safe_logit(exported_probabilities(artifact, right))
+    left_logit += exported_policy_adjustments(artifact, left)
+    right_logit += exported_policy_adjustments(artifact, right)
+    return sigmoid(left_logit - right_logit)
 
 
 def subset_metrics(

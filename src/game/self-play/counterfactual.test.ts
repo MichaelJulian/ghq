@@ -5,6 +5,7 @@ import type {
   DurableSelfPlayGameResult,
 } from "@/workflows/self-play-game";
 import {
+  candidateStrategicDivergence,
   counterfactualReplicateSeed,
   counterfactualReplicateEvidence,
   counterfactualRootSeed,
@@ -60,6 +61,33 @@ function game(gameId: string, decisions: DurableSelfPlayDecision[]) {
 }
 
 describe("counterfactual rollout selection", () => {
+  it("measures strategic separation between numerically tied candidates", () => {
+    const candidates = [candidate(1, 1), candidate(2, 1)];
+    candidates[0].resulting_fen = "q7/8/8/8/8/8/8/7Q - - b";
+    candidates[1].resulting_fen = "q7/8/8/8/8/8/5III/7Q - - b";
+
+    expect(candidateStrategicDivergence(candidates, "RED", 12)).toBeGreaterThan(
+      0
+    );
+  });
+
+  it("prioritizes strategically divergent near-ties", () => {
+    const low = decision(12, [1, 1.01]);
+    low.candidateTurns[0].resulting_fen = "q7/8/8/8/8/8/8/7Q - - b";
+    low.candidateTurns[1].resulting_fen = "q7/8/8/8/8/8/7I/7Q - - b";
+    const high = decision(13, [1, 1.01]);
+    high.candidateTurns[0].resulting_fen = "q7/8/8/8/8/8/8/7Q - - b";
+    high.candidateTurns[1].resulting_fen = "q7/8/8/8/8/8/5III/7Q - - b";
+
+    const roots = selectCounterfactualRoots(
+      [game("low", [low]), game("high", [high])],
+      { maxRoots: 1, maxRootsPerGame: 1 }
+    );
+
+    expect(roots[0].sourceGameId).toBe("high");
+    expect(roots[0].strategicDivergence).toBeGreaterThan(0);
+  });
+
   it("selects close, reply-verified candidates and preserves branch metadata", () => {
     const roots = selectCounterfactualRoots(
       [

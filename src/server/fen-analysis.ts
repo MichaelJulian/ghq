@@ -11,6 +11,7 @@ import type {
 import { FENtoBoardState } from "@/game/notation";
 import type { Player } from "@/game/engine";
 import {
+  predictPolicyAdjustment,
   predictZeroSumWinProbability,
   valueModelCheckpointId,
   type ValueModelVersion,
@@ -45,7 +46,12 @@ interface SearchModule extends PythonProxy {
     valueFunction: (fen: string, turnNumber: number) => number,
     openingSeed: number,
     maxActions: number,
-    stagnationTurns: number
+    stagnationTurns: number,
+    policyFunction: (
+      fen: string,
+      turnNumber: number,
+      moverIsRed: boolean
+    ) => number
   ) => PythonProxy;
   evaluation_breakdown: (
     board: PythonBoard,
@@ -382,6 +388,28 @@ function redModelValue(
   );
 }
 
+function modelPolicyAdjustment(
+  fen: string,
+  turnNumber: number,
+  moverIsRed: boolean,
+  maxActions: number,
+  valueModel: ValueModelVersion
+): number {
+  const state = FENtoBoardState(fen);
+  return predictPolicyAdjustment(
+    {
+      board: state.board,
+      redReserve: state.redReserve,
+      blueReserve: state.blueReserve,
+      currentPlayer: state.currentPlayerTurn ?? "RED",
+      turnNumber,
+    },
+    moverIsRed ? "RED" : "BLUE",
+    maxActions === 2 ? "two-actions" : "three-actions",
+    valueModel
+  );
+}
+
 function pythonOutcome(board: PythonBoard): FenAnalysisResponse["outcome"] {
   const outcome = board.outcome();
   if (!outcome) return undefined;
@@ -677,7 +705,15 @@ export async function analyzeFen(
           redModelValue(valueFen, valueTurnNumber, maxActions, valueModel),
         explorationSeed,
         maxActions,
-        turnsWithoutProgress
+        turnsWithoutProgress,
+        (policyFen, policyTurnNumber, moverIsRed) =>
+          modelPolicyAdjustment(
+            policyFen,
+            policyTurnNumber,
+            moverIsRed,
+            maxActions,
+            valueModel
+          )
       );
       try {
         rawSearchResult = toSearchResult(resultProxy);

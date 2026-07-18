@@ -915,6 +915,30 @@ class SearchTests(unittest.TestCase):
         self.assertGreater(searcher.static_score(board), searcher.heuristic_score(board))
         self.assertEqual(searcher.value_model_evaluations, 1)
 
+    def test_policy_model_is_separate_bounded_and_cached(self):
+        calls = []
+
+        def policy(fen, turn_number, mover):
+            calls.append((fen, turn_number, mover))
+            return 4.0
+
+        searcher = ghq_ai.Searcher(
+            "balanced",
+            time_ms=1000,
+            beam_width=4,
+            policy_function=policy,
+        )
+        board = engine.BaseBoard()
+        value_score = searcher.static_score(board)
+        first = searcher.transition_policy_score(board, engine.RED)
+        second = searcher.transition_policy_score(board, engine.RED)
+
+        self.assertEqual(value_score, searcher.heuristic_score(board))
+        self.assertEqual(first, 3.0 * ghq_ai.POLICY_SCORE_WEIGHT)
+        self.assertEqual(second, first)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(searcher.policy_model_evaluations, 1)
+
     def test_non_forcing_rotation_turns_have_a_quota(self):
         board = engine.BaseBoard("7q/8/8/8/i2R→4/8/8/7Q - - r")
         searcher = ghq_ai.Searcher("balanced", time_ms=3000, beam_width=4)

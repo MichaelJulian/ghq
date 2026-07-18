@@ -10,6 +10,7 @@ import {
 import {
   assertValueModelCompatible,
   CHALLENGER_VALUE_MODEL_METADATA,
+  policyAdjustmentFromFeatures,
   predictFromFeatures,
   predictWinProbability,
   predictZeroSumWinProbability,
@@ -158,6 +159,47 @@ describe("gradient-boosted value model", () => {
     const expected =
       1 / (1 + Math.exp(-0.5 * features[VALUE_FEATURE_NAMES.length]));
     expect(predictFromFeatures(features, corrected)).toBeCloseTo(expected, 12);
+  });
+
+  it("keeps a policy head separate from calibrated value probability", () => {
+    const base: ValueModelArtifact = {
+      format: "ghq-gradient-boosted-value-v1",
+      feature_names: [...VALUE_FEATURE_NAMES_V2],
+      base_raw_score: 0,
+      learning_rate: 0.1,
+      calibration: { kind: "platt", scale: 1, intercept: 0 },
+      trees: [],
+      metadata: {},
+      policy_correction: {
+        feature_indices: [VALUE_FEATURE_NAMES.length],
+        coefficients: [0.5],
+      },
+    };
+    const features = extractValueFeaturesV2(position, "RED");
+    expect(predictFromFeatures(features, base)).toBeCloseTo(0.5, 12);
+    expect(policyAdjustmentFromFeatures(features, base)).toBeCloseTo(
+      0.5 * features[VALUE_FEATURE_NAMES.length],
+      12
+    );
+  });
+
+  it("rejects malformed policy corrections", () => {
+    const artifact: ValueModelArtifact = {
+      format: "ghq-gradient-boosted-value-v1",
+      feature_names: [...VALUE_FEATURE_NAMES_V2],
+      base_raw_score: 0,
+      learning_rate: 0.1,
+      calibration: { kind: "platt", scale: 1, intercept: 0 },
+      trees: [],
+      metadata: {},
+      policy_correction: {
+        feature_indices: [VALUE_FEATURE_NAMES_V2.length],
+        coefficients: [1],
+      },
+    };
+    expect(() => assertValueModelCompatible(artifact)).toThrow(
+      "policy correction is invalid"
+    );
   });
 
   it("rejects malformed sparse corrections", () => {

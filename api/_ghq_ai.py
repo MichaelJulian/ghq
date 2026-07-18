@@ -20,7 +20,7 @@ from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tupl
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "public"))
 
-import _engine as engine  # noqa: E402
+import engine  # noqa: E402
 
 
 PIECE_VALUES = {
@@ -114,6 +114,7 @@ BASE_WEIGHTS = {
 }
 
 MATE_SCORE = 1_000_000.0
+POLICY_SCORE_WEIGHT = 3.0
 MISSIONLESS_PARATROOPER_PENALTY = 9.0
 EARLY_GAME_LAST_TURN = 12
 
@@ -866,6 +867,7 @@ class Searcher:
         beam_width: int,
         turn_number: int = 1,
         value_function: Optional[Any] = None,
+        policy_function: Optional[Any] = None,
         max_actions: int = 3,
         stagnation_turns: int = 0,
     ) -> None:
@@ -873,6 +875,7 @@ class Searcher:
         self.time_ms = max(1, time_ms)
         self.turn_number = max(1, turn_number)
         self.value_function = value_function
+        self.policy_function = policy_function
         self.max_actions = max(2, min(3, max_actions))
         self.stagnation_turns = max(0, stagnation_turns)
         self.deadline = time.monotonic() + max(1, time_ms) / 1000.0
@@ -893,8 +896,10 @@ class Searcher:
         self.rotation_quota_pruned = 0
         self.purpose_filtered_turns = 0
         self.value_model_evaluations = 0
+        self.policy_model_evaluations = 0
         self.turn_cache: Dict[BoardKey, List[TurnCandidate]] = {}
         self.value_cache: Dict[str, float] = {}
+        self.policy_cache: Dict[Tuple[str, bool], float] = {}
         self.safety_cache: Dict[Tuple[BoardKey, bool], Tuple[float, float, float]] = {}
         self.immediate_hq_capture_cache: Dict[BoardKey, bool] = {}
         self.exact_same_turn_hq_capture_cache: Dict[Tuple[BoardKey, bool], bool] = {}
@@ -1667,6 +1672,29 @@ class Searcher:
         # distinguish equally sound positions.
         model_log_odds = math.log(probability / (1.0 - probability))
         return heuristic + 3.0 * model_log_odds
+
+    def transition_policy_score(
+        self, board: engine.BaseBoard, mover: bool
+    ) -> float:
+        """Return a bounded mover-positive policy bonus for one complete turn."""
+        if self.policy_function is None:
+            return 0.0
+        key = (board.board_fen(), mover)
+        cached = self.policy_cache.get(key)
+        if cached is not None:
+            return cached
+        self.check_time(False)
+        adjustment = float(
+            self.policy_function(key[0], self.turn_number, mover)
+        )
+        if not math.isfinite(adjustment):
+            raise ValueError("policy function returned a non-finite score")
+        # Policy fits use calibrated-logit units. Bound their influence below
+        # concrete tactical and mate terms while preserving strategic ordering.
+        score = POLICY_SCORE_WEIGHT * max(-3.0, min(3.0, adjustment))
+        self.policy_cache[key] = score
+        self.policy_model_evaluations += 1
+        return score
 
     @staticmethod
     def board_as_turn(board: engine.BaseBoard, color: bool) -> engine.BaseBoard:
@@ -4066,10 +4094,14 @@ class Searcher:
                             turn.purpose_penalty
                             + turn.paratrooper_mission_penalty
                         )
+                        transition_quality = (
+                            self.transition_policy_score(turn.board, board.turn)
+                            - transition_penalty
+                        )
                         candidate = (
-                            leaf_score - transition_penalty
+                            leaf_score + transition_quality
                             if maximizing
-                            else leaf_score + transition_penalty
+                            else leaf_score - transition_quality
                         )
                         if (
                             maximizing and candidate > best.score
@@ -4109,7 +4141,11 @@ class Searcher:
                 if self.turn_number <= EARLY_GAME_LAST_TURN
                 else 0.0
             )
-            turn_quality = early_bonus - transition_penalty
+            turn_quality = (
+                early_bonus
+                - transition_penalty
+                + self.transition_policy_score(turn.board, board.turn)
+            )
             if is_root and self.stagnation_factor() > 0.0:
                 turn_quality += (
                     self.stagnation_factor()
@@ -4631,6 +4667,7 @@ def search(
     opening_seed: int = 0,
     max_actions: int = 3,
     stagnation_turns: int = 0,
+    policy_function: Optional[Any] = None,
 ) -> Dict[str, Any]:
     started = time.monotonic()
     searcher = Searcher(
@@ -4639,6 +4676,7 @@ def search(
         beam_width,
         turn_number=turn_number,
         value_function=value_function,
+        policy_function=policy_function,
         max_actions=max_actions,
         stagnation_turns=stagnation_turns,
     )
@@ -4665,7 +4703,11 @@ def search(
             if turn_number <= EARLY_GAME_LAST_TURN
             else 0.0
         )
-        turn_quality = early_bonus - transition_penalty
+        turn_quality = (
+            early_bonus
+            - transition_penalty
+            + searcher.transition_policy_score(book_turn.board, board.turn)
+        )
         score = (
             book_turn.static_score + turn_quality
             if board.turn == engine.RED
@@ -4693,8 +4735,13 @@ def search(
             retrospective=False,
         )
         seed_penalty = seed_purpose["total_penalty"]
+        seed_policy_score = searcher.transition_policy_score(
+            seed_board, board.turn
+        )
         emergency_seed.score += (
-            -seed_penalty if board.turn == engine.RED else seed_penalty
+            seed_policy_score - seed_penalty
+            if board.turn == engine.RED
+            else seed_penalty - seed_policy_score
         )
         seed_counted_actions = sum(
             move.name not in ("AutoCapture", "Skip") for move in seed_moves
@@ -4713,7 +4760,7 @@ def search(
                 if turn_number <= EARLY_GAME_LAST_TURN
                 else 0.0
             )
-            seed_quality = early_bonus - seed_penalty
+            seed_quality = early_bonus - seed_penalty + seed_policy_score
             return SearchResult(
                 reply.score
                 + (seed_quality if board.turn == engine.RED else -seed_quality),
@@ -4907,7 +4954,13 @@ def search(
                 if turn_number <= EARLY_GAME_LAST_TURN
                 else 0.0
             )
-            fallback_quality = fallback_bonus - fallback_penalty
+            fallback_quality = (
+                fallback_bonus
+                - fallback_penalty
+                + searcher.transition_policy_score(
+                    searcher.root_fallback.board, board.turn
+                )
+            )
             fallback_score = searcher.root_fallback.static_score
             fallback_score += (
                 fallback_quality if board.turn == engine.RED else -fallback_quality
@@ -4993,7 +5046,13 @@ def search(
                 if turn_number <= EARLY_GAME_LAST_TURN
                 else 0.0
             )
-            survival_quality = survival_early_bonus - survival_penalty
+            survival_quality = (
+                survival_early_bonus
+                - survival_penalty
+                + searcher.transition_policy_score(
+                    resulting_board, board.turn
+                )
+            )
             previous_verification_mode = searcher.verification_mode
             searcher.verification_mode = True
             try:
@@ -5037,7 +5096,11 @@ def search(
             retrospective=False,
         )
         seed_penalty = seed_purpose["total_penalty"]
-        best.score += -seed_penalty if board.turn == engine.RED else seed_penalty
+        seed_quality = (
+            searcher.transition_policy_score(resulting_board, board.turn)
+            - seed_penalty
+        )
+        best.score += seed_quality if board.turn == engine.RED else -seed_quality
         fallback_kind = "seeded"
 
     automatic = [move.uci() for move in first_turn if move.name == "AutoCapture"]
@@ -5057,7 +5120,11 @@ def search(
                 if turn_number <= EARLY_GAME_LAST_TURN
                 else 0.0
             )
-            quality = early_bonus - transition_penalty
+            quality = (
+                early_bonus
+                - transition_penalty
+                + searcher.transition_policy_score(turn.board, board.turn)
+            )
             red_score = (
                 turn.static_score + quality
                 if board.turn == engine.RED
@@ -5238,6 +5305,7 @@ def search(
             "rotation_quota_pruned": searcher.rotation_quota_pruned,
             "purpose_filtered_turns": searcher.purpose_filtered_turns,
             "value_model_evaluations": searcher.value_model_evaluations,
+            "policy_model_evaluations": searcher.policy_model_evaluations,
             "turn_cache_hits": searcher.turn_cache_hits,
             "transposition_hits": searcher.transposition_hits,
             "hq_survival_probe_nodes": searcher.hq_survival_probe_nodes,

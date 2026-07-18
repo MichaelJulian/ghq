@@ -145,6 +145,8 @@ export interface GhqSearchResult {
     rotation_quota_pruned: number;
     purpose_filtered_turns: number;
     value_model_evaluations: number;
+    /** Resulting positions scored by the separate move-ranking policy head. */
+    policy_model_evaluations?: number;
     turn_cache_hits: number;
     transposition_hits: number;
     /** Bounded post-search candidates inspected to avoid an immediate HQ loss. */

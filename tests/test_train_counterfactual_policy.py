@@ -174,6 +174,34 @@ class CounterfactualPolicyTrainingTests(unittest.TestCase):
         )
         self.assertEqual(artifact["calibration"], baseline["calibration"])
 
+    def test_policy_correction_does_not_recalibrate_value_probability(self):
+        baseline = {
+            "format": "ghq-gradient-boosted-value-v1",
+            "feature_names": ["base"],
+            "base_raw_score": 0.4,
+            "learning_rate": 0.1,
+            "calibration": {"kind": "platt", "scale": 0.8, "intercept": -0.2},
+            "trees": [],
+            "metadata": {},
+        }
+        artifact = export_policy_correction(
+            baseline,
+            ["base", "diff_shape"],
+            np.asarray([1]),
+            np.asarray([2.0]),
+            np.asarray([0.6]),
+            "dataset",
+            {},
+            correction_target="policy",
+        )
+        vectors = np.asarray([[0.0, 3.0], [0.0, -1.0]])
+        expected = 1.0 / (1.0 + np.exp(-(0.8 * 0.4 - 0.2)))
+        np.testing.assert_allclose(
+            exported_probabilities(artifact, vectors), expected, atol=1e-12
+        )
+        self.assertNotIn("linear_correction", artifact)
+        self.assertEqual(artifact["policy_correction"]["feature_indices"], [1])
+
     def test_grouped_split_never_leaks_source_games(self):
         records = [
             {"source_game_id": f"game-{game}"}

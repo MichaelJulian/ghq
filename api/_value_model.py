@@ -657,6 +657,32 @@ def predict_from_features(features: Sequence[float], artifact: Dict[str, Any]) -
     return _sigmoid(calibrated)
 
 
+def policy_adjustment_from_features(
+    features: Sequence[float], artifact: Dict[str, Any]
+) -> float:
+    """Score a resulting position for move ordering, not win calibration."""
+    if len(features) != len(artifact["feature_names"]):
+        raise ValueError("Native GHQ value feature schema mismatch")
+    correction = artifact.get("policy_correction")
+    if not correction:
+        return 0.0
+    indices = correction["feature_indices"]
+    coefficients = correction["coefficients"]
+    if len(indices) != len(coefficients):
+        raise ValueError("Native GHQ policy correction schema mismatch")
+    if any(
+        not isinstance(index, int) or index < 0 or index >= len(features)
+        for index in indices
+    ):
+        raise ValueError("Native GHQ policy correction feature is out of range")
+    return float(
+        sum(
+            coefficient * features[index]
+            for index, coefficient in zip(indices, coefficients)
+        )
+    )
+
+
 def predict_zero_sum(
     fen: str, turn_number: int, perspective: bool, version: str = "incumbent"
 ) -> float:
@@ -684,5 +710,19 @@ def red_value_function(version: str):
 
     def evaluate(fen: str, turn_number: int) -> float:
         return predict_zero_sum(fen, turn_number, engine.RED, version)
+
+    return evaluate
+
+
+def policy_function(version: str):
+    if version not in ARTIFACTS:
+        raise ValueError(f"Unknown value model: {version}")
+    artifact = ARTIFACTS[version]
+
+    def evaluate(fen: str, turn_number: int, perspective: bool) -> float:
+        board = engine.BaseBoard(fen)
+        return policy_adjustment_from_features(
+            extract_features(board, turn_number, perspective, artifact), artifact
+        )
 
     return evaluate

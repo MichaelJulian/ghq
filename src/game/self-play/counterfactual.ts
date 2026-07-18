@@ -1,5 +1,10 @@
 import type { PersonalityId } from "@/game/analysis/types";
 import type { Player } from "@/game/engine";
+import { FENtoBoardState } from "@/game/notation";
+import {
+  extractValueFeaturesV3,
+  VALUE_FEATURE_NAMES_V3,
+} from "@/game/value-model/features";
 import type {
   DurableSelfPlayDecision,
   DurableSelfPlayGameResult,
@@ -27,6 +32,7 @@ export interface CounterfactualRoot {
   sourceTurnNumber: number;
   rootPlayer: Player;
   scoreMargin: number;
+  strategicDivergence: number;
   branches: CounterfactualBranch[];
 }
 
@@ -37,8 +43,75 @@ export interface CounterfactualSelectionOptions {
   candidatesPerRoot?: number;
   maxScoreMargin?: number;
   minTurnNumber?: number;
+  minStrategicDivergence?: number;
   excludeRootIds?: ReadonlySet<string>;
   excludeSourceGameIds?: ReadonlySet<string>;
+}
+
+const DIVERGENCE_FEATURE_SCALES: Readonly<Record<string, number>> = {
+  diff_material_total: 6,
+  diff_material_board: 6,
+  diff_infantry_board: 2,
+  diff_artillery_board: 2,
+  diff_unsupported_value: 4,
+  diff_overextended_value: 4,
+  diff_bombarded_enemy_value: 4,
+  diff_paratrooper_deployed: 1,
+  diff_hq_bombarded: 1,
+  diff_hq_escape_squares: 2,
+  diff_pseudo_mobility: 1,
+  diff_home_rank_immobile_count: 2,
+  diff_infantry_diagonal_adjacent_pairs: 2,
+  diff_infantry_vertical_adjacent_pairs: 2,
+  diff_hq_attack_pressure: 3,
+};
+
+const DIVERGENCE_FEATURES = Object.entries(DIVERGENCE_FEATURE_SCALES).map(
+  ([name, scale]) => {
+    const index = VALUE_FEATURE_NAMES_V3.indexOf(name);
+    if (index < 0) throw new Error(`Missing counterfactual feature ${name}`);
+    return { index, scale };
+  }
+);
+
+function valuePosition(fen: string, turnNumber: number) {
+  const state = FENtoBoardState(fen);
+  return {
+    board: state.board,
+    redReserve: state.redReserve,
+    blueReserve: state.blueReserve,
+    currentPlayer: state.currentPlayerTurn ?? "RED",
+    turnNumber,
+  };
+}
+
+export function candidateStrategicDivergence(
+  candidates: ReturnType<typeof distinctCandidateStates>,
+  player: Player,
+  turnNumber: number
+): number {
+  const vectors = candidates.map((candidate) =>
+    extractValueFeaturesV3(
+      valuePosition(candidate.resulting_fen, turnNumber + 1),
+      player
+    )
+  );
+  const baseline = vectors[0];
+  return Math.max(
+    0,
+    ...vectors.slice(1).map((vector) =>
+      DIVERGENCE_FEATURES.reduce(
+        (total, feature) =>
+          total +
+          Math.min(
+            3,
+            Math.abs(vector[feature.index] - baseline[feature.index]) /
+              feature.scale
+          ),
+        0
+      )
+    )
+  );
 }
 
 function personalityFor(
@@ -100,6 +173,7 @@ export function selectCounterfactualRoots(
     candidatesPerRoot: rawOptions.candidatesPerRoot ?? 2,
     maxScoreMargin: rawOptions.maxScoreMargin ?? 1,
     minTurnNumber: rawOptions.minTurnNumber ?? 5,
+    minStrategicDivergence: rawOptions.minStrategicDivergence ?? 0,
     excludeRootIds: rawOptions.excludeRootIds ?? new Set<string>(),
     excludeSourceGameIds:
       rawOptions.excludeSourceGameIds ?? new Set<string>(),
@@ -108,13 +182,16 @@ export function selectCounterfactualRoots(
     ([name]) =>
       name !== "excludeRootIds" && name !== "excludeSourceGameIds"
   )) {
+    if (typeof value !== "number") continue;
+    const mayBeZero =
+      name === "skipRoots" || name === "minStrategicDivergence";
     if (
       !Number.isFinite(value) ||
       value < 0 ||
-      (name !== "skipRoots" && value === 0)
+      (!mayBeZero && value === 0)
     ) {
       throw new RangeError(
-        `${name} must be ${name === "skipRoots" ? "non-negative" : "positive"}`
+        `${name} must be ${mayBeZero ? "non-negative" : "positive"}`
       );
     }
   }
@@ -152,6 +229,12 @@ export function selectCounterfactualRoots(
         )
       );
       if (scoreMargin > options.maxScoreMargin) return [];
+      const strategicDivergence = candidateStrategicDivergence(
+        candidates,
+        decision.player,
+        decision.turnNumber
+      );
+      if (strategicDivergence < options.minStrategicDivergence) return [];
       const rootId = `${game.gameId}:t${decision.turnNumber}`;
       if (options.excludeRootIds.has(rootId)) return [];
       const redPersonality = personalityFor(game, "RED");
@@ -163,6 +246,7 @@ export function selectCounterfactualRoots(
           sourceTurnNumber: decision.turnNumber,
           rootPlayer: decision.player,
           scoreMargin,
+          strategicDivergence,
           branches: candidates.map((candidate) => ({
             rootId,
             sourceGameId: game.gameId,
@@ -182,6 +266,7 @@ export function selectCounterfactualRoots(
   });
   possible.sort(
     (left, right) =>
+      right.strategicDivergence - left.strategicDivergence ||
       left.scoreMargin - right.scoreMargin ||
       left.sourceTurnNumber - right.sourceTurnNumber ||
       left.rootId.localeCompare(right.rootId)

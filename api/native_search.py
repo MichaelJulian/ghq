@@ -137,6 +137,7 @@ def run_native_search(payload: Dict[str, Any]) -> Dict[str, Any]:
         opening_seed=opening_seed,
         max_actions=max_actions,
         stagnation_turns=stagnation_turns,
+        policy_function=value_model.policy_function(value_model_version),
     )
     raw_search["search"]["backend"] = "native-python"
     raw_search["search"]["value_model_backend"] = "native-gbdt"

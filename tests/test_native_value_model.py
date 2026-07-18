@@ -163,6 +163,23 @@ class NativeValueModelTest(unittest.TestCase):
             places=15,
         )
 
+    def test_policy_adjustment_does_not_change_value_probability(self) -> None:
+        artifact = {
+            "feature_names": ["test"],
+            "base_raw_score": 0.0,
+            "learning_rate": 0.1,
+            "calibration": {"scale": 1.0, "intercept": 0.0},
+            "trees": [],
+            "policy_correction": {
+                "feature_indices": [0],
+                "coefficients": [0.5],
+            },
+        }
+        self.assertEqual(value_model.predict_from_features([2.0], artifact), 0.5)
+        self.assertEqual(
+            value_model.policy_adjustment_from_features([2.0], artifact), 1.0
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
