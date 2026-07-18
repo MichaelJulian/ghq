@@ -10,6 +10,7 @@ from unittest.mock import patch
 import numpy as np
 
 from scripts.train_value_model import (
+    align_append_only_baseline_schema,
     chronological_split,
     evaluation_unit,
     exported_probabilities,
@@ -25,6 +26,33 @@ from scripts.train_value_model import (
 
 
 class ValueModelWeightTests(unittest.TestCase):
+    def test_append_only_schema_can_score_the_exact_incumbent_trees(self):
+        baseline = {
+            "feature_names": ["a", "b"],
+            "trees": [{"feature": [0, -2, -2]}],
+            "metadata": {"checkpoint": "incumbent"},
+        }
+        aligned = align_append_only_baseline_schema(
+            baseline, ["a", "b", "formation"]
+        )
+        self.assertEqual(aligned["feature_names"], ["a", "b", "formation"])
+        self.assertEqual(baseline["feature_names"], ["a", "b"])
+        self.assertEqual(
+            aligned["metadata"]["baseline_schema_alignment"],
+            {
+                "kind": "append-only",
+                "original_feature_count": 2,
+                "aligned_feature_count": 3,
+            },
+        )
+
+    def test_append_only_schema_rejects_reordered_features(self):
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            align_append_only_baseline_schema(
+                {"feature_names": ["a", "b"], "trees": []},
+                ["b", "a", "formation"],
+            )
+
     def test_constrained_selection_uses_smallest_feasible_self_play_share(self):
         candidates = [
             {"share": 0.12, "score": 0.55, "constraints_passed": True},

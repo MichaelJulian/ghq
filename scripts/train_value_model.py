@@ -55,6 +55,43 @@ def requested_self_play_shares(
     return shares
 
 
+def align_append_only_baseline_schema(
+    artifact: Dict[str, Any], feature_names: List[str]
+) -> Dict[str, Any]:
+    """Permit a v1 baseline to score an append-only v2 feature matrix.
+
+    Tree feature indices remain identical because v2 preserves the complete
+    v1 prefix. Any reorder, deletion, or baseline tree that references beyond
+    its declared schema remains a hard provenance error.
+    """
+    baseline_names = artifact.get("feature_names")
+    if not isinstance(baseline_names, list):
+        raise ValueError("baseline feature schema is missing")
+    if baseline_names == feature_names:
+        return artifact
+    if feature_names[: len(baseline_names)] != baseline_names:
+        raise ValueError("baseline feature schema does not match dataset")
+    used_features = [
+        int(index)
+        for tree in artifact.get("trees", [])
+        for index in tree.get("feature", [])
+        if int(index) >= 0
+    ]
+    if used_features and max(used_features) >= len(baseline_names):
+        raise ValueError("baseline tree exceeds its declared feature schema")
+    aligned = dict(artifact)
+    aligned["feature_names"] = list(feature_names)
+    aligned["metadata"] = {
+        **artifact.get("metadata", {}),
+        "baseline_schema_alignment": {
+            "kind": "append-only",
+            "original_feature_count": len(baseline_names),
+            "aligned_feature_count": len(feature_names),
+        },
+    }
+    return aligned
+
+
 def load_dataset(path: Path) -> Tuple[List[str], List[Dict[str, Any]], np.ndarray, np.ndarray]:
     feature_names: List[str] | None = None
     rows: List[Dict[str, Any]] = []
@@ -661,9 +698,10 @@ def main() -> None:
     baseline_artifact: Optional[Dict[str, Any]] = None
     baseline_validation_by_source: Optional[Dict[str, Any]] = None
     if args.baseline:
-        baseline_artifact = json.loads(args.baseline.read_text(encoding="utf-8"))
-        if baseline_artifact.get("feature_names") != feature_names:
-            raise ValueError("baseline feature schema does not match dataset")
+        baseline_artifact = align_append_only_baseline_schema(
+            json.loads(args.baseline.read_text(encoding="utf-8")),
+            feature_names,
+        )
         baseline_validation_by_source = metrics_by_source(
             rows,
             validation_indices,
