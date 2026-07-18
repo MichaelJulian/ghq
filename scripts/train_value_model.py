@@ -31,6 +31,7 @@ def parse_args() -> argparse.Namespace:
         help="comma-separated validation-selected training-share grid",
     )
     parser.add_argument("--self-play-code-version")
+    parser.add_argument("--self-play-behavior-checkpoint")
     parser.add_argument("--random-state", type=int, default=42)
     return parser.parse_args()
 
@@ -122,6 +123,37 @@ def validate_self_play_code_version(
     if required is not None and observed != required:
         raise ValueError(
             f"self-play code version mismatch: expected {required}, received {observed}"
+        )
+    return observed
+
+
+def validate_self_play_behavior_checkpoint(
+    rows: List[Dict[str, Any]], required: Optional[str] = None
+) -> Optional[str]:
+    """Require one exact behavior-policy checkpoint for self-play rows."""
+    checkpoints: set[str] = set()
+    for row in rows:
+        if data_source(row) != "vercel_self_play":
+            continue
+        checkpoint = str(
+            row.get("behavior_value_model_checkpoint") or ""
+        ).strip()
+        if not checkpoint or checkpoint == "unknown":
+            raise ValueError(
+                "self-play rows require exact behavior value-model provenance"
+            )
+        checkpoints.add(checkpoint)
+    if not checkpoints:
+        return None
+    if len(checkpoints) != 1:
+        raise ValueError(
+            f"self-play rows mix behavior checkpoints: {sorted(checkpoints)}"
+        )
+    observed = next(iter(checkpoints))
+    if required is not None and observed != required:
+        raise ValueError(
+            "self-play behavior checkpoint mismatch: "
+            f"expected {required}, received {observed}"
         )
     return observed
 
@@ -590,6 +622,9 @@ def main() -> None:
     self_play_code_version = validate_self_play_code_version(
         rows, args.self_play_code_version
     )
+    self_play_behavior_checkpoint = validate_self_play_behavior_checkpoint(
+        rows, args.self_play_behavior_checkpoint
+    )
     splits = chronological_split(rows)
     weights = {name: game_balanced_weights(rows, indices) for name, indices in splits.items()}
     fit_weights_by_share = {
@@ -820,6 +855,7 @@ def main() -> None:
             "validation_constraints_passed": validation_constraints_passed,
             "candidate_validation": candidate_validation,
             "self_play_code_version": self_play_code_version,
+            "self_play_behavior_value_model_checkpoint": self_play_behavior_checkpoint,
             "metrics": split_metrics,
             "feature_importance": [
                 {"feature": name, "importance": round(float(importance), 8)}
@@ -858,6 +894,7 @@ def main() -> None:
         "candidate_validation": candidate_validation,
         "validation_constraints_passed": validation_constraints_passed,
         "self_play_code_version": self_play_code_version,
+        "self_play_behavior_value_model_checkpoint": self_play_behavior_checkpoint,
         "sources": dict(Counter(data_source(row) for row in rows)),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)

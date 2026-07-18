@@ -93,6 +93,7 @@ async function readBlob(
 async function main() {
   const generationPrefix = argument("--generation-prefix");
   const codeVersion = argument("--code-version");
+  const valueModelCheckpoint = argument("--value-model-checkpoint");
   const outputPath = argument("--output");
   const blobs = await selectedBlobs(generationPrefix);
   if (!blobs.length) throw new Error("No matching training artifacts found");
@@ -107,6 +108,7 @@ async function main() {
       source: "vercel-self-play",
       generation_prefix: generationPrefix,
       code_version: codeVersion,
+      behavior_value_model_checkpoint: valueModelCheckpoint,
       paired_complete_only: true,
     })}\n`
   );
@@ -135,6 +137,15 @@ async function main() {
             }`
           );
         }
+        if (sample.valueModelCheckpoint !== valueModelCheckpoint) {
+          throw new Error(
+            `Behavior checkpoint mismatch in ${
+              sample.gameId
+            }: expected ${valueModelCheckpoint}, received ${
+              sample.valueModelCheckpoint || "missing"
+            }`
+          );
+        }
         if (sample.features.length !== VALUE_FEATURE_NAMES.length) {
           throw new Error(`Feature mismatch in ${sample.gameId}`);
         }
@@ -145,7 +156,9 @@ async function main() {
             record.generationId !== sample.generationId ||
             record.pairId !== pairId
           ) {
-            throw new Error(`Inconsistent game provenance for ${sample.gameId}`);
+            throw new Error(
+              `Inconsistent game provenance for ${sample.gameId}`
+            );
           }
           record.samples.push(sample);
         } else {
@@ -215,6 +228,7 @@ async function main() {
     `${JSON.stringify({
       generationPrefix,
       codeVersion,
+      valueModelCheckpoint,
       generations: generations.size,
       artifacts: blobs.length,
       games: games.size,

@@ -15,6 +15,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--human", required=True, type=Path)
     parser.add_argument("--self-play", required=True, type=Path)
     parser.add_argument("--code-version", required=True)
+    parser.add_argument("--value-model-checkpoint", required=True)
     parser.add_argument("--output", required=True, type=Path)
     return parser.parse_args()
 
@@ -97,7 +98,10 @@ def normalize_human_samples(
 
 
 def validate_self_play_samples(
-    samples: Iterable[Dict[str, Any]], feature_count: int, code_version: str
+    samples: Iterable[Dict[str, Any]],
+    feature_count: int,
+    code_version: str,
+    value_model_checkpoint: str,
 ) -> List[Dict[str, Any]]:
     validated: List[Dict[str, Any]] = []
     games_by_pair: Dict[str, set[str]] = defaultdict(set)
@@ -112,6 +116,12 @@ def validate_self_play_samples(
             raise ValueError(
                 "self-play code version mismatch: "
                 f"expected {code_version}, received {sample.get('code_version') or 'missing'}"
+            )
+        if sample.get("behavior_value_model_checkpoint") != value_model_checkpoint:
+            raise ValueError(
+                "self-play behavior checkpoint mismatch: "
+                f"expected {value_model_checkpoint}, received "
+                f"{sample.get('behavior_value_model_checkpoint') or 'missing'}"
             )
         game_id = str(sample.get("game_id") or "").strip()
         pair_id = str(sample.get("pair_id") or "").strip()
@@ -160,13 +170,17 @@ def merge_datasets(
     self_play_path: Path,
     output_path: Path,
     code_version: str,
+    value_model_checkpoint: str,
 ) -> Dict[str, int]:
     human_schema, raw_human = read_jsonl(human_path)
     self_play_schema, raw_self_play = read_jsonl(self_play_path)
     feature_names = validate_schema(human_schema, self_play_schema)
     human = normalize_human_samples(raw_human, len(feature_names))
     self_play = validate_self_play_samples(
-        raw_self_play, len(feature_names), code_version
+        raw_self_play,
+        len(feature_names),
+        code_version,
+        value_model_checkpoint,
     )
     combined = [*human, *self_play]
     reject_duplicate_samples(combined)
@@ -180,6 +194,7 @@ def merge_datasets(
         "ruleset": "three-actions",
         "source": "human+vercel-self-play",
         "self_play_code_version": code_version,
+        "self_play_behavior_value_model_checkpoint": value_model_checkpoint,
         "paired_complete_only": True,
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -199,7 +214,11 @@ def merge_datasets(
 def main() -> None:
     args = parse_args()
     stats = merge_datasets(
-        args.human, args.self_play, args.output, args.code_version
+        args.human,
+        args.self_play,
+        args.output,
+        args.code_version,
+        args.value_model_checkpoint,
     )
     print(json.dumps({**stats, "output": str(args.output)}, indent=2))
 

@@ -16,6 +16,8 @@
     "value:features": "tsx scripts/build_value_dataset.ts",
     "value:train": ".venv/bin/python scripts/train_value_model.py",
     "value:download:2a": "tsx scripts/download_vercel_two_action_dataset.ts",
+    "value:download:vercel": "tsx scripts/download_vercel_value_dataset.ts",
+    "value:merge": "python3 scripts/merge_value_datasets.py",
     "self-play:generation": "tsx scripts/run_self_play_generation.ts",
     "self-play:analyze": "tsx scripts/analyze_vercel_self_play.ts",
     "self-play:audit-hq": "tsx scripts/audit_vercel_hq_losses.ts"

@@ -19,6 +19,7 @@ from scripts.train_value_model import (
     select_validation_candidate,
     main as train_main,
     validation_selection_gates,
+    validate_self_play_behavior_checkpoint,
     validate_self_play_code_version,
 )
 
@@ -153,6 +154,7 @@ class ValueModelWeightTests(unittest.TestCase):
                             "generation_id": "generation",
                             "pair_id": f"pair-{unit:02d}",
                             "code_version": "commit-a",
+                            "behavior_value_model_checkpoint": "checkpoint-a",
                             "game_id": f"self-{unit:02d}-{member}",
                             "created_at": created_at,
                             "outcome_reason": "hq-capture",
@@ -178,6 +180,8 @@ class ValueModelWeightTests(unittest.TestCase):
                 "0.02,0.08",
                 "--self-play-code-version",
                 "commit-a",
+                "--self-play-behavior-checkpoint",
+                "checkpoint-a",
             ]
             with patch.object(sys, "argv", argv), redirect_stdout(StringIO()):
                 train_main()
@@ -279,6 +283,52 @@ class ValueModelWeightTests(unittest.TestCase):
                     }
                 ],
                 "commit-b",
+            )
+
+    def test_requires_one_exact_self_play_behavior_checkpoint(self):
+        rows = [
+            {"source": "human", "game_id": "human"},
+            {
+                "source": "vercel_self_play",
+                "game_id": "self-play",
+                "behavior_value_model_checkpoint": "checkpoint-a",
+            },
+        ]
+        self.assertEqual(
+            validate_self_play_behavior_checkpoint(rows, "checkpoint-a"),
+            "checkpoint-a",
+        )
+
+    def test_rejects_missing_mixed_or_unexpected_behavior_checkpoints(self):
+        with self.assertRaisesRegex(ValueError, "exact behavior value-model"):
+            validate_self_play_behavior_checkpoint(
+                [{"source": "vercel_self_play", "game_id": "missing"}]
+            )
+        with self.assertRaisesRegex(ValueError, "mix behavior checkpoints"):
+            validate_self_play_behavior_checkpoint(
+                [
+                    {
+                        "source": "vercel_self_play",
+                        "game_id": "a",
+                        "behavior_value_model_checkpoint": "checkpoint-a",
+                    },
+                    {
+                        "source": "vercel_self_play",
+                        "game_id": "b",
+                        "behavior_value_model_checkpoint": "checkpoint-b",
+                    },
+                ]
+            )
+        with self.assertRaisesRegex(ValueError, "behavior checkpoint mismatch"):
+            validate_self_play_behavior_checkpoint(
+                [
+                    {
+                        "source": "vercel_self_play",
+                        "game_id": "a",
+                        "behavior_value_model_checkpoint": "checkpoint-a",
+                    }
+                ],
+                "checkpoint-b",
             )
 
     def test_balances_red_and_blue_winning_games_within_each_source(self):

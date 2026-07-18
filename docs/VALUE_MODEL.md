@@ -60,6 +60,24 @@ pnpm value:download:2a -- \
 The trainer represents each 0.5 target as half-weight win and loss observations,
 preserving the same exported tree format and TypeScript inference path.
 
+Three-action training downloads must pin both the exact search revision and the
+exact value-model checkpoint that generated the behavior policy:
+
+```bash
+pnpm value:download:vercel -- \
+  --generation-prefix vercel-r3b3-example \
+  --code-version <full-git-sha> \
+  --value-model-checkpoint <checkpoint-id> \
+  --output .data/value-selfplay.jsonl
+
+pnpm value:merge -- \
+  --human .data/value-features.jsonl \
+  --self-play .data/value-selfplay.jsonl \
+  --code-version <full-git-sha> \
+  --value-model-checkpoint <checkpoint-id> \
+  --output .data/value-mixed.jsonl
+```
+
 ## Personalities
 
 All personalities share the calibrated objective value model. A personality

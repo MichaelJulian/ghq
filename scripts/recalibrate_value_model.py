@@ -30,6 +30,7 @@ from train_value_model import (
     select_validation_candidate,
     sigmoid,
     validate_self_play_code_version,
+    validate_self_play_behavior_checkpoint,
     validation_selection_gates,
 )
 
@@ -42,6 +43,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--report", required=True, type=Path)
     parser.add_argument("--self-play-train-shares", required=True)
     parser.add_argument("--self-play-code-version", required=True)
+    parser.add_argument("--self-play-behavior-checkpoint", required=True)
     parser.add_argument("--random-state", type=int, default=42)
     return parser.parse_args()
 
@@ -52,6 +54,9 @@ def main() -> None:
     feature_names, rows, vectors, labels = load_dataset(args.dataset)
     code_version = validate_self_play_code_version(
         rows, args.self_play_code_version
+    )
+    behavior_checkpoint = validate_self_play_behavior_checkpoint(
+        rows, args.self_play_behavior_checkpoint
     )
     baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
     if baseline.get("feature_names") != feature_names:
@@ -164,6 +169,7 @@ def main() -> None:
             "self_play_train_share_candidates": shares,
             "candidate_validation": candidates,
             "self_play_code_version": code_version,
+            "self_play_behavior_value_model_checkpoint": behavior_checkpoint,
             "baseline_dataset_sha256": metadata.get("dataset_sha256"),
             "calibration_dataset_sha256": hashlib.sha256(
                 args.dataset.read_bytes()
@@ -217,6 +223,7 @@ def main() -> None:
         "self_play_train_share_candidates": shares,
         "candidate_validation": candidates,
         "self_play_code_version": code_version,
+        "self_play_behavior_value_model_checkpoint": behavior_checkpoint,
         "export_parity_max_absolute_error": parity,
         "sources": dict(Counter(data_source(row) for row in rows)),
     }
