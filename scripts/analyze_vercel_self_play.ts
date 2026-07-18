@@ -403,6 +403,7 @@ async function main() {
   let policyQuarantinedPersistedTrainingPositions = 0;
   let policyCleanTrainingGames = 0;
   let policyCleanTrainingPositions = 0;
+  let policyUnverifiedFallbackGames = 0;
 
   for (const game of games) {
     let turnsWithoutProgress = 0;
@@ -418,11 +419,25 @@ async function main() {
     decisions += game.decisions.length;
     trainingPositions += game.trainingPositions;
     const policyAudit = auditParatrooperTrainingPolicy(game.decisions);
-    if (!policyAudit.eligible) {
+    const gameUnverifiedFallbackDecisions =
+      game.quality.unverifiedFallbackDecisions ??
+      game.decisions.filter(
+        (decision) =>
+          decision.fallback === "seeded" ||
+          (decision.fallback !== "none" && decision.completedDepth < 2)
+      ).length;
+    const strictTrainingEligible =
+      policyAudit.eligible &&
+      game.quality.trainingEligible &&
+      gameUnverifiedFallbackDecisions === 0;
+    if (!strictTrainingEligible) {
       policyQuarantinedGames++;
       policyViolationDecisions += policyAudit.violatingDecisions;
       policyMissingTelemetryDecisions += policyAudit.missingTelemetryDecisions;
       if (!policyAudit.telemetryComplete) policyMissingTelemetryGames++;
+      if (gameUnverifiedFallbackDecisions > 0) {
+        policyUnverifiedFallbackGames++;
+      }
       policyQuarantinedPersistedTrainingPositions += game.trainingPositions;
     } else {
       if (game.trainingPositions > 0) policyCleanTrainingGames++;
@@ -435,15 +450,9 @@ async function main() {
         (decision) =>
           decision.fallback === "safe" && decision.completedDepth >= 2
       ).length;
-    unverifiedFallbackDecisions +=
-      game.quality.unverifiedFallbackDecisions ??
-      game.decisions.filter(
-        (decision) =>
-          decision.fallback === "seeded" ||
-          (decision.fallback !== "none" && decision.completedDepth < 2)
-      ).length;
+    unverifiedFallbackDecisions += gameUnverifiedFallbackDecisions;
     timedOutDecisions += game.quality.timedOutDecisions;
-    if (game.quality.trainingEligible) qualityEligibleGames++;
+    if (strictTrainingEligible) qualityEligibleGames++;
     for (const reason of game.quality.trainingRejectionReasons ?? []) {
       increment(trainingRejectionReasons, reason);
     }
@@ -996,6 +1005,7 @@ async function main() {
       violatingDecisions: policyViolationDecisions,
       missingTelemetryGames: policyMissingTelemetryGames,
       missingTelemetryDecisions: policyMissingTelemetryDecisions,
+      unverifiedFallbackGames: policyUnverifiedFallbackGames,
       persistedTrainingPositions: policyQuarantinedPersistedTrainingPositions,
       effectiveTrainingGames: policyCleanTrainingGames,
       effectiveTrainingPositions: policyCleanTrainingPositions,
