@@ -11,6 +11,7 @@ import {
 } from "../src/workflows/self-play-game";
 import { summarizeValueModelArena } from "../src/game/self-play/arena-results";
 import { partitionColorSwapPairs } from "../src/game/self-play/color-pairs";
+import { auditParatrooperTrainingPolicy } from "../src/game/self-play/training-policy";
 import {
   extendsStrategicBest,
   mergeStrategicBest,
@@ -393,6 +394,8 @@ async function main() {
   let qualityEligibleGames = 0;
   let policyQuarantinedGames = 0;
   let policyViolationDecisions = 0;
+  let policyMissingTelemetryGames = 0;
+  let policyMissingTelemetryDecisions = 0;
   let policyQuarantinedPersistedTrainingPositions = 0;
   let policyCleanTrainingGames = 0;
   let policyCleanTrainingPositions = 0;
@@ -410,13 +413,12 @@ async function main() {
     );
     decisions += game.decisions.length;
     trainingPositions += game.trainingPositions;
-    const gamePolicyViolationDecisions = game.decisions.filter(
-      (decision) =>
-        (decision.selectedPurpose?.paratrooper_mission_penalty ?? 0) > 0
-    ).length;
-    if (gamePolicyViolationDecisions > 0) {
+    const policyAudit = auditParatrooperTrainingPolicy(game.decisions);
+    if (!policyAudit.eligible) {
       policyQuarantinedGames++;
-      policyViolationDecisions += gamePolicyViolationDecisions;
+      policyViolationDecisions += policyAudit.violatingDecisions;
+      policyMissingTelemetryDecisions += policyAudit.missingTelemetryDecisions;
+      if (!policyAudit.telemetryComplete) policyMissingTelemetryGames++;
       policyQuarantinedPersistedTrainingPositions += game.trainingPositions;
     } else {
       if (game.trainingPositions > 0) policyCleanTrainingGames++;
@@ -964,6 +966,8 @@ async function main() {
     policyTrainingQuarantine: {
       games: policyQuarantinedGames,
       violatingDecisions: policyViolationDecisions,
+      missingTelemetryGames: policyMissingTelemetryGames,
+      missingTelemetryDecisions: policyMissingTelemetryDecisions,
       persistedTrainingPositions: policyQuarantinedPersistedTrainingPositions,
       effectiveTrainingGames: policyCleanTrainingGames,
       effectiveTrainingPositions: policyCleanTrainingPositions,

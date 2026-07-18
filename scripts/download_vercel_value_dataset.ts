@@ -16,6 +16,8 @@ import {
   VALUE_FEATURE_NAMES_V2,
   VALUE_FEATURE_NAMES_V3,
 } from "../src/game/value-model/features";
+import { auditParatrooperTrainingPolicy } from "../src/game/self-play/training-policy";
+import type { DurableSelfPlayGameResult } from "../src/workflows/self-play-game";
 
 interface DurableTrainingSample {
   generationId: string;
@@ -111,6 +113,21 @@ async function selectedBlobs(generationPrefix: string) {
   return blobs.sort((a, b) => a.pathname.localeCompare(b.pathname));
 }
 
+async function selectedGameBlobs(generationId: string) {
+  const blobs: ListBlobResultBlob[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await list({
+      prefix: `self-play/generations/${generationId}/games/`,
+      cursor,
+      limit: 1000,
+    });
+    blobs.push(...page.blobs.filter((blob) => blob.pathname.endsWith(".json")));
+    cursor = page.hasMore ? page.cursor : undefined;
+  } while (cursor);
+  return blobs.sort((a, b) => a.pathname.localeCompare(b.pathname));
+}
+
 async function readBlob(
   blob: ListBlobResultBlob
 ): Promise<DurableTrainingSample[]> {
@@ -126,6 +143,21 @@ async function readBlob(
     .split("\n")
     .filter(Boolean)
     .map((line) => JSON.parse(line) as DurableTrainingSample);
+}
+
+async function readGameBlob(
+  blob: ListBlobResultBlob
+): Promise<DurableSelfPlayGameResult> {
+  const result = await get(blob.pathname, {
+    access: "private",
+    useCache: false,
+  });
+  if (!result?.stream || result.statusCode !== 200) {
+    throw new Error(`Unable to read ${blob.pathname}`);
+  }
+  return (await new Response(
+    result.stream
+  ).json()) as DurableSelfPlayGameResult;
 }
 
 async function main() {
@@ -187,29 +219,25 @@ async function main() {
     throw new Error("Exact HQ audit approval summary is inconsistent");
   }
   const hqAuditSha256 = createHash("sha256").update(hqAuditText).digest("hex");
+  const gameBlobs = (
+    await Promise.all([...auditedGenerations].map(selectedGameBlobs))
+  ).flat();
+  const persistedGames: DurableSelfPlayGameResult[] = [];
+  for (let index = 0; index < gameBlobs.length; index += 12) {
+    persistedGames.push(
+      ...(await Promise.all(
+        gameBlobs.slice(index, index + 12).map(readGameBlob)
+      ))
+    );
+  }
+  const policyAuditsByGame = new Map(
+    persistedGames.map((game) => [
+      game.gameId,
+      auditParatrooperTrainingPolicy(game.decisions),
+    ])
+  );
   const blobs = await selectedBlobs(generationPrefix);
   if (!blobs.length) throw new Error("No matching training artifacts found");
-  await mkdir(dirname(outputPath), { recursive: true });
-  const output = createWriteStream(outputPath, { encoding: "utf8" });
-  output.write(
-    `${JSON.stringify({
-      type: "schema",
-      format: "ghq-value-features-v1",
-      feature_names: featureNames,
-      feature_schema: featureSchema,
-      ruleset: "three-actions",
-      source: "vercel-self-play",
-      generation_prefix: generationPrefix,
-      code_version: codeVersion,
-      behavior_value_model_checkpoint: valueModelCheckpoint,
-      self_play_search_backend: searchBackend,
-      self_play_value_model_backend: searchValueModelBackend,
-      paired_complete_only: true,
-      exact_hq_audit_required: true,
-      exact_hq_audit_sha256: hqAuditSha256,
-      exact_hq_audit_max_nodes: hqAudit.maxNodesPerAudit,
-    })}\n`
-  );
 
   const recordsByGame = new Map<
     string,
@@ -305,6 +333,8 @@ async function main() {
   const gamesByPair = new Map<string, string[]>();
   for (const [gameId, record] of recordsByGame) {
     if (!approvedByAudit.has(gameId)) continue;
+    const policyAudit = policyAuditsByGame.get(gameId);
+    if (!policyAudit?.eligible) continue;
     const games = gamesByPair.get(record.pairId) ?? [];
     games.push(gameId);
     gamesByPair.set(record.pairId, games);
@@ -317,6 +347,29 @@ async function main() {
   if (!completePairs.size) {
     throw new Error("No complete quality-eligible color-swapped pairs found");
   }
+
+  await mkdir(dirname(outputPath), { recursive: true });
+  const output = createWriteStream(outputPath, { encoding: "utf8" });
+  output.write(
+    `${JSON.stringify({
+      type: "schema",
+      format: "ghq-value-features-v1",
+      feature_names: featureNames,
+      feature_schema: featureSchema,
+      ruleset: "three-actions",
+      source: "vercel-self-play",
+      generation_prefix: generationPrefix,
+      code_version: codeVersion,
+      behavior_value_model_checkpoint: valueModelCheckpoint,
+      self_play_search_backend: searchBackend,
+      self_play_value_model_backend: searchValueModelBackend,
+      paired_complete_only: true,
+      exact_hq_audit_required: true,
+      paratrooper_policy_audit_required: true,
+      exact_hq_audit_sha256: hqAuditSha256,
+      exact_hq_audit_max_nodes: hqAudit.maxNodesPerAudit,
+    })}\n`
+  );
 
   let samples = 0;
   const games = new Set<string>();
@@ -414,6 +467,13 @@ async function main() {
       excludedByExactHqAudit: [...recordsByGame.keys()].filter(
         (gameId) => !approvedByAudit.has(gameId)
       ).length,
+      excludedByParatrooperPolicy: [...recordsByGame.keys()].filter(
+        (gameId) => !policyAuditsByGame.get(gameId)?.eligible
+      ).length,
+      excludedByMissingParatrooperPolicyTelemetry: [
+        ...recordsByGame.keys(),
+      ].filter((gameId) => !policyAuditsByGame.get(gameId)?.telemetryComplete)
+        .length,
       excludedIncompletePairs: gamesByPair.size - completePairs.size,
       samples,
       featureSchema,

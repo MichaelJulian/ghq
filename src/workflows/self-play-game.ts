@@ -14,6 +14,7 @@ import {
   strategicProgress,
   type StrategicProgress,
 } from "@/game/self-play/strategic-progress";
+import { auditParatrooperTrainingPolicy } from "@/game/self-play/training-policy";
 import { analyzeFen } from "@/server/fen-analysis";
 import {
   persistSelfPlayArtifacts,
@@ -331,6 +332,7 @@ export function isDurableTrainingDecisionEligible(
   decision: DurableSelfPlayDecision,
   outcome: DurableSelfPlayGameResult["outcome"]
 ): outcome is { winner: Player; termination: string } {
+  const paratrooperPolicy = auditParatrooperTrainingPolicy([decision]);
   return Boolean(
     outcome.winner &&
       outcome.termination === "hq-capture" &&
@@ -342,7 +344,7 @@ export function isDurableTrainingDecisionEligible(
       decision.searchBackend !== undefined &&
       decision.searchValueModelBackend !== undefined &&
       decision.searchCodeVersion !== undefined &&
-      (decision.selectedPurpose?.paratrooper_mission_penalty ?? 0) <= 0 &&
+      paratrooperPolicy.eligible &&
       // Depth one evaluates only our resulting position. Depth two includes a
       // complete opponent reply and is the minimum tactically verified label
       // admitted to the value-model dataset.
@@ -356,6 +358,7 @@ export function durableGameTrainingRejectionReasons(
   expectedCodeVersion?: string
 ): string[] {
   const reasons: string[] = [];
+  const paratrooperPolicy = auditParatrooperTrainingPolicy(decisions);
   if (!outcome.winner || outcome.termination !== "hq-capture") {
     reasons.push("not-hq-capture");
   }
@@ -375,12 +378,10 @@ export function durableGameTrainingRejectionReasons(
   if (decisions.some((decision) => decision.fallback === "seeded")) {
     reasons.push("unverified-complete-turn-seed");
   }
-  if (
-    decisions.some(
-      (decision) =>
-        (decision.selectedPurpose?.paratrooper_mission_penalty ?? 0) > 0
-    )
-  ) {
+  if (!paratrooperPolicy.telemetryComplete) {
+    reasons.push("missing-paratrooper-policy-telemetry");
+  }
+  if (paratrooperPolicy.violatingDecisions > 0) {
     reasons.push("paratrooper-policy-violation");
   }
   if (

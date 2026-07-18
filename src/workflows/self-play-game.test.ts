@@ -24,6 +24,9 @@ function decision(
     selectedMoves: ["a1a2", "b1b2", "c1c2"],
     selectedRank: 1,
     candidateTurns: [],
+    selectedPurpose: {
+      paratrooper_mission_penalty: 0,
+    } as NonNullable<DurableSelfPlayDecision["selectedPurpose"]>,
     currentPlayerScore: 0,
     winProbability: 0.5,
     completedDepth: 2,
@@ -166,6 +169,18 @@ describe("durable self-play training quality", () => {
     expect(durableGameTrainingRejectionReasons([violating], outcome)).toContain(
       "paratrooper-policy-violation"
     );
+  });
+
+  it("rejects labels and games with missing paratrooper policy telemetry", () => {
+    const outcome = { winner: "RED" as const, termination: "hq-capture" };
+    const missingTelemetry = decision({ selectedPurpose: undefined });
+
+    expect(isDurableTrainingDecisionEligible(missingTelemetry, outcome)).toBe(
+      false
+    );
+    expect(
+      durableGameTrainingRejectionReasons([missingTelemetry], outcome)
+    ).toContain("missing-paratrooper-policy-telemetry");
   });
 
   it("accepts a clean three-action HQ-capture game", () => {
