@@ -197,6 +197,36 @@ async function main() {
     const runnerUp = ranked[1];
     const delta = best.rolloutValue - runnerUp.rolloutValue;
     const confident = delta >= minimumDeltaRaw;
+    const runnerUpByReplicate = new Map(
+      runnerUp.replicateValues.map((replicate) => [
+        replicate.replicate,
+        replicate.rolloutValue,
+      ])
+    );
+    const replicateDeltas = best.replicateValues.flatMap((replicate) => {
+      const other = runnerUpByReplicate.get(replicate.replicate);
+      return other === undefined
+        ? []
+        : [
+            {
+              replicate: replicate.replicate,
+              preferredMinusRunnerUp: replicate.rolloutValue - other,
+            },
+          ];
+    });
+    const supportingReplicates = replicateDeltas.filter(
+      (replicate) => replicate.preferredMinusRunnerUp >= minimumDeltaRaw
+    ).length;
+    const conflictingReplicates = replicateDeltas.filter(
+      (replicate) => replicate.preferredMinusRunnerUp <= -minimumDeltaRaw
+    ).length;
+    const requiredReplicateSupport = Math.min(
+      2,
+      Math.max(...siblings.map((branch) => branch.expectedReplicates))
+    );
+    const replicateReliable =
+      supportingReplicates >= requiredReplicateSupport &&
+      conflictingReplicates === 0;
     const hasUnverifiedFallback = siblings.some(
       (branch) => branch.unverifiedFallbackDecisions > 0
     );
@@ -212,9 +242,19 @@ async function main() {
         ),
         rolloutDelta: delta,
         confident,
-        trainingEligible: confident && !hasUnverifiedFallback,
+        replicateDeltas,
+        supportingReplicates,
+        conflictingReplicates,
+        requiredReplicateSupport,
+        replicateReliable,
+        trainingEligible:
+          confident && replicateReliable && !hasUnverifiedFallback,
         trainingExclusion: !confident
           ? "insufficient-rollout-separation"
+          : conflictingReplicates > 0
+            ? "replicate-disagreement"
+            : !replicateReliable
+              ? "insufficient-replicate-support"
           : hasUnverifiedFallback
             ? "unverified-fallback"
             : undefined,
@@ -241,6 +281,12 @@ async function main() {
     trainingEligiblePairs: trainingEligible.length,
     trainingExcludedForUnverifiedFallback: confident.filter(
       (pair) => pair.trainingExclusion === "unverified-fallback"
+    ).length,
+    trainingExcludedForReplicateDisagreement: confident.filter(
+      (pair) => pair.trainingExclusion === "replicate-disagreement"
+    ).length,
+    trainingExcludedForInsufficientReplicateSupport: confident.filter(
+      (pair) => pair.trainingExclusion === "insufficient-replicate-support"
     ).length,
     minimumDelta: minimumDeltaRaw,
     searchTopCandidatePreferred: pairs.filter(
