@@ -61,6 +61,49 @@ SELF_PLAY_HQ_UNLOCK_FEN = "8/2q3i1/2I4i/6f1/2F5/8/1F4I1/I1I2I1Q I - b"
 SELF_PLAY_HQ_ENGAGEMENT_FEN = "q7/i5i1/3I1i2/2I5/8/1I5I/I1I5/3I3Q - - b"
 SELF_PLAY_FORCED_SKIP_MATE_FEN = "8/8/5q2/4F3/5I2/8/1I6/I2Q4 - - b"
 SELF_PLAY_THREE_ACTION_HQ_FEN = "8/1i3q2/8/8/3ii3/4i1I1/2I4I/5Q2 - - r"
+USER_REPORTED_PARA_AND_ARTILLERY_GAME = (
+    ("rhd1", "rte1", "rfc1"),
+    ("rhe8", "rtd8", "rpg8"),
+    ("rib1", "ria1", "e1e3↑"),
+    ("d8d6↓", "e8e7↓", "rff8"),
+    ("d1d2↑", "b1b2", "a1a2"),
+    ("rrc8", "rrd8", "rfe8"),
+    ("b2b3", "a2a3", "rrb1"),
+    ("c8d7↘", "g8a1xb1", "rfg8"),
+    ("a3a2", "rpb1xa1", "rra1"),
+    ("g8g7", "rih8", "b7b6"),
+    ("a2a3", "a1a2↑", "d2d3↑"),
+    ("d6f6↙", "b8b7↙", "rib8"),
+    ("b3b4", "d3c3↑", "a3a4"),
+    ("e7e7↙", "b7a6↓", "skip"),
+    ("a4a3", "b4b3", "rid1"),
+    ("f6f7↓", "e7f6↙", "a6b5↓"),
+    ("a3a4", "b3c4", "c3d3↑"),
+    ("a7a6", "b8a7", "b5b5↘"),
+    ("c4b4xb5", "e3f4↑", "d3e4↑"),
+    ("ric8", "rib8", "f6g6↙"),
+    ("a2a3↑", "f4g5↑", "e4f4↑"),
+    ("g7h7", "g6h6↙", "f7g8↓"),
+    ("g5h5↑", "f4g4↑", "skip"),
+    ("f8d6", "d7e6↘", "h6h6↓"),
+    ("sbh7", "sbh6", "g4f4↖", "a4a5", "a3a4↑"),
+    ("h8g7", "e6f6↓", "g8f7↘"),
+    ("sbc7", "sbd6", "sba6", "f4g5↑", "h5h6↑", "b4b5"),
+    ("f6e7↘", "f7f6→", "g7f7"),
+    ("g5f5↑", "h6h4↑", "a5a6"),
+    ("f7g6", "f6g5←", "d8d7↙"),
+    ("b1d6xd7", "f5g4↑", "f2f3"),
+    ("e8c6", "c8d7xd6", "g5f6↘"),
+    ("sbg6", "a4b4↑", "g4f5←", "h4f4↑"),
+    ("b6b7", "rih8", "f6g6↙"),
+    ("c1c3", "f5e6←", "f4e5←"),
+    ("e7f6←", "d7e7xe6", "c6e6xe5"),
+    ("b5b6", "b4b5↑", "c3c5"),
+    ("h8g7", "b7c7", "e6d6"),
+    ("d1d2", "rfc1", "rfb1"),
+    ("f6e5←", "g6h5↙", "d6d4"),
+    ("d2d3", "f3e4xe5", "c5d5xd4"),
+)
 SELF_PLAY_PURPOSELESS_FILLER_FEN = (
     "1q2i1i1/3i1i1i/1i4fr↓/8/F7/1H↑F2I2/4I1II/1IR↖1R↖I1Q IF - b"
 )
@@ -134,6 +177,8 @@ SELF_PLAY_AVOIDABLE_IMMEDIATE_HQ_LOSSES = (
     (117, "q7/1I6/8/8/2if1i2/4f3/8/4Q3 - - r"),
     (77, "8/q7/1i6/I1i5/6i1/5i2/5f2/4i2Q - - r"),
     (57, "8/q1i5/1i6/2i5/2F3i1/1F1I3f/I1I5/1I1I1fQ1 - - r"),
+    (79, "qi3i2/2i1i3/3I4/4I3/1i6/2if4/8/3Q4 - - r"),
+    (76, "q1i3r→1/F2iiii1/1I6/2F5/8/8/3I1I2/3P2IQ - - b"),
 )
 SELF_PLAY_FORCED_IMMEDIATE_HQ_LOSS = (
     76,
@@ -657,11 +702,110 @@ class SearchTests(unittest.TestCase):
             ],
         )
 
-    def test_single_capture_target_is_enough_to_allow_a_paradrop(self):
+    def test_single_target_does_not_justify_a_paradrop(self):
         board = engine.BaseBoard("7q/8/8/2h↓5/8/8/8/1P5Q - - r")
         searcher = ghq_ai.Searcher("balanced", time_ms=2000, beam_width=6)
         moves = [candidate.uci() for _, candidate in searcher.diverse_moves(board)]
-        self.assertIn("b1b4", moves)
+        self.assertNotIn("b1b4", moves)
+
+    def test_even_para_trade_for_armored_artillery_is_rejected(self):
+        board = engine.BaseBoard("7q/8/8/2t↓5/8/8/8/1P5Q - - r")
+        searcher = ghq_ai.Searcher("balanced", time_ms=2000, beam_width=12)
+        moves = [candidate.uci() for _, candidate in searcher.diverse_moves(board)]
+        self.assertNotIn("b1b5xc5", moves)
+
+    def test_single_heavy_artillery_capture_does_not_justify_a_paradrop(self):
+        board = engine.BaseBoard("7q/8/8/2h↓5/8/8/8/1P5Q - - r")
+        searcher = ghq_ai.Searcher("balanced", time_ms=2000, beam_width=12)
+        moves = [candidate.uci() for _, candidate in searcher.diverse_moves(board)]
+        self.assertNotIn("b1b5xc5", moves)
+
+    def test_reported_para_trade_and_artillery_exposure_are_rejected(self):
+        board = engine.BaseBoard()
+        positions = {}
+        for turn_number, turn in enumerate(
+            USER_REPORTED_PARA_AND_ARTILLERY_GAME, start=1
+        ):
+            positions[turn_number] = board.copy()
+            for uci in turn:
+                board.push(engine.Move.from_uci(uci))
+
+        turn_eight = ghq_ai.Searcher(
+            "balanced", time_ms=2000, beam_width=12, turn_number=4
+        )
+        paradrop = engine.Move.from_uci("g8a1xb1")
+        self.assertFalse(turn_eight.paradrop_allowed(positions[8], paradrop))
+
+        turn_sixteen = ghq_ai.Searcher(
+            "balanced", time_ms=10000, beam_width=8, turn_number=8
+        )
+        exposed = positions[16].copy()
+        for uci in USER_REPORTED_PARA_AND_ARTILLERY_GAME[15]:
+            exposed.push(engine.Move.from_uci(uci))
+        safety = turn_sixteen.assess_turn_safety(
+            positions[16], exposed, positions[16].turn
+        )
+        self.assertFalse(safety.tactically_safe)
+        self.assertEqual(safety.new_risk_value, 3.0)
+        candidates = turn_sixteen.generate_turn_candidates(positions[16])
+        candidate_lines = [[move.uci() for move in item.moves] for item in candidates]
+        self.assertNotIn(
+            list(USER_REPORTED_PARA_AND_ARTILLERY_GAME[15]), candidate_lines
+        )
+        self.assertFalse(any("a6b5↓" in line for line in candidate_lines))
+
+        turn_eighteen = ghq_ai.Searcher(
+            "balanced", time_ms=2000, beam_width=12, turn_number=9
+        )
+        self.assertFalse(
+            turn_eighteen.artillery_move_allowed(
+                positions[18], engine.Move.from_uci("b5b5↘")
+            )
+        )
+
+        turn_forty = ghq_ai.Searcher(
+            "balanced", time_ms=20000, beam_width=8, turn_number=20
+        )
+        exposed_pair = positions[40].copy()
+        for uci in USER_REPORTED_PARA_AND_ARTILLERY_GAME[39]:
+            exposed_pair.push(engine.Move.from_uci(uci))
+        setup = next(
+            move
+            for move in exposed_pair.generate_legal_moves()
+            if move.uci() == "d2d3"
+        )
+        self.assertTrue(
+            turn_forty.unlocks_capture_this_turn(exposed_pair, setup)
+        )
+        after_setup = exposed_pair.copy()
+        after_setup.push(setup)
+        chain_capture = next(
+            move
+            for move in after_setup.generate_legal_moves()
+            if move.uci() == "f3e4xe5"
+        )
+        self.assertEqual(
+            turn_forty.followup_capture_value(after_setup, chain_capture), 3.0
+        )
+        replies = turn_forty.generate_turn_candidates(exposed_pair)
+        self.assertIn(
+            ["d2d3", "f3e4xe5", "c5d5xd4"],
+            [[move.uci() for move in item.moves] for item in replies],
+        )
+
+        blue_candidates = turn_forty.generate_turn_candidates(positions[40])
+        blue_lines = [[move.uci() for move in item.moves] for item in blue_candidates]
+        self.assertNotIn(
+            list(USER_REPORTED_PARA_AND_ARTILLERY_GAME[39]), blue_lines
+        )
+        safe_artillery_only = positions[40].copy()
+        for uci in ("f6e5←", "skip"):
+            safe_artillery_only.push(engine.Move.from_uci(uci))
+        self.assertFalse(
+            turn_forty.unlocks_capture_this_turn(
+                safe_artillery_only, engine.Move.from_uci("d2d3")
+            )
+        )
 
     def test_opponent_home_rank_para_is_trapped_when_infantry_can_deploy(self):
         no_reserve = engine.BaseBoard("q6P/8/8/8/8/8/8/7Q - - r")
@@ -671,7 +815,7 @@ class SearchTests(unittest.TestCase):
             ghq_ai.airborne_survival_penalty(no_reserve, engine.RED) + 8.0,
         )
 
-    def test_multiple_valuable_para_threats_count_as_a_mission(self):
+    def test_future_para_threats_do_not_count_as_a_same_turn_mission(self):
         before = engine.BaseBoard("7q/8/8/r↓1h↓5/8/8/8/1P5Q - - r")
         after = before.copy()
         move = next(
@@ -681,11 +825,36 @@ class SearchTests(unittest.TestCase):
         )
         after.push(move)
         searcher = ghq_ai.Searcher("balanced", time_ms=2000, beam_width=6)
-        self.assertEqual(
+        self.assertGreaterEqual(
             searcher.paratrooper_mission_penalty(
                 before, after, [move], engine.RED
             ),
-            0.0,
+            ghq_ai.MISSIONLESS_PARATROOPER_PENALTY,
+        )
+
+    def test_reported_para_specialist_opening_trade_is_rejected(self):
+        board = engine.BaseBoard()
+        for turn in (
+            ("rib1", "ric1", "ria1"),
+            ("rhe8", "rtd8", "rpg8"),
+            ("c1c2", "b1b2", "a1a2"),
+            ("d8d6↓", "e8e7↓", "rff8"),
+            ("rra1", "rrb1", "rtc1"),
+        ):
+            for uci in turn:
+                board.push(engine.Move.from_uci(uci))
+
+        searcher = ghq_ai.Searcher(
+            "para_specialist", time_ms=5000, beam_width=12, turn_number=3
+        )
+        move = engine.Move.from_uci("g8d1xc1")
+        self.assertFalse(searcher.paradrop_allowed(board, move))
+        candidates = searcher.generate_turn_candidates(board)
+        self.assertFalse(
+            any(
+                "g8d1xc1" in [candidate_move.uci() for candidate_move in item.moves]
+                for item in candidates
+            )
         )
 
     def test_square_swapping_turn_has_net_purpose_penalty(self):
@@ -1017,8 +1186,48 @@ class SearchTests(unittest.TestCase):
         searcher = ghq_ai.Searcher("balanced", time_ms=1000, beam_width=8)
         self.assertFalse(searcher.artillery_move_allowed(board, engine.Move.from_uci("g1g1→")))
         self.assertFalse(searcher.artillery_move_allowed(board, engine.Move.from_uci("g1g1↓")))
-        self.assertFalse(searcher.artillery_move_allowed(board, engine.Move.from_uci("g1f1↑")))
-        self.assertTrue(searcher.artillery_move_allowed(board, engine.Move.from_uci("g1f1↖")))
+        self.assertTrue(searcher.artillery_move_allowed(board, engine.Move.from_uci("g1f1↑")))
+        self.assertFalse(searcher.artillery_move_allowed(board, engine.Move.from_uci("g1f1↖")))
+
+    def test_protected_multi_target_diagonal_artillery_is_allowed(self):
+        board = engine.BaseBoard(
+            "p6q/8/5r↓2/4r↓3/4I3/2IR↑4/8/7Q - - r"
+        )
+        searcher = ghq_ai.Searcher(
+            "balanced", time_ms=2000, beam_width=12, turn_number=8
+        )
+        forward = engine.Move.from_uci("d3d4↑")
+        diagonal = engine.Move.from_uci("d3d4↗")
+        self.assertTrue(searcher.artillery_move_allowed(board, forward))
+        self.assertTrue(searcher.artillery_move_allowed(board, diagonal))
+        self.assertGreater(
+            searcher.move_priority(board, diagonal),
+            searcher.move_priority(board, forward),
+        )
+
+    def test_reported_two_target_artillery_lane_retains_forcing_value(self):
+        board = engine.BaseBoard(
+            "qiir↓fft↓i/i1ir↘3f/ii5h↙/6T↑1/II3H↑2/"
+            "R↑7/5III/1PFI2R↑Q IIFF i r"
+        )
+        move = engine.Move.from_uci("g5h5↑")
+        after = board.copy()
+        after.push(move)
+        self.assertEqual(
+            ghq_ai.artillery_forced_response_burden(after, engine.RED),
+            2.75,
+        )
+
+        result = ghq_ai.search(
+            board,
+            "balanced",
+            time_ms=10000,
+            max_depth=2,
+            beam_width=8,
+            turn_number=12,
+            opening_seed=0,
+        )
+        self.assertIn("g5h5↑", result["best_turn"]["all_moves"])
 
     def test_quiet_unblock_and_paratrooper_extraction_stay_in_beam(self):
         board = engine.BaseBoard(PARATROOPER_EXTRACTION_FEN)
@@ -1358,7 +1567,7 @@ class SearchTests(unittest.TestCase):
             "balanced", time_ms=2000, beam_width=6, turn_number=29
         )
         moves = [move.uci() for move in searcher.ordered_moves(board)]
-        self.assertIn("d2e1↗", moves)
+        self.assertIn("d2e3↑", moves)
         self.assertNotIn("b1b2", moves)
 
     def test_search_returns_a_complete_three_action_turn(self):
@@ -1476,9 +1685,14 @@ class SearchTests(unittest.TestCase):
         searcher.root_key = root.serialize()
         searcher.verification_mode = True
         replies = searcher.generate_turn_candidates(reply)
-        self.assertIn(
-            ["g4h4", "f5g5", "b1g6xh6"],
-            [[move.uci() for move in candidate.moves] for candidate in replies],
+        self.assertTrue(
+            any(
+                len(candidate.moves) == 3
+                and any(move.from_square == engine.B1 for move in candidate.moves)
+                and candidate.board.is_game_over()
+                and candidate.board.outcome().winner == reply.turn
+                for candidate in replies
+            )
         )
 
     def test_slow_vercel_reply_position_completes_tactical_floor(self):
@@ -1877,7 +2091,7 @@ class SearchTests(unittest.TestCase):
         bounded = [
             move.uci() for _, move in searcher.bounded_diverse_moves(board)
         ]
-        self.assertIn("b8c8↘", bounded)
+        self.assertIn("b8c8↓", bounded)
 
         candidates = searcher.generate_turn_candidates(board)
         escapes = [

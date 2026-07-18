@@ -116,6 +116,8 @@ BASE_WEIGHTS = {
 MATE_SCORE = 1_000_000.0
 POLICY_SCORE_WEIGHT = 3.0
 MISSIONLESS_PARATROOPER_PENALTY = 9.0
+PARATROOPER_VALUABLE_TARGET_VALUE = PIECE_VALUES[engine.ARTILLERY]
+PARATROOPER_MULTI_TARGET_COUNT = 2
 EARLY_GAME_LAST_TURN = 12
 
 # In 194 reconstructed complete games (12,083 positions), the 90th-95th
@@ -669,6 +671,31 @@ def artillery_pressure(board: engine.BaseBoard, color: bool) -> float:
     return target_value + 0.025 * engine.popcount(controlled)
 
 
+def artillery_forced_response_burden(
+    board: engine.BaseBoard, color: bool
+) -> float:
+    """Value a lane that makes the opponent answer multiple valuable threats.
+
+    Minimax normally sees the opponent move both targets and then evaluates a
+    quiet leaf, losing the tempo value of the fork. Preserve a bounded bonus
+    for the turn that created the fork. One attacked piece is ordinary
+    pressure; two or more distinct non-HQ targets consume scarce actions and
+    can herd valuable material into a shrinking pocket.
+    """
+    targets = (
+        board.get_bombarded_squares(color)
+        & board.occupied_co[not color]
+        & ~board.hq
+    )
+    values = [
+        PIECE_VALUES.get(board.piece_type_at(square), 0.0)
+        for square in squares(targets)
+    ]
+    if len(values) < 2:
+        return 0.0
+    return 0.25 * sum(values) + 0.50 * (len(values) - 1)
+
+
 def artillery_exposure_penalty(board: engine.BaseBoard, color: bool) -> float:
     """Value diagonal infantry cover against a staged enemy paratrooper."""
     enemy = not color
@@ -912,6 +939,7 @@ class Searcher:
         self.atomic_hq_defense_cache: Dict[BoardKey, bool] = {}
         self.hq_escape_unlock_move_cache: Dict[Tuple[BoardKey, str], bool] = {}
         self.capture_setup_move_cache: Dict[Tuple[BoardKey, str], bool] = {}
+        self.followup_capture_value_cache: Dict[Tuple[BoardKey, str], float] = {}
         self.root_key: Optional[BoardKey] = None
         self.root_fallback: Optional[TurnCandidate] = None
         self.root_ranked_turns: List[Tuple[float, TurnCandidate]] = []
@@ -1019,34 +1047,73 @@ class Searcher:
     def paradrop_capture_targets(
         self, board: engine.BaseBoard, move: engine.Move
     ) -> Dict[int, float]:
-        """Return pieces the para could legally capture from its landing square."""
+        """Return new captures unlocked for the remainder of this turn.
+
+        Merely threatening a piece from the landing square on a future turn is
+        not a concrete mission. Count only targets that another remaining
+        action can legally capture now and that were not already capturable
+        before committing the paratrooper.
+        """
         if not self.is_paradrop(board, move) or move.to_square is None:
             return {}
         mover = board.turn
+        before_targets = {
+            candidate.capture_preference
+            for candidate in board.generate_legal_moves()
+            if candidate.capture_preference is not None
+        }
         child = board.copy()
         child.push(move)
-        probe = self.board_as_turn(child, mover)
-        # We are inspecting the para's voluntary move options, not unrelated
-        # start-of-turn bombardments or automatic captures elsewhere.
-        probe.turn_moves = 1
-        source_mask = engine.BB_SQUARES[move.to_square]
+        if child.is_game_over() or child.turn != mover:
+            return {}
         targets: Dict[int, float] = {}
-        for candidate in probe.generate_legal_moves(from_mask=source_mask):
-            if (
-                candidate.from_square == move.to_square
-                and candidate.capture_preference is not None
-            ):
-                target = candidate.capture_preference
-                targets[target] = PIECE_VALUES.get(probe.piece_type_at(target), 0.0)
+        for candidate in child.generate_legal_moves():
+            target = candidate.capture_preference
+            if target is not None and target not in before_targets:
+                targets[target] = PIECE_VALUES.get(
+                    child.piece_type_at(target), 0.0
+                )
+        return targets
+
+    def paradrop_mission_targets(
+        self, board: engine.BaseBoard, move: engine.Move
+    ) -> Dict[int, float]:
+        """Return the captured target plus concrete same-turn follow-up captures."""
+        targets: Dict[int, float] = {}
+        if move.capture_preference is not None:
+            target = move.capture_preference
+            targets[target] = PIECE_VALUES.get(board.piece_type_at(target), 0.0)
+        for target, value in self.paradrop_capture_targets(board, move).items():
+            targets[target] = max(value, targets.get(target, 0.0))
         return targets
 
     def paradrop_allowed(self, board: engine.BaseBoard, move: engine.Move) -> bool:
-        """A paradrop is legal for search only when it arrives with a capture."""
+        """Require a concrete mission before committing the unique paratrooper.
+
+        An even trade for one ordinary gun is strategically poor because it
+        gives up the continuing deterrent.  A commitment must instead expose
+        multiple valuable targets or participate in an HQ combination. A
+        plausible first step home does not justify a single-target mission.
+        """
         if not self.is_paradrop(board, move):
             return True
-        if move.capture_preference is not None:
+        targets = self.paradrop_mission_targets(board, move)
+        if not targets:
+            return False
+        if any(
+            board.piece_type_at(target) == engine.HQ for target in targets
+        ):
             return True
-        return bool(self.paradrop_capture_targets(board, move))
+        if self.unlocks_immediate_hq_capture(board, move):
+            return True
+        valuable = [
+            value
+            for value in targets.values()
+            if value >= PARATROOPER_VALUABLE_TARGET_VALUE
+        ]
+        if len(valuable) >= PARATROOPER_MULTI_TARGET_COUNT:
+            return True
+        return False
 
     def early_extension_allowed(
         self, board: engine.BaseBoard, move: engine.Move
@@ -1676,9 +1743,16 @@ class Searcher:
     def transition_policy_score(
         self, board: engine.BaseBoard, mover: bool
     ) -> float:
-        """Return a bounded mover-positive policy bonus for one complete turn."""
+        """Return mover-positive strategic guidance for one complete turn.
+
+        Multi-target artillery pressure is retained across the opponent reply
+        because forcing two escapes has tempo value even when minimax reaches
+        a quiet leaf. The learned policy, when present, supplies the remaining
+        bounded adjustment.
+        """
+        forcing_bonus = artillery_forced_response_burden(board, mover)
         if self.policy_function is None:
-            return 0.0
+            return forcing_bonus
         key = (board.board_fen(), mover)
         cached = self.policy_cache.get(key)
         if cached is not None:
@@ -1691,7 +1765,9 @@ class Searcher:
             raise ValueError("policy function returned a non-finite score")
         # Policy fits use calibrated-logit units. Bound their influence below
         # concrete tactical and mate terms while preserving strategic ordering.
-        score = POLICY_SCORE_WEIGHT * max(-3.0, min(3.0, adjustment))
+        score = forcing_bonus + POLICY_SCORE_WEIGHT * max(
+            -3.0, min(3.0, adjustment)
+        )
         self.policy_cache[key] = score
         self.policy_model_evaluations += 1
         return score
@@ -1894,6 +1970,63 @@ class Searcher:
         return orientation in (engine.ORIENT_N, engine.ORIENT_NE, engine.ORIENT_NW)
 
     @staticmethod
+    def forward_orientation(color: bool) -> int:
+        """The stable straight-ahead facing for a relocated artillery piece."""
+        return engine.ORIENT_N if color == engine.RED else engine.ORIENT_S
+
+    @staticmethod
+    def is_diagonal_orientation(orientation: Optional[int]) -> bool:
+        return orientation is not None and orientation % 2 == 1
+
+    @staticmethod
+    def artillery_para_cover_points(
+        board: engine.BaseBoard, square: int, color: bool
+    ) -> int:
+        """Count landing-square coverage: diagonal infantry cover two, cardinal one."""
+        friendly_infantry = board.occupied_co[color] & (
+            board.infantry | board.armored_infantry | board.airborne_infantry
+        )
+        file_index = engine.square_file(square)
+        rank_index = engine.square_rank(square)
+        coverage = 0
+        for infantry in squares(
+            engine.BB_REGULAR_MOVES[square] & friendly_infantry
+        ):
+            diagonal = (
+                engine.square_file(infantry) != file_index
+                and engine.square_rank(infantry) != rank_index
+            )
+            coverage += 2 if diagonal else 1
+        return coverage
+
+    def diagonal_artillery_move_is_safe(
+        self, board: engine.BaseBoard, move: engine.Move
+    ) -> bool:
+        """Apply the cheap safety floor before minimax verifies the whole turn."""
+        if move.to_square is None:
+            return False
+        mover = board.turn
+        child = board.copy()
+        child.push(move)
+        destination = move.to_square
+        if engine.BB_SQUARES[destination] & child.get_bombarded_squares(not mover):
+            return False
+
+        enemy = not mover
+        enemy_home = engine.BB_RANK_1 if enemy == engine.RED else engine.BB_RANK_8
+        enemy_para_ready = bool(
+            child.airborne_infantry & child.occupied_co[enemy] & enemy_home
+        ) or child.get_reserve_count(engine.AIRBORNE_INFANTRY, enemy) > 0
+        if (
+            enemy_para_ready
+            and self.artillery_para_cover_points(child, destination, mover) < 3
+        ):
+            return False
+        return artillery_exposure_penalty(
+            child, mover
+        ) <= artillery_exposure_penalty(board, mover) + 1e-9
+
+    @staticmethod
     def closest_enemy_distance(board: engine.BaseBoard, square: int, color: bool) -> int:
         enemies = squares(board.occupied_co[not color])
         return min((chebyshev(square, enemy) for enemy in enemies), default=8)
@@ -1930,10 +2063,10 @@ class Searcher:
     def artillery_move_allowed(self, board: engine.BaseBoard, move: engine.Move) -> bool:
         """Apply the user's provisional artillery-orientation search rules.
 
-        Pure rotations must create an actual threat. Relocations may choose a
-        new useful facing because orientation clones are collapsed later.
-        Homeward-facing rotations and lanes aimed only through friendly pieces
-        are discarded.
+        Pure rotations must create an actual threat. A relocation defaults to
+        the straight-ahead facing. A diagonal facing survives only for the
+        protected, multi-target "windshield wiper" exception; minimax then
+        performs the full tactical safety check on the completed turn.
         """
         if move.name != "MoveAndOrient" or move.from_square is None or move.to_square is None:
             return True
@@ -1946,8 +2079,18 @@ class Searcher:
         enemy_targets, friendly_blocks = self.artillery_lane_masks(board, move)
         if move.from_square == move.to_square and not enemy_targets:
             return False
-        if friendly_blocks and not enemy_targets:
+        if (
+            move.from_square == move.to_square
+            and friendly_blocks
+            and not enemy_targets
+        ):
             return False
+
+        if self.is_diagonal_orientation(move.orientation):
+            if engine.popcount(enemy_targets) < 2:
+                return False
+            if not self.diagonal_artillery_move_is_safe(board, move):
+                return False
 
         distance = self.closest_enemy_distance(board, move.to_square, board.turn)
         if distance > 3 and move.from_square == move.to_square:
@@ -2078,14 +2221,13 @@ class Searcher:
     ) -> bool:
         """Whether a quiet action unlocks a capture within this turn.
 
-        This bounded two-action probe is active only near the no-progress
-        limit. It preserves lane-clearing sequences whose first two actions
-        look inert before a third action captures; minimax still decides
-        whether the resulting complete turn is sound.
+        A one-action setup that exposes a valuable capture is forcing in every
+        phase. The broader two-quiet-action probe remains reserved for late
+        no-progress positions so ordinary opening development stays cheap.
         """
+        late_probe = self.stagnation_factor() >= 0.70
         if (
-            self.stagnation_factor() < 0.70
-            or move.name in ("AutoCapture", "Skip")
+            move.name in ("AutoCapture", "Skip")
             or move.capture_preference is not None
             or board.turn_moves >= self.max_actions - 1
         ):
@@ -2105,6 +2247,28 @@ class Searcher:
             self.capture_setup_move_cache[cache_key] = False
             return False
 
+        if not late_probe:
+            valuable_targets = board.occupied_co[not board.turn] & (
+                board.hq
+                | board.armored_infantry
+                | board.airborne_infantry
+                | board.artillery
+                | board.armored_artillery
+                | board.heavy_artillery
+            )
+            relevant_squares = tuple(
+                square
+                for square in (move.from_square, move.to_square)
+                if square is not None
+            )
+            if not any(
+                chebyshev(square, target) <= 2
+                for square in relevant_squares
+                for target in squares(valuable_targets)
+            ):
+                self.capture_setup_move_cache[cache_key] = False
+                return False
+
         mover = board.turn
         child = board.copy()
         child.push(move)
@@ -2112,18 +2276,22 @@ class Searcher:
             self.capture_setup_move_cache[cache_key] = False
             return False
 
-        def capture_available(position: engine.BaseBoard) -> bool:
-            return any(
-                candidate.capture_preference is not None
+        def capture_values(position: engine.BaseBoard) -> List[float]:
+            return [
+                PIECE_VALUES.get(
+                    position.piece_type_at(candidate.capture_preference), 0.0
+                )
                 for candidate in position.generate_legal_moves()
-            )
+                if candidate.capture_preference is not None
+            ]
 
-        if capture_available(child):
+        unlocked_values = capture_values(child)
+        if unlocked_values and (late_probe or max(unlocked_values) >= 3.0):
             self.capture_setup_move_cache[cache_key] = True
             return True
 
         remaining_actions = self.max_actions - child.turn_moves
-        if remaining_actions >= 2:
+        if late_probe and remaining_actions >= 2:
             for second in child.generate_legal_moves():
                 if second.name in ("AutoCapture", "Skip"):
                     continue
@@ -2132,12 +2300,41 @@ class Searcher:
                 if (
                     not grandchild.is_game_over()
                     and grandchild.turn == mover
-                    and capture_available(grandchild)
+                    and capture_values(grandchild)
                 ):
                     self.capture_setup_move_cache[cache_key] = True
                     return True
         self.capture_setup_move_cache[cache_key] = False
         return False
+
+    def followup_capture_value(
+        self, board: engine.BaseBoard, move: engine.Move
+    ) -> float:
+        """Value the best additional capture made legal by this capture."""
+        if move.capture_preference is None:
+            return 0.0
+        cache_key = (board_key(board), move.uci())
+        cached = self.followup_capture_value_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        mover = board.turn
+        child = board.copy()
+        child.push(move)
+        if child.is_game_over() or child.turn != mover:
+            self.followup_capture_value_cache[cache_key] = 0.0
+            return 0.0
+        value = max(
+            (
+                PIECE_VALUES.get(
+                    child.piece_type_at(candidate.capture_preference), 0.0
+                )
+                for candidate in child.generate_legal_moves()
+                if candidate.capture_preference is not None
+            ),
+            default=0.0,
+        )
+        self.followup_capture_value_cache[cache_key] = value
+        return value
 
     def unlocks_hq_escape(
         self, board: engine.BaseBoard, move: engine.Move
@@ -2365,12 +2562,11 @@ class Searcher:
     def has_same_turn_hq_capture(self, board: engine.BaseBoard) -> bool:
         """Whether the side to act can force an HQ capture this turn.
 
-        This is deliberately narrower than complete turn enumeration.  The
-        unlock detector examines only setup actions geometrically close to the
-        target HQ, including the two quiet setups needed by a paratrooper mate.
-        It is therefore cheap enough for turn-safety checks while covering the
-        tactical combinations that an atomic-action beam is most likely to
-        discard.
+        This is deliberately narrower than complete turn enumeration. It uses
+        the equivalence-collapsed HQ action set, which retains every capture
+        plus local quiet infantry setups. Keeping remote captures matters:
+        GHQ capture obligations can consume an action before a local HQ attack
+        becomes legal.
         """
         key = board_key(board)
         cached = self.same_turn_hq_capture_cache.get(key)
@@ -2383,23 +2579,9 @@ class Searcher:
             self.same_turn_hq_capture_cache[key] = False
             return False
 
-        enemy_hqs = board.pieces(engine.HQ, not board.turn)
         actions_remaining = self.max_actions - board.turn_moves
-        setup_radius = 2 if actions_remaining >= 3 else 1
         first_positions: Dict[BoardKey, engine.BaseBoard] = {}
-        for move in board.generate_legal_moves():
-            if (
-                move.name in ("AutoCapture", "Skip")
-                or move.from_square is None
-                or move.to_square is None
-                or move.from_square == move.to_square
-                or not any(
-                    chebyshev(move.from_square, hq_square) <= setup_radius
-                    or chebyshev(move.to_square, hq_square) <= setup_radius
-                    for hq_square in enemy_hqs
-                )
-            ):
-                continue
+        for move in self.exact_hq_capture_moves(board):
             child = board.copy()
             child.push(move)
             if child.turn != board.turn or child.is_game_over():
@@ -2416,20 +2598,7 @@ class Searcher:
             # inside each safety check, which could consume the entire Vercel
             # turn budget before minimax completed one opponent reply.
             for child in first_positions.values():
-                for follow_up in child.generate_legal_moves():
-                    if (
-                        follow_up.name in ("AutoCapture", "Skip")
-                        or follow_up.from_square is None
-                        or follow_up.to_square is None
-                    ):
-                        continue
-                    near_hq = any(
-                        chebyshev(follow_up.from_square, hq_square) == 1
-                        or chebyshev(follow_up.to_square, hq_square) == 1
-                        for hq_square in enemy_hqs
-                    )
-                    if follow_up.capture_preference is None and not near_hq:
-                        continue
+                for follow_up in self.exact_hq_capture_moves(child):
                     grandchild = child.copy()
                     grandchild.push(follow_up)
                     if (
@@ -2542,13 +2711,13 @@ class Searcher:
           Friendly bombardment is not resolved until the mover's next turn,
           and friendly orientation does not change the mover's legal squares.
 
-        Relocating artillery and HQ pieces remain when their source,
-        destination, or capture lies within two squares of the target HQ,
-        because vacating a nearby square can unlock a later infantry action.
-        With at most three voluntary actions, an action wholly outside that
-        radius cannot change the local engagement/capture cluster before the
-        turn ends. Global paratrooper moves remain whenever their destination
-        enters the radius. Infantry capture variants also remain distinct.
+        Every capture remains because a mandatory remote capture can consume
+        an action and change which local HQ capture becomes legal next. Quiet
+        infantry actions remain within three squares of the HQ: a first-step
+        engagement at distance three can unlock a two-action capture chain.
+        Other quiet relocations retain the tighter two-square radius. Global
+        paratrooper moves remain whenever their destination enters that local
+        radius. Infantry capture variants also remain distinct.
         The resulting search is complete for same-turn HQ capture while
         avoiding remote moves and hundreds of irrelevant orientation branches.
         """
@@ -2572,12 +2741,20 @@ class Searcher:
                 if relocation in artillery_relocations:
                     continue
                 artillery_relocations.add(relocation)
+            if move.capture_preference is not None:
+                yield move
+                continue
+            piece_type = Searcher.move_piece_type(board, move)
+            local_radius = (
+                3
+                if piece_type is not None and engine.is_infantry(piece_type)
+                else 2
+            )
             if move.name != "AutoCapture" and not any(
-                chebyshev(square, hq_square) <= 2
+                chebyshev(square, hq_square) <= local_radius
                 for square in (
                     move.from_square,
                     move.to_square,
-                    move.capture_preference,
                 )
                 if square is not None
                 for hq_square in enemy_hqs
@@ -2781,6 +2958,11 @@ class Searcher:
             priority = 5000.0 + 100.0 * PIECE_VALUES.get(target, 0.0)
             if target != engine.HQ and self.unlocks_immediate_hq_capture(board, move):
                 priority += 8000.0
+            followup_value = self.followup_capture_value(board, move)
+            if followup_value > 0.0:
+                # Prefer an equal capture that keeps a second conversion
+                # legal over one that terminates the combination.
+                priority += 4500.0 + 100.0 * followup_value
             return priority
         if move.name == "Skip":
             return -10000.0
@@ -2852,9 +3034,9 @@ class Searcher:
             # enough for the next action, h2-g3, to be considered.
             priority += 4800.0
         if self.unlocks_capture_this_turn(board, move):
-            # Late in a quiet game, keep the lane-clearing setup for a capture
-            # even when the setup action itself changes no evaluation feature.
-            priority += 3500.0
+            # Keep a quiet lane/engagement setup for a valuable capture even
+            # when the action itself changes no evaluation feature.
+            priority += 4800.0
         if self.unlocks_hq_escape(board, move):
             # Clearing the only HQ flight square is part of the escape, not a
             # generic infantry shuffle. It must survive even the narrow
@@ -2884,6 +3066,15 @@ class Searcher:
         if piece_type in ARTILLERY_TYPES and move.name == "MoveAndOrient":
             _, friendly_blocks = self.artillery_lane_masks(board, move)
             priority -= 150.0 * engine.popcount(friendly_blocks)
+            if (
+                move.from_square is not None
+                and move.to_square is not None
+                and move.from_square != move.to_square
+                and move.orientation == self.forward_orientation(board.turn)
+            ):
+                # Orientation clones are collapsed before the beam. Preserve
+                # the stable default unless another facing proves real value.
+                priority += 350.0
         if piece_type == engine.ARMORED_INFANTRY:
             priority += 20.0
         elif piece_type in ARTILLERY_TYPES:
@@ -3450,136 +3641,111 @@ class Searcher:
         ]
         if not removable:
             return None
-        if len(removable) > 1:
-            viable_removals: List[int] = []
-            for omitted in removable:
-                probe = root.copy()
-                probe_moves: List[engine.Move] = []
-                replayable = True
-                for index, original_move in enumerate(candidate.moves):
-                    if index == omitted:
-                        continue
-                    replay_move = next(
-                        (
-                            move
-                            for move in probe.generate_legal_moves()
-                            if move.uci() == original_move.uci()
-                        ),
-                        None,
-                    )
-                    if replay_move is None:
-                        replayable = False
-                        break
-                    probe_moves.append(replay_move)
-                    probe.push(replay_move)
-                if not replayable or probe.turn != mover or probe.is_game_over():
+        cleaned_options: List[TurnCandidate] = []
+        # There are at most three voluntary actions, so enumerate every
+        # non-empty subset of disposable actions. This covers both
+        # ``useful + useful + filler`` and ``useful + filler + filler`` while
+        # replay proving that no omitted action unlocked what remains.
+        for mask in range(1, 1 << len(removable)):
+            omitted = {
+                removable[offset]
+                for offset in range(len(removable))
+                if mask & (1 << offset)
+            }
+            working = root.copy()
+            cleaned_moves: List[engine.Move] = []
+            cleaned_priority = 0.0
+            replayable = True
+            for index, original_move in enumerate(candidate.moves):
+                if index in omitted:
                     continue
-                probe_skip = next(
+                if working.turn != mover or working.is_game_over():
+                    replayable = False
+                    break
+                replay_move = next(
                     (
                         move
-                        for move in probe.generate_legal_moves()
-                        if move.name == "Skip"
+                        for move in working.generate_legal_moves()
+                        if move.uci() == original_move.uci()
                     ),
                     None,
                 )
-                if probe_skip is None:
-                    continue
-                probe_moves.append(probe_skip)
-                probe.push(probe_skip)
-                probe_purposes = self.action_purpose_labels(
-                    root, probe_moves, mover, retrospective=True
-                )
-                voluntary = [
-                    purpose
-                    for move, purpose in zip(probe_moves, probe_purposes)
-                    if move.name not in ("AutoCapture", "Skip")
-                ]
-                if len(voluntary) == 2 and all(
-                    "no_new_effect" not in purpose["roles"]
-                    for purpose in voluntary
-                ):
-                    viable_removals.append(omitted)
-            if not viable_removals:
-                return None
-            # Prefer deleting the latest disposable action. Earlier quiet
-            # moves are more likely to be setup for what follows.
-            removable = [max(viable_removals)]
-
-        working = root.copy()
-        cleaned_moves: List[engine.Move] = []
-        cleaned_priority = 0.0
-        for index, original_move in enumerate(candidate.moves):
-            if index == removable[0]:
+                if replay_move is None:
+                    replayable = False
+                    break
+                cleaned_priority += self.move_priority(working, replay_move)
+                cleaned_moves.append(replay_move)
+                working.push(replay_move)
+            if not replayable or working.turn != mover or working.is_game_over():
                 continue
-            if working.turn != mover or working.is_game_over():
-                return None
-            replay_move = next(
+            skip = next(
                 (
                     move
                     for move in working.generate_legal_moves()
-                    if move.uci() == original_move.uci()
+                    if move.name == "Skip"
                 ),
                 None,
             )
-            if replay_move is None:
-                return None
-            cleaned_priority += self.move_priority(working, replay_move)
-            cleaned_moves.append(replay_move)
-            working.push(replay_move)
-        if working.turn != mover or working.is_game_over():
-            return None
-        skip = next(
-            (move for move in working.generate_legal_moves() if move.name == "Skip"),
-            None,
-        )
-        if skip is None:
-            return None
-        cleaned_priority += self.move_priority(working, skip)
-        cleaned_moves.append(skip)
-        working.push(skip)
+            if skip is None:
+                continue
+            cleaned_priority += self.move_priority(working, skip)
+            cleaned_moves.append(skip)
+            working.push(skip)
 
-        action_purposes = self.action_purpose_labels(
-            root, cleaned_moves, mover, retrospective=True
-        )
-        voluntary_purposes = [
-            purpose
-            for move, purpose in zip(cleaned_moves, action_purposes)
-            if move.name not in ("AutoCapture", "Skip")
-        ]
-        if len(voluntary_purposes) != 2 or any(
-            "no_new_effect" in purpose["roles"] for purpose in voluntary_purposes
-        ):
+            action_purposes = self.action_purpose_labels(
+                root, cleaned_moves, mover, retrospective=True
+            )
+            voluntary_purposes = [
+                purpose
+                for move, purpose in zip(cleaned_moves, action_purposes)
+                if move.name not in ("AutoCapture", "Skip")
+            ]
+            if not voluntary_purposes or len(voluntary_purposes) > 2 or any(
+                "no_new_effect" in purpose["roles"]
+                for purpose in voluntary_purposes
+            ):
+                continue
+            purpose = self.turn_purpose_breakdown(
+                root, working, cleaned_moves, mover, retrospective=True
+            )
+            if purpose["paratrooper_mission_penalty"] > 0.0:
+                continue
+            if (
+                self.turn_number <= EARLY_GAME_LAST_TURN
+                and not self.early_structure_allowed(
+                    root,
+                    working,
+                    cleaned_moves,
+                    mover,
+                    action_purposes,
+                )
+            ):
+                continue
+            safety = self.assess_turn_safety(root, working, mover)
+            terminal = self.terminal_score(working, 0)
+            cleaned_options.append(
+                TurnCandidate(
+                    cleaned_moves,
+                    working,
+                    cleaned_priority,
+                    self.heuristic_score(working) if terminal is None else terminal,
+                    max(0.0, safety.new_risk_value - safety.compensation_value),
+                    safety.tactically_safe,
+                    purpose["net_purpose_penalty"],
+                    purpose["paratrooper_mission_penalty"],
+                    action_purposes,
+                    self.early_plan_score(action_purposes),
+                    purpose["stagnation_progress"],
+                    purpose["backfills"] + purpose["reversals"],
+                    1.0,
+                )
+            )
+        if not cleaned_options:
             return None
-        purpose = self.turn_purpose_breakdown(
-            root, working, cleaned_moves, mover, retrospective=True
+        cleaned_options.sort(
+            key=lambda item: self.candidate_sort_key(item, mover)
         )
-        if purpose["paratrooper_mission_penalty"] > 0.0:
-            return None
-        if self.turn_number <= EARLY_GAME_LAST_TURN and not self.early_structure_allowed(
-            root,
-            working,
-            cleaned_moves,
-            mover,
-            action_purposes,
-        ):
-            return None
-        safety = self.assess_turn_safety(root, working, mover)
-        terminal = self.terminal_score(working, 0)
-        return TurnCandidate(
-            cleaned_moves,
-            working,
-            cleaned_priority,
-            self.heuristic_score(working) if terminal is None else terminal,
-            max(0.0, safety.new_risk_value - safety.compensation_value),
-            safety.tactically_safe,
-            purpose["net_purpose_penalty"],
-            purpose["paratrooper_mission_penalty"],
-            action_purposes,
-            self.early_plan_score(action_purposes),
-            purpose["stagnation_progress"],
-            purpose["backfills"] + purpose["reversals"],
-            1.0,
-        )
+        return cleaned_options[0]
 
     def generate_turn_candidates(self, board: engine.BaseBoard) -> List[TurnCandidate]:
         """Generate, deduplicate, then prune complete player turns.
@@ -3942,8 +4108,6 @@ class Searcher:
             ]
             minimum_no_effect = min(no_effect_counts)
             permitted_no_effect = minimum_no_effect
-            if is_root_generation and self.stagnation_factor() >= 0.30:
-                permitted_no_effect += 1
             focused = [
                 candidate
                 for candidate, count in zip(purpose_pool, no_effect_counts)
@@ -4110,7 +4274,11 @@ class Searcher:
                             + turn.paratrooper_mission_penalty
                         )
                         transition_quality = (
-                            self.transition_policy_score(turn.board, board.turn)
+                            0.0
+                            if abs(leaf_score) >= MATE_SCORE
+                            else self.transition_policy_score(
+                                turn.board, board.turn
+                            )
                             - transition_penalty
                         )
                         candidate = (
@@ -4157,7 +4325,9 @@ class Searcher:
                 else 0.0
             )
             turn_quality = (
-                early_bonus
+                0.0
+                if abs(result.score) >= MATE_SCORE
+                else early_bonus
                 - transition_penalty
                 + self.transition_policy_score(turn.board, board.turn)
             )
