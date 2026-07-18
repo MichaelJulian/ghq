@@ -22,7 +22,7 @@ function argumentsFor(name: string): string[] {
 }
 
 async function excludedRootIds(): Promise<Set<string>> {
-  const excluded = new Set<string>();
+  const excluded = new Set<string>(argumentsFor("--exclude-root"));
   for (const path of argumentsFor("--exclude-report")) {
     const report = JSON.parse(await readFile(path, "utf8")) as {
       pairs?: Array<{ rootId?: unknown }>;
@@ -38,7 +38,7 @@ async function excludedRootIds(): Promise<Set<string>> {
 }
 
 async function excludedSourceGameIds(): Promise<Set<string>> {
-  const excluded = new Set<string>();
+  const excluded = new Set<string>(argumentsFor("--exclude-source-game"));
   for (const path of argumentsFor("--exclude-source-games-report")) {
     const report = JSON.parse(await readFile(path, "utf8")) as {
       pairs?: Array<{
