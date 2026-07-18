@@ -921,6 +921,36 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(reduced_safety.forced_loss_value, 3.0)
         self.assertTrue(reduced_safety.tactically_safe)
 
+    def test_armored_infantry_may_not_walk_into_immediate_forced_capture(self):
+        board = engine.BaseBoard(
+            "qi2iii1/ir↓i5/4r↓3/1i3f2/1IR↑H↑4/"
+            "1R↑2R↑1I1/3I3I/2P1I2Q FFF i b"
+        )
+        searcher = ghq_ai.Searcher(
+            "para_specialist",
+            time_ms=20_000,
+            beam_width=16,
+            turn_number=28,
+        )
+
+        suicide = board.copy()
+        for uci in ("f5h3", "b7b6↓", "e6f7↓"):
+            suicide.push(engine.Move.from_uci(uci))
+        escape = board.copy()
+        for uci in ("b5a6", "b7b6↓", "skip"):
+            escape.push(engine.Move.from_uci(uci))
+
+        suicide_safety = searcher.assess_turn_safety(
+            board, suicide, board.turn
+        )
+        escape_safety = searcher.assess_turn_safety(
+            board, escape, board.turn
+        )
+        self.assertEqual(suicide_safety.forced_loss_value, 4.0)
+        self.assertFalse(suicide_safety.tactically_safe)
+        self.assertEqual(escape_safety.forced_loss_value, 0.0)
+        self.assertTrue(escape_safety.tactically_safe)
+
     def test_opponent_home_rank_para_is_trapped_when_infantry_can_deploy(self):
         no_reserve = engine.BaseBoard("q6P/8/8/8/8/8/8/7Q - - r")
         infantry_ready = engine.BaseBoard("q6P/8/8/8/8/8/8/7Q - i r")

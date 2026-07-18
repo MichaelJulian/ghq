@@ -5207,6 +5207,7 @@ def search(
     hq_survival_override_used = False
     hq_survival_reply_verified = False
     policy_return_guard_used = False
+    tactical_return_guard_used = False
     emergency_seed: Optional[SearchResult] = None
     emergency_seed_safe = False
     seed_reply_retry_used = False
@@ -5611,6 +5612,68 @@ def search(
                 searcher.verification_mode = previous_verification_mode
             fallback_kind = "safe"
 
+    # Approximate minimax is allowed to rank positions imperfectly, but it may
+    # not return a turn that the objective safety probe already knows loses a
+    # para, artillery, or unsupported infantry by force.  A timed-out native
+    # search once selected an armored-infantry move to h3 even though its own
+    # PV contained the immediate ``sfh3`` capture.  Recheck the selected turn
+    # with a fresh deadline, then restore the strongest independently checked
+    # safe root alternative.  This guard is deliberately after every ordinary
+    # search/fallback path and before the policy guards below.
+    selected_safety = bounded_seed_safety(
+        board,
+        resulting_board,
+        personality,
+        turn_number,
+        beam_width,
+        max_actions,
+        seed_time_ms,
+    )
+    if (
+        not hq_survival_override_used
+        and selected_safety is not None
+        and not selected_safety.tactically_safe
+    ):
+        replacement_options: List[TurnCandidate] = []
+        seen_replacements: set[Tuple[str, ...]] = set()
+
+        def consider_replacement(candidate: Optional[TurnCandidate]) -> None:
+            if candidate is None:
+                return
+            move_key = tuple(move.uci() for move in candidate.moves)
+            if move_key == tuple(move.uci() for move in first_turn):
+                return
+            if move_key in seen_replacements:
+                return
+            seen_replacements.add(move_key)
+            replacement_options.append(candidate)
+
+        for _, candidate in searcher.root_ranked_turns:
+            consider_replacement(candidate)
+        consider_replacement(searcher.root_fallback)
+        for candidate in searcher.turn_cache.get(searcher.root_key or "", []):
+            consider_replacement(candidate)
+
+        for replacement in replacement_options[:8]:
+            replacement_safety = bounded_seed_safety(
+                board,
+                replacement.board,
+                personality,
+                turn_number,
+                beam_width,
+                max_actions,
+                seed_time_ms,
+            )
+            if replacement_safety is None or not replacement_safety.tactically_safe:
+                continue
+            first_turn = list(replacement.moves)
+            resulting_board = replacement.board
+            best = SearchResult(replacement.static_score, list(first_turn))
+            completed_depth = 0
+            fallback_kind = "safe"
+            tactical_return_guard_used = True
+            break
+
     selected_policy = searcher.deadline_safe_turn_purpose_breakdown(
         board,
         resulting_board,
@@ -5916,6 +5979,7 @@ def search(
             "hq_survival_override_used": hq_survival_override_used,
             "hq_survival_reply_verified": hq_survival_reply_verified,
             "policy_return_guard_used": policy_return_guard_used,
+            "tactical_return_guard_used": tactical_return_guard_used,
             "seed_reply_verified": verified_seed is not None,
             "seed_reply_retry_used": seed_reply_retry_used,
         },
