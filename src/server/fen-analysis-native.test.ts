@@ -94,6 +94,7 @@ function nativeSearchResult(): GhqSearchResult {
       backend: "native-python",
       value_model_backend: "native-gbdt",
       value_model_version: "incumbent",
+      code_version: "local-unversioned-search",
     },
     evaluation: {
       before: {} as GhqSearchResult["evaluation"]["before"],
@@ -106,6 +107,7 @@ describe("native production FEN analysis", () => {
   it("preserves the public response contract and runtime provenance", async () => {
     process.env.GHQ_NATIVE_SEARCH_URL = "https://native.test/api";
     const nativeResponse = {
+      codeVersion: "local-unversioned-search",
       fen: GHQ_STARTING_FEN,
       sideToMove: "RED",
       resultingFen: RESULTING_FEN,
