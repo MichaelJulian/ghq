@@ -1896,6 +1896,16 @@ class Searcher:
         if cached is not None:
             return cached
 
+        # If a capture is already legal, spending a quiet action first is not
+        # a capture setup. This prevents the anti-stall priority from rewarding
+        # gratuitous motion before taking available material.
+        if any(
+            candidate.capture_preference is not None
+            for candidate in board.generate_legal_moves()
+        ):
+            self.capture_setup_move_cache[cache_key] = False
+            return False
+
         mover = board.turn
         child = board.copy()
         child.push(move)

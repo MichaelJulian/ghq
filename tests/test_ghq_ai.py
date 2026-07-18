@@ -955,6 +955,29 @@ class SearchTests(unittest.TestCase):
         )
         self.assertTrue(searcher.unlocks_capture_this_turn(board, setup))
         self.assertGreater(searcher.move_priority(board, setup), 3000.0)
+
+        ready = board.copy()
+        for uci in ("b7c6", "c7b7"):
+            ready.push(
+                next(
+                    move
+                    for move in ready.generate_legal_moves()
+                    if move.uci() == uci
+                )
+            )
+        ready = searcher.board_as_turn(ready, engine.BLUE)
+        self.assertTrue(
+            any(
+                move.capture_preference is not None
+                for move in ready.generate_legal_moves()
+            )
+        )
+        unnecessary = next(
+            move for move in ready.generate_legal_moves() if move.uci() == "g3g5"
+        )
+        self.assertFalse(
+            searcher.unlocks_capture_this_turn(ready, unnecessary)
+        )
         selected = searcher.select_diverse_turns(
             board, [retreat, capture], turn_width=1
         )
