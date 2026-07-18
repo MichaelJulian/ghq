@@ -6,6 +6,7 @@ import type {
 } from "@/workflows/self-play-game";
 import {
   candidateStrategicDivergence,
+  counterfactualRootFingerprint,
   counterfactualReplicateSeed,
   counterfactualReplicateEvidence,
   counterfactualRootSeed,
@@ -25,6 +26,26 @@ function candidate(rank: number, score: number): GhqCandidateTurn {
   };
 }
 
+function positionedFen(square: number, nextPlayer: "r" | "b"): string {
+  const board = Array.from({ length: 64 }, () => "");
+  board[square % board.length] = "I";
+  const rows = Array.from({ length: 8 }, (_, row) => {
+    let result = "";
+    let empty = 0;
+    for (const piece of board.slice(row * 8, row * 8 + 8)) {
+      if (!piece) {
+        empty++;
+      } else {
+        if (empty) result += empty;
+        result += piece;
+        empty = 0;
+      }
+    }
+    return result + (empty || "");
+  });
+  return `${rows.join("/")} - - ${nextPlayer}`;
+}
+
 function decision(
   turnNumber: number,
   scores: number[],
@@ -40,7 +61,13 @@ function decision(
     opponentId: "opponent",
     selectedMoves: [],
     selectedRank: 1,
-    candidateTurns: scores.map((score, index) => candidate(index + 1, score)),
+    candidateTurns: scores.map((score, index) => ({
+      ...candidate(index + 1, score),
+      resulting_fen: positionedFen(
+        turnNumber * 4 + index,
+        player === "RED" ? "b" : "r"
+      ),
+    })),
     currentPlayerScore: scores[0],
     winProbability: 0.5,
     completedDepth: 2,
@@ -86,6 +113,40 @@ describe("counterfactual rollout selection", () => {
 
     expect(roots[0].sourceGameId).toBe("high");
     expect(roots[0].strategicDivergence).toBeGreaterThan(0);
+  });
+
+  it("fingerprints candidate states independently of game and rank order", () => {
+    expect(counterfactualRootFingerprint("RED", ["fen-a", "fen-b"])).toBe(
+      counterfactualRootFingerprint("RED", ["fen-b", "fen-a", "fen-a"])
+    );
+    expect(counterfactualRootFingerprint("RED", ["fen-a", "fen-b"])).not.toBe(
+      counterfactualRootFingerprint("BLUE", ["fen-a", "fen-b"])
+    );
+  });
+
+  it("excludes semantic duplicates across different source games", () => {
+    const original = decision(12, [1, 1.1]);
+    const duplicate = decision(19, [1, 1.1]);
+    duplicate.candidateTurns = original.candidateTurns.map((turn) => ({
+      ...turn,
+    }));
+    const fingerprint = counterfactualRootFingerprint(
+      "RED",
+      original.candidateTurns.map((turn) => turn.resulting_fen)
+    );
+
+    expect(
+      selectCounterfactualRoots(
+        [game("game-a", [original]), game("game-b", [duplicate])],
+        { maxRoots: 2, maxRootsPerGame: 1 }
+      )
+    ).toHaveLength(1);
+    expect(
+      selectCounterfactualRoots([game("game-b", [duplicate])], {
+        maxRoots: 1,
+        excludeRootFingerprints: new Set([fingerprint]),
+      })
+    ).toHaveLength(0);
   });
 
   it("selects close, reply-verified candidates and preserves branch metadata", () => {

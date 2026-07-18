@@ -4,7 +4,10 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { config } from "dotenv";
 
-import { selectCounterfactualRoots } from "../src/game/self-play/counterfactual";
+import {
+  counterfactualRootFingerprint,
+  selectCounterfactualRoots,
+} from "../src/game/self-play/counterfactual";
 import { readPersistedSelfPlayGames } from "../src/server/self-play-storage";
 import type { DurableSelfPlayGameResult } from "../src/workflows/self-play-game";
 
@@ -62,6 +65,36 @@ async function excludedSourceGameIds(): Promise<Set<string>> {
   return excluded;
 }
 
+async function excludedRootFingerprints(): Promise<Set<string>> {
+  const excluded = new Set<string>();
+  for (const path of argumentsFor("--exclude-fingerprint-report")) {
+    const report = JSON.parse(await readFile(path, "utf8")) as {
+      pairs?: Array<{
+        rootPlayer?: unknown;
+        branches?: Array<{ initialFen?: unknown }>;
+      }>;
+    };
+    if (!Array.isArray(report.pairs)) {
+      throw new Error(`${path} is not a counterfactual rollout report`);
+    }
+    for (const pair of report.pairs) {
+      if (
+        (pair.rootPlayer !== "RED" && pair.rootPlayer !== "BLUE") ||
+        !Array.isArray(pair.branches)
+      ) {
+        continue;
+      }
+      const fens = pair.branches.flatMap((branch) =>
+        typeof branch.initialFen === "string" ? [branch.initialFen] : []
+      );
+      if (fens.length >= 2) {
+        excluded.add(counterfactualRootFingerprint(pair.rootPlayer, fens));
+      }
+    }
+  }
+  return excluded;
+}
+
 function integerArgument(
   name: string,
   fallback: number,
@@ -106,8 +139,9 @@ async function main() {
     throw new Error(`No completed games found for ${generationId}`);
   }
 
-  const [excluded, excludedSourceGames] = await Promise.all([
+  const [excluded, excludedFingerprints, excludedSourceGames] = await Promise.all([
     excludedRootIds(),
+    excludedRootFingerprints(),
     excludedSourceGameIds(),
   ]);
   const roots = selectCounterfactualRoots(games, {
@@ -124,6 +158,7 @@ async function main() {
       100
     ),
     excludeRootIds: excluded,
+    excludeRootFingerprints: excludedFingerprints,
     excludeSourceGameIds: excludedSourceGames,
   });
   if (!roots.length) {
@@ -134,6 +169,7 @@ async function main() {
     sourceGenerationId: generationId,
     selection: roots.map((root) => ({
       rootId: root.rootId,
+      rootFingerprint: root.rootFingerprint,
       sourceGameId: root.sourceGameId,
       sourceTurnNumber: root.sourceTurnNumber,
       rootPlayer: root.rootPlayer,
@@ -169,7 +205,7 @@ async function main() {
   const outputPath = argument("--output");
   if (outputPath) await writeFile(outputPath, rendered, "utf8");
   process.stderr.write(
-    `Selected ${roots.length} roots / ${request.branches.length} branches from ${games.length} games; excluded ${excluded.size} prior roots and ${excludedSourceGames.size} training source games\n`
+    `Selected ${roots.length} roots / ${request.branches.length} branches from ${games.length} games; excluded ${excluded.size} prior roots, ${excludedFingerprints.size} semantic duplicates, and ${excludedSourceGames.size} training source games\n`
   );
   process.stdout.write(rendered);
 }

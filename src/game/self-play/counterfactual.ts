@@ -28,6 +28,7 @@ export interface CounterfactualBranch {
 
 export interface CounterfactualRoot {
   rootId: string;
+  rootFingerprint: string;
   sourceGameId: string;
   sourceTurnNumber: number;
   rootPlayer: Player;
@@ -45,7 +46,16 @@ export interface CounterfactualSelectionOptions {
   minTurnNumber?: number;
   minStrategicDivergence?: number;
   excludeRootIds?: ReadonlySet<string>;
+  excludeRootFingerprints?: ReadonlySet<string>;
   excludeSourceGameIds?: ReadonlySet<string>;
+}
+
+/** Identify the same policy question even when it came from another game. */
+export function counterfactualRootFingerprint(
+  rootPlayer: Player,
+  candidateFens: readonly string[]
+): string {
+  return `${rootPlayer}:${[...new Set(candidateFens)].sort().join("||")}`;
 }
 
 const DIVERGENCE_FEATURE_SCALES: Readonly<Record<string, number>> = {
@@ -175,12 +185,16 @@ export function selectCounterfactualRoots(
     minTurnNumber: rawOptions.minTurnNumber ?? 5,
     minStrategicDivergence: rawOptions.minStrategicDivergence ?? 0,
     excludeRootIds: rawOptions.excludeRootIds ?? new Set<string>(),
+    excludeRootFingerprints:
+      rawOptions.excludeRootFingerprints ?? new Set<string>(),
     excludeSourceGameIds:
       rawOptions.excludeSourceGameIds ?? new Set<string>(),
   };
   for (const [name, value] of Object.entries(options).filter(
     ([name]) =>
-      name !== "excludeRootIds" && name !== "excludeSourceGameIds"
+      name !== "excludeRootIds" &&
+      name !== "excludeRootFingerprints" &&
+      name !== "excludeSourceGameIds"
   )) {
     if (typeof value !== "number") continue;
     const mayBeZero =
@@ -237,11 +251,17 @@ export function selectCounterfactualRoots(
       if (strategicDivergence < options.minStrategicDivergence) return [];
       const rootId = `${game.gameId}:t${decision.turnNumber}`;
       if (options.excludeRootIds.has(rootId)) return [];
+      const rootFingerprint = counterfactualRootFingerprint(
+        decision.player,
+        candidates.map((candidate) => candidate.resulting_fen)
+      );
+      if (options.excludeRootFingerprints.has(rootFingerprint)) return [];
       const redPersonality = personalityFor(game, "RED");
       const bluePersonality = personalityFor(game, "BLUE");
       return [
         {
           rootId,
+          rootFingerprint,
           sourceGameId: game.gameId,
           sourceTurnNumber: decision.turnNumber,
           rootPlayer: decision.player,
@@ -271,6 +291,12 @@ export function selectCounterfactualRoots(
       left.sourceTurnNumber - right.sourceTurnNumber ||
       left.rootId.localeCompare(right.rootId)
   );
+  const seenFingerprints = new Set<string>();
+  const uniquePossible = possible.filter((root) => {
+    if (seenFingerprints.has(root.rootFingerprint)) return false;
+    seenFingerprints.add(root.rootFingerprint);
+    return true;
+  });
 
   // Interleave opening/early, middle, and late roots. A pure smallest-margin
   // sort over-samples late sparse positions, even though the search also
@@ -283,7 +309,9 @@ export function selectCounterfactualRoots(
   ];
   const phaseBuckets = phasePredicates.flatMap((inPhase) =>
     (["RED", "BLUE"] as const).map((player) =>
-      possible.filter((root) => inPhase(root) && root.rootPlayer === player)
+      uniquePossible.filter(
+        (root) => inPhase(root) && root.rootPlayer === player
+      )
     )
   );
   const selected: CounterfactualRoot[] = [];
