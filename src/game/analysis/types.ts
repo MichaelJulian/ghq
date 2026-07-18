@@ -151,6 +151,10 @@ export interface GhqSearchResult {
     hq_survival_probe_nodes?: number;
     /** Exact opponent-turn nodes used to certify an HQ survival fallback. */
     hq_survival_reply_nodes?: number;
+    /** The selected turn came from the exact immediate-HQ survival floor. */
+    hq_survival_override_used?: boolean;
+    /** The selected survival turn also completed a full opponent reply. */
+    hq_survival_reply_verified?: boolean;
     /** True when a shared reply-verified early search was reused. */
     persistent_cache_hit?: boolean;
     /** Runtime provenance for training and production diagnostics. */

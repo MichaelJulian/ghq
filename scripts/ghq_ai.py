@@ -4647,6 +4647,8 @@ def search(
     completed_depth = 0
     timed_out = False
     fallback_kind = "none"
+    hq_survival_override_used = False
+    hq_survival_reply_verified = False
     emergency_seed: Optional[SearchResult] = None
     emergency_seed_safe = False
     seed_moves: List[engine.Move] = []
@@ -4959,8 +4961,53 @@ def search(
             # the longer win. The result remains a labelled fallback because
             # it deliberately overrides the approximate horizon ordering.
             first_turn, resulting_board = survival
-            best = SearchResult(searcher.quick_score(resulting_board), first_turn)
-            completed_depth = 0
+            hq_survival_override_used = True
+            survival_purpose = searcher.deadline_safe_turn_purpose_breakdown(
+                board,
+                resulting_board,
+                first_turn,
+                board.turn,
+                retrospective=False,
+            )
+            survival_penalty = survival_purpose["total_penalty"]
+            survival_early_bonus = (
+                0.40
+                * searcher.early_plan_score(
+                    searcher.deadline_safe_action_purpose_labels(
+                        board,
+                        first_turn,
+                        board.turn,
+                        retrospective=False,
+                    )
+                )
+                if turn_number <= EARLY_GAME_LAST_TURN
+                else 0.0
+            )
+            survival_quality = survival_early_bonus - survival_penalty
+            previous_verification_mode = searcher.verification_mode
+            searcher.verification_mode = True
+            try:
+                reply = searcher.alphabeta(
+                    resulting_board, 1, -math.inf, math.inf
+                )
+                verified_score = reply.score + (
+                    survival_quality
+                    if board.turn == engine.RED
+                    else -survival_quality
+                )
+                best = SearchResult(
+                    verified_score, list(first_turn) + list(reply.pv)
+                )
+                completed_depth = 2
+                hq_survival_reply_verified = True
+            except SearchTimeout:
+                timed_out = True
+                best = SearchResult(
+                    searcher.quick_score(resulting_board), first_turn
+                )
+                completed_depth = 0
+            finally:
+                searcher.verification_mode = previous_verification_mode
             fallback_kind = "safe"
     if not first_turn and not board.is_game_over():
         fallback = purposeful_complete_turn_seed(
@@ -5185,6 +5232,8 @@ def search(
             "transposition_hits": searcher.transposition_hits,
             "hq_survival_probe_nodes": searcher.hq_survival_probe_nodes,
             "hq_survival_reply_nodes": searcher.hq_survival_reply_nodes,
+            "hq_survival_override_used": hq_survival_override_used,
+            "hq_survival_reply_verified": hq_survival_reply_verified,
         },
         "evaluation": {
             "before": root_eval,

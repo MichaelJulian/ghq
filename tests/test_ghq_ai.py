@@ -138,6 +138,26 @@ SELF_PLAY_FORCED_IMMEDIATE_HQ_LOSS = (
     76,
     "qI2f3/2F2i2/2I5/8/6I1/5I2/6I1/7Q - - b",
 )
+LIVE_MATE_DELAY_REPLY_CASES = (
+    (
+        99,
+        "balanced",
+        "2q5/8/8/8/i5i1/1i3iI1/2i1i3/7Q - - r",
+        ("skip",),
+    ),
+    (
+        87,
+        "tactical_gambler",
+        "q1i5/3i4/1I6/8/8/3iii1Q/8/8 - - r",
+        ("h3h2", "skip"),
+    ),
+    (
+        93,
+        "tactical_gambler",
+        "2i5/q5i1/2i2i2/Q2i4/3i4/2f5/2r↙5/2f5 - - r",
+        ("skip",),
+    ),
+)
 
 
 class EvaluationTests(unittest.TestCase):
@@ -1606,6 +1626,31 @@ class SearchTests(unittest.TestCase):
         )
         self.assertEqual(result["search"]["fallback_used"], "safe")
         self.assertGreater(result["search"]["hq_survival_reply_nodes"], 0)
+
+    def test_live_mate_delay_fallbacks_complete_an_opponent_reply(self):
+        for turn_number, personality, fen, expected_moves in LIVE_MATE_DELAY_REPLY_CASES:
+            with self.subTest(turn_number=turn_number):
+                result = ghq_ai.search(
+                    engine.BaseBoard(fen),
+                    personality,
+                    time_ms=2_000,
+                    max_depth=2,
+                    beam_width=6,
+                    turn_number=turn_number,
+                )
+                self.assertEqual(
+                    tuple(result["best_turn"]["all_moves"]), expected_moves
+                )
+                self.assertEqual(
+                    result["search"]["completed_depth_in_turns"], 2
+                )
+                self.assertEqual(result["search"]["fallback_used"], "safe")
+                self.assertTrue(
+                    result["search"]["hq_survival_override_used"]
+                )
+                self.assertTrue(
+                    result["search"]["hq_survival_reply_verified"]
+                )
 
     def test_newly_reclassified_smoke_escapes_survive_every_immediate_reply(self):
         cases = (

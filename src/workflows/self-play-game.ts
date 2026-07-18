@@ -85,6 +85,8 @@ export interface DurableSelfPlayDecision {
     transpositionHits: number;
     hqSurvivalProbeNodes?: number;
     hqSurvivalReplyNodes?: number;
+    hqSurvivalOverrideUsed?: boolean;
+    hqSurvivalReplyVerified?: boolean;
   };
   persistentCacheHit?: boolean;
   timedOut: boolean;
@@ -263,6 +265,10 @@ async function playDurableTurn(
       transpositionHits: analysis.search.search.transposition_hits,
       hqSurvivalProbeNodes: analysis.search.search.hq_survival_probe_nodes ?? 0,
       hqSurvivalReplyNodes: analysis.search.search.hq_survival_reply_nodes ?? 0,
+      hqSurvivalOverrideUsed:
+        analysis.search.search.hq_survival_override_used === true,
+      hqSurvivalReplyVerified:
+        analysis.search.search.hq_survival_reply_verified === true,
     },
     persistentCacheHit: analysis.search.search.persistent_cache_hit === true,
     timedOut: analysis.search.search.timed_out,
