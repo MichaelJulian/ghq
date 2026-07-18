@@ -3808,9 +3808,12 @@ def purposeful_complete_turn_seed(
         turn_number=turn_number,
         max_actions=max_actions,
     )
-    _, starting_forced_loss, _ = fallback_rules.tactical_risk(
-        board, original_turn
-    )
+    try:
+        _, starting_forced_loss, _ = fallback_rules.tactical_risk(
+            board, original_turn
+        )
+    except SearchTimeout:
+        starting_forced_loss = 0.0
     started_under_hq_threat = (
         starting_forced_loss >= PIECE_VALUES[engine.HQ]
     )
@@ -3856,7 +3859,7 @@ def purposeful_complete_turn_seed(
             child = working.copy()
             child.push(move)
             candidate_moves = moves + [move]
-            candidate_purposes = fallback_rules.action_purpose_labels(
+            candidate_purposes = fallback_rules.deadline_safe_action_purpose_labels(
                 board,
                 candidate_moves,
                 original_turn,
@@ -3937,9 +3940,12 @@ def purposeful_complete_turn_seed(
                 # of all non-terminal positional preferences.
                 utility += 0.90 * MATE_SCORE
             if started_under_hq_threat:
-                _, candidate_forced_loss, _ = fallback_rules.tactical_risk(
-                    child, original_turn
-                )
+                try:
+                    _, candidate_forced_loss, _ = fallback_rules.tactical_risk(
+                        child, original_turn
+                    )
+                except SearchTimeout:
+                    candidate_forced_loss = PIECE_VALUES[engine.HQ]
                 if candidate_forced_loss < PIECE_VALUES[engine.HQ]:
                     # Once the sequence has answered the check, every later
                     # action must preserve the answer. This prevents a greedy
@@ -3992,7 +3998,7 @@ def purposeful_complete_turn_seed(
                 child.push(move)
                 red_score = quick_evaluation(child, turn_number)
                 utility = red_score if original_turn == engine.RED else -red_score
-                candidate_purposes = fallback_rules.action_purpose_labels(
+                candidate_purposes = fallback_rules.deadline_safe_action_purpose_labels(
                     board,
                     moves + [move],
                     original_turn,
@@ -4044,7 +4050,7 @@ def purposeful_complete_turn_seed(
         and not working.is_game_over()
         and working.turn != original_turn
     ):
-        action_purposes = fallback_rules.action_purpose_labels(
+        action_purposes = fallback_rules.deadline_safe_action_purpose_labels(
             board, moves, original_turn, retrospective=False
         )
         seed_candidate = TurnCandidate(
@@ -4054,9 +4060,12 @@ def purposeful_complete_turn_seed(
             static_score=quick_evaluation(working, turn_number),
             action_purposes=action_purposes,
         )
-        trimmed = fallback_rules.trim_filler_action(
-            board, seed_candidate, original_turn
-        )
+        try:
+            trimmed = fallback_rules.trim_filler_action(
+                board, seed_candidate, original_turn
+            )
+        except SearchTimeout:
+            trimmed = None
         if trimmed is not None:
             moves = list(trimmed.moves)
             working = trimmed.board

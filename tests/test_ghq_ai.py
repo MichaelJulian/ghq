@@ -464,6 +464,24 @@ class SearchTests(unittest.TestCase):
         self.assertTrue(result["best_turn"]["actions"])
         self.assertTrue(result["search"]["timed_out"])
 
+    def test_emergency_seed_tactical_timeout_still_finishes_a_legal_turn(self):
+        board = engine.BaseBoard()
+        with patch.object(
+            ghq_ai.Searcher,
+            "tactical_risk",
+            side_effect=ghq_ai.SearchTimeout,
+        ):
+            seed = ghq_ai.purposeful_complete_turn_seed(
+                board, "balanced", turn_number=8, max_actions=3
+            )
+        moves, resulting = ghq_ai.first_turn_from_pv(board, seed.pv)
+
+        self.assertEqual(
+            sum(move.name not in ("AutoCapture", "Skip") for move in moves),
+            3,
+        )
+        self.assertNotEqual(resulting.turn, board.turn)
+
     def test_data_backed_opening_book_plays_both_sides_first_two_turns(self):
         board = engine.BaseBoard()
         for turn_number in range(1, 5):
