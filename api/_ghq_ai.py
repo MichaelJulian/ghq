@@ -5948,6 +5948,27 @@ def search(
         not hq_survival_override_used
         and not selected_is_tactically_safe
     ):
+        verified_seed_move_key = tuple(move.uci() for move in seed_moves)
+        verified_seed_is_known_safe = emergency_seed_safe or any(
+            candidate.tactically_safe
+            and tuple(move.uci() for move in candidate.moves)
+            == verified_seed_move_key
+            for candidate in known_root_candidates
+        )
+        # The reply-first floor may already have proved the emergency seed
+        # against one complete opponent turn while either the bounded seed
+        # probe or ordinary root generation proved its objective safety.
+        # Prefer that exact doubly-proven line over a merely safety-screened
+        # replacement. Otherwise a late tactical guard can throw away depth
+        # two, time out in the fresh verifier, and report a depth-zero fallback.
+        if verified_seed is not None and verified_seed_is_known_safe:
+            first_turn = list(seed_moves)
+            resulting_board = seed_board
+            best = verified_seed
+            completed_depth = 2
+            fallback_kind = "safe"
+            tactical_return_guard_used = True
+
         replacement_options: List[TurnCandidate] = []
         seen_replacements: set[Tuple[str, ...]] = set()
 
@@ -5968,20 +5989,21 @@ def search(
             seen_replacements.add(move_key)
             replacement_options.append(candidate)
 
-        for _, candidate in searcher.root_ranked_turns:
-            consider_replacement(candidate)
-        consider_replacement(searcher.root_fallback)
-        for candidate in searcher.turn_cache.get(searcher.root_key or "", []):
-            consider_replacement(candidate)
+        if not tactical_return_guard_used:
+            for _, candidate in searcher.root_ranked_turns:
+                consider_replacement(candidate)
+            consider_replacement(searcher.root_fallback)
+            for candidate in searcher.turn_cache.get(searcher.root_key or "", []):
+                consider_replacement(candidate)
 
-        for replacement in replacement_options[:8]:
-            first_turn = list(replacement.moves)
-            resulting_board = replacement.board
-            best = SearchResult(replacement.static_score, list(first_turn))
-            completed_depth = 0
-            fallback_kind = "safe"
-            tactical_return_guard_used = True
-            break
+            for replacement in replacement_options[:8]:
+                first_turn = list(replacement.moves)
+                resulting_board = replacement.board
+                best = SearchResult(replacement.static_score, list(first_turn))
+                completed_depth = 0
+                fallback_kind = "safe"
+                tactical_return_guard_used = True
+                break
 
         if not tactical_return_guard_used:
             recovery = material_safe_recovery_turn(

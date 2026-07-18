@@ -74,10 +74,14 @@ async function main() {
         timedOut: replay.search.search.timed_out,
         elapsedMs: replay.search.search.elapsed_ms,
         nodes: replay.search.search.nodes,
+        backend: replay.search.search.backend,
+        valueModelBackend: replay.search.search.value_model_backend,
         tacticalReturnGuardUsed:
           replay.search.search.tactical_return_guard_used ?? false,
         safeFallbackReplyVerified:
           replay.search.search.safe_fallback_reply_verified ?? false,
+        safeFallbackReplyNodes:
+          replay.search.search.safe_fallback_reply_nodes ?? 0,
         seedReplyVerified: replay.search.search.seed_reply_verified ?? false,
         hqSurvivalReplyVerified:
           replay.search.search.hq_survival_reply_verified ?? false,

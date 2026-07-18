@@ -1847,6 +1847,81 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(result["search"]["fallback_used"], "safe")
         self.assertTrue(result["search"]["seed_reply_verified"])
 
+    def test_tactical_guard_restores_reply_verified_safe_seed(self):
+        root = engine.BaseBoard()
+        seed = ghq_ai.purposeful_complete_turn_seed(
+            root,
+            "balanced",
+            turn_number=8,
+            max_actions=3,
+            time_ms=80,
+        )
+        seed_moves, seed_board = ghq_ai.first_turn_from_pv(root, seed.pv)
+        calls = []
+
+        def staged_alphabeta(searcher, board, depth, alpha, beta):
+            calls.append((board.turn, depth))
+            if len(calls) == 1:
+                # Complete the emergency seed's opponent reply.
+                return ghq_ai.SearchResult(0.0, [])
+            if len(calls) == 2:
+                # Model an approximate root result later rejected by the
+                # objective tactical return guard. The fast pre-search seed
+                # probe was inconclusive, but ordinary root generation has
+                # independently proved that same seed tactically safe.
+                unsafe_moves, unsafe_board = ghq_ai.deterministic_skip_turn(
+                    board
+                )
+                unsafe = ghq_ai.TurnCandidate(
+                    unsafe_moves,
+                    unsafe_board,
+                    0.0,
+                    tactically_safe=False,
+                )
+                safe_seed = ghq_ai.TurnCandidate(
+                    list(seed_moves),
+                    seed_board,
+                    0.0,
+                    tactically_safe=True,
+                )
+                searcher.root_ranked_turns = [
+                    (1.0, unsafe),
+                    (0.0, safe_seed),
+                ]
+                return ghq_ai.SearchResult(1.0, list(unsafe.moves))
+            # Expire the optional widening pass. A second verifier must not be
+            # needed because the safe seed reply was already completed.
+            raise ghq_ai.SearchTimeout
+
+        with patch.object(
+            ghq_ai,
+            "purposeful_complete_turn_seed",
+            return_value=ghq_ai.SearchResult(seed.score, list(seed.pv)),
+        ), patch.object(
+            ghq_ai,
+            "bounded_seed_safety",
+            return_value=None,
+        ), patch.object(ghq_ai.Searcher, "alphabeta", staged_alphabeta):
+            result = ghq_ai.search(
+                root,
+                "balanced",
+                time_ms=1_000,
+                max_depth=2,
+                beam_width=6,
+                turn_number=8,
+            )
+
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(result["search"]["tactical_return_guard_used"])
+        self.assertTrue(result["search"]["seed_reply_verified"])
+        self.assertEqual(result["search"]["completed_depth_in_turns"], 2)
+        self.assertEqual(result["search"]["fallback_used"], "safe")
+        self.assertFalse(result["search"]["safe_fallback_reply_verified"])
+        self.assertEqual(
+            result["best_turn"]["all_moves"],
+            [move.uci() for move in seed_moves],
+        )
+
     def test_timeout_keeps_verified_root_development_instead_of_seed_backfill(self):
         result = ghq_ai.search(
             engine.BaseBoard(TURN_FIVE_DEVELOPMENT_FEN),
