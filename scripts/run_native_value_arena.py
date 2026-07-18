@@ -291,6 +291,14 @@ def summarize(args: argparse.Namespace, games: list[GameResult]) -> Dict[str, An
         quality_reasons.append("no-searched-decisions")
     if verified_rate < 0.8:
         quality_reasons.append("fewer-than-80-percent-verified-decisions")
+    rendered_games = []
+    for game in games:
+        record = asdict(game)
+        move_turns = record.pop("move_turns")
+        record["moveDigestSha256"] = hashlib.sha256(
+            json.dumps(move_turns, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        rendered_games.append(record)
     return {
         "format": "ghq-native-value-screen-v1",
         "screeningOnly": True,
@@ -340,7 +348,7 @@ def summarize(args: argparse.Namespace, games: list[GameResult]) -> Dict[str, An
             "passed": not quality_reasons,
             "reasons": quality_reasons,
         },
-        "games": [asdict(game) for game in games],
+        "games": rendered_games,
     }
 
 
