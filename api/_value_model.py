@@ -81,6 +81,10 @@ def _chebyshev(left: Tuple[int, int], right: Tuple[int, int]) -> int:
     return max(abs(left[0] - right[0]), abs(left[1] - right[1]))
 
 
+def _manhattan(left: Tuple[int, int], right: Tuple[int, int]) -> int:
+    return abs(left[0] - right[0]) + abs(left[1] - right[1])
+
+
 def _neighbors(at: Tuple[int, int], diagonal: bool) -> Iterable[Tuple[int, int]]:
     for row_delta in (-1, 0, 1):
         for column_delta in (-1, 0, 1):
@@ -292,6 +296,78 @@ def _structure_v2(
     return result
 
 
+def _tactical_v3(
+    board: engine.BaseBoard, color: bool, friendly: Sequence[Dict[str, Any]]
+) -> Dict[str, float]:
+    result = {
+        "hq_enemy_infantry_distance_min": 0.0,
+        "hq_enemy_armored_infantry_distance_min": 0.0,
+        "hq_enemy_airborne_infantry_distance_min": 0.0,
+        "hq_enemy_infantry_within_two": 0.0,
+        "hq_enemy_infantry_within_three": 0.0,
+        "hq_friendly_infantry_within_two": 0.0,
+        "hq_friendly_infantry_within_three": 0.0,
+        "hq_attack_pressure": 0.0,
+        "hq_defense_density": 0.0,
+    }
+    hq = next((piece for piece in friendly if piece["type"] == engine.HQ), None)
+    if hq is None:
+        return result
+    enemy_infantry = [
+        piece for piece in _pieces(board, not color) if piece["type"] in INFANTRY_TYPES
+    ]
+    friendly_infantry = [
+        piece for piece in friendly if piece["type"] in INFANTRY_TYPES
+    ]
+
+    def distance(piece: Dict[str, Any]) -> int:
+        return _manhattan(hq["at"], piece["at"])
+
+    def minimum_distance(piece_type: int) -> float:
+        distances = [
+            distance(piece)
+            for piece in enemy_infantry
+            if piece["type"] == piece_type
+        ]
+        return float(min(distances) if distances else 15)
+
+    result["hq_enemy_infantry_distance_min"] = float(
+        min((distance(piece) for piece in enemy_infantry), default=15)
+    )
+    result["hq_enemy_armored_infantry_distance_min"] = minimum_distance(
+        engine.ARMORED_INFANTRY
+    )
+    result["hq_enemy_airborne_infantry_distance_min"] = minimum_distance(
+        engine.AIRBORNE_INFANTRY
+    )
+    result["hq_enemy_infantry_within_two"] = float(
+        sum(distance(piece) <= 2 for piece in enemy_infantry)
+    )
+    result["hq_enemy_infantry_within_three"] = float(
+        sum(distance(piece) <= 3 for piece in enemy_infantry)
+    )
+    result["hq_friendly_infantry_within_two"] = float(
+        sum(distance(piece) <= 2 for piece in friendly_infantry)
+    )
+    result["hq_friendly_infantry_within_three"] = float(
+        sum(distance(piece) <= 3 for piece in friendly_infantry)
+    )
+    for attacker in enemy_infantry:
+        proximity = max(0, 4 - distance(attacker))
+        weight = (
+            1.5
+            if attacker["type"] == engine.ARMORED_INFANTRY
+            else 1.25
+            if attacker["type"] == engine.AIRBORNE_INFANTRY
+            else 1.0
+        )
+        result["hq_attack_pressure"] += proximity * weight
+    result["hq_defense_density"] = float(
+        sum(max(0, 4 - distance(defender)) for defender in friendly_infantry)
+    )
+    return result
+
+
 def _side_features(board: engine.BaseBoard, color: bool) -> Dict[str, float]:
     opponent = not color
     friendly = _pieces(board, color)
@@ -492,6 +568,7 @@ def _side_features(board: engine.BaseBoard, color: bool) -> Dict[str, float]:
                     result["hq_escape_squares"] += 1
     result["pseudo_mobility"] = _pseudo_mobility(board, friendly)
     result.update(_structure_v2(board, color, friendly))
+    result.update(_tactical_v3(board, color, friendly))
     return result
 
 
@@ -596,4 +673,3 @@ def red_value_function(version: str):
         return predict_zero_sum(fen, turn_number, engine.RED, version)
 
     return evaluate
-

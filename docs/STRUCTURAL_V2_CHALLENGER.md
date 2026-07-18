@@ -20,10 +20,10 @@ TypeScript/Python prediction tests must pass whenever this checkpoint changes.
 
 ## Offline evaluation
 
-| Split | Incumbent log loss | Challenger log loss | Difference |
-| --- | ---: | ---: | ---: |
-| Human validation | 0.458895 | 0.450391 | -0.008504 |
-| Human test | 0.423262 | 0.417520 | -0.005742 |
+| Split            | Incumbent log loss | Challenger log loss | Difference |
+| ---------------- | -----------------: | ------------------: | ---------: |
+| Human validation |           0.458895 |            0.450391 |  -0.008504 |
+| Human test       |           0.423262 |            0.417520 |  -0.005742 |
 
 The paired test bootstrap interval for challenger-minus-incumbent log loss is
 `[-0.025933, 0.014607]`. The point estimate is favorable, but the interval
@@ -35,11 +35,11 @@ All screens used the production Python engine, paired color swaps, depth 2,
 beam 6, and a two-second search budget. All quality gates passed.
 
 | Games | Max turns | Challenger points | Pair W-T-L | Verified decisions |
-| ---: | ---: | ---: | ---: | ---: |
-| 4 | 30 | 2.0 / 4 | 0-2-0 | 96.67% |
-| 4 | 80 | 2.5 / 4 | 1-1-0 | 98.75% |
-| 8 | 80 | 4.5 / 8 | 1-3-0 | 97.78% |
-| 8 | 100 | 5.0 / 8 | 2-2-0 | 96.15% |
+| ----: | --------: | ----------------: | ---------: | -----------------: |
+|     4 |        30 |           2.0 / 4 |      0-2-0 |             96.67% |
+|     4 |        80 |           2.5 / 4 |      1-1-0 |             98.75% |
+|     8 |        80 |           4.5 / 8 |      1-3-0 |             97.78% |
+|     8 |       100 |           5.0 / 8 |      2-2-0 |             96.15% |
 
 The three outcome-length screens total 12.0/20 points with a 4-6-0 paired
 record. Including the 30-turn policy-divergence pilot gives 14.0/24 points and
@@ -104,6 +104,27 @@ coverage does not explain the result.
 This correction is rejected without a longer screen. Symmetry removed the
 redundant-feature pathology but did not close the objective mismatch between
 retrospective human-game outcome prediction and prospective move selection.
+
+## Rejected tactical v3 retrain
+
+An append-only v3 schema added 27 own/opponent/difference features describing
+enemy infantry distance to HQ, nearby HQ attackers and defenders, and
+speed-weighted HQ pressure. TypeScript and native Python extraction agree on
+the schema, and both runtimes retain exact v1/v2 compatibility.
+
+The resulting tree model failed the offline gate before production-engine
+play. Human validation log loss was `0.483972` versus `0.458895` for the
+incumbent, and test log loss was `0.452660` versus `0.423262`. The paired test
+bootstrap point estimate for candidate-minus-incumbent was `+0.029398`, with a
+95% interval of `[-0.011948, 0.073990]`. The candidate also failed every
+human-retention validation constraint.
+
+Raw airborne-infantry distance dominated the new tactical features, indicating
+that sparse retrospective games let the model use HQ-approach geometry as a
+game-state proxy instead of learning reliable forced-loss semantics. The
+checkpoint is rejected without an arena. The schema remains available for a
+future model trained on exact-audited tactical hard negatives rather than on
+eventual game outcomes alone.
 
 ## Promotion gate
 

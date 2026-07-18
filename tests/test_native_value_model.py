@@ -107,6 +107,35 @@ class NativeValueModelTest(unittest.TestCase):
         }
         self.assertTrue(appended_names.issubset(vertical))
 
+    def test_v3_hq_approach_features_match_typescript_fixture(self) -> None:
+        board = engine.BaseBoard(None)
+        board.clear_board()
+        for square, piece_type, color in (
+            ("h1", engine.HQ, engine.RED),
+            ("a8", engine.HQ, engine.BLUE),
+            ("h3", engine.INFANTRY, engine.BLUE),
+            ("f1", engine.ARMORED_INFANTRY, engine.BLUE),
+            ("e4", engine.AIRBORNE_INFANTRY, engine.BLUE),
+            ("g2", engine.INFANTRY, engine.RED),
+        ):
+            board.set_piece_at(
+                engine.parse_square(square), engine.Piece(piece_type, color)
+            )
+        features = value_model._side_features(board, engine.RED)
+        expected = {
+            "hq_enemy_infantry_distance_min": 2.0,
+            "hq_enemy_armored_infantry_distance_min": 2.0,
+            "hq_enemy_airborne_infantry_distance_min": 6.0,
+            "hq_enemy_infantry_within_two": 2.0,
+            "hq_enemy_infantry_within_three": 2.0,
+            "hq_friendly_infantry_within_two": 1.0,
+            "hq_friendly_infantry_within_three": 1.0,
+            "hq_attack_pressure": 5.0,
+            "hq_defense_density": 2.0,
+        }
+        for name, expected_value in expected.items():
+            self.assertEqual(features[name], expected_value, name)
+
 
 if __name__ == "__main__":
     unittest.main()

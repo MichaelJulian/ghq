@@ -104,6 +104,24 @@ const STRUCTURE_V2_SIDE_FEATURE_NAMES = [
   "material_rank_span",
 ] as const;
 
+/**
+ * Tactical HQ-approach evidence for the next append-only checkpoint. The v1
+ * model only knows about bombardment, adjacent infantry, and escape squares;
+ * it can therefore remain highly confident until an attacker is already at
+ * the HQ. These features expose the approach geometry before that last ply.
+ */
+const TACTICAL_V3_SIDE_FEATURE_NAMES = [
+  "hq_enemy_infantry_distance_min",
+  "hq_enemy_armored_infantry_distance_min",
+  "hq_enemy_airborne_infantry_distance_min",
+  "hq_enemy_infantry_within_two",
+  "hq_enemy_infantry_within_three",
+  "hq_friendly_infantry_within_two",
+  "hq_friendly_infantry_within_three",
+  "hq_attack_pressure",
+  "hq_defense_density",
+] as const;
+
 const DIFFERENCE_FEATURES = [
   "material_board",
   "material_total",
@@ -146,6 +164,15 @@ export const VALUE_FEATURE_NAMES_V2 = [
   ...STRUCTURE_V2_SIDE_FEATURE_NAMES.map((name) => `diff_${name}`),
 ] as const;
 
+export const VALUE_FEATURE_NAMES_V3 = [
+  // Preserve both earlier schemas exactly. Native and TypeScript inference
+  // select the extractor from the artifact's declared append-only length.
+  ...VALUE_FEATURE_NAMES_V2,
+  ...TACTICAL_V3_SIDE_FEATURE_NAMES.map((name) => `own_${name}`),
+  ...TACTICAL_V3_SIDE_FEATURE_NAMES.map((name) => `opp_${name}`),
+  ...TACTICAL_V3_SIDE_FEATURE_NAMES.map((name) => `diff_${name}`),
+] as const;
+
 export type ValueFeatureName = (typeof VALUE_FEATURE_NAMES)[number];
 export type ValueFeatureRecord = Record<ValueFeatureName, number>;
 
@@ -167,6 +194,9 @@ type StructureV2SideFeatureName =
   (typeof STRUCTURE_V2_SIDE_FEATURE_NAMES)[number];
 type SideFeatures = Record<SideFeatureName, number>;
 type StructureV2SideFeatures = Record<StructureV2SideFeatureName, number>;
+type TacticalV3SideFeatureName =
+  (typeof TACTICAL_V3_SIDE_FEATURE_NAMES)[number];
+type TacticalV3SideFeatures = Record<TacticalV3SideFeatureName, number>;
 
 function otherPlayer(player: Player): Player {
   return player === "RED" ? "BLUE" : "RED";
@@ -178,6 +208,10 @@ function homeRank(player: Player): number {
 
 function chebyshev(a: Coordinate, b: Coordinate): number {
   return Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]));
+}
+
+function manhattan(a: Coordinate, b: Coordinate): number {
+  return Math.abs(a[0] - b[0]) + Math.abs(a[1] - b[1]);
 }
 
 function inside(row: number, column: number): boolean {
@@ -227,7 +261,10 @@ function nearestSupportDistance(
   return distances.length === 0 ? 8 : Math.min(...distances);
 }
 
-function isHeavyCentered(heavy: PlacedPiece, artillery: PlacedPiece[]): boolean {
+function isHeavyCentered(
+  heavy: PlacedPiece,
+  artillery: PlacedPiece[]
+): boolean {
   const [row, column] = heavy.at;
   const sameRank = artillery.filter(
     (gun) => gun !== heavy && gun.at[0] === row
@@ -248,14 +285,21 @@ function pseudoMobility(board: Board, pieces: PlacedPiece[]): number {
   for (const { at, piece } of pieces) {
     if (piece.type === "HQ") continue;
     const speed = Units[piece.type].mobility;
-    for (let row = Math.max(0, at[0] - speed); row <= Math.min(7, at[0] + speed); row++) {
+    for (
+      let row = Math.max(0, at[0] - speed);
+      row <= Math.min(7, at[0] + speed);
+      row++
+    ) {
       for (
         let column = Math.max(0, at[1] - speed);
         column <= Math.min(7, at[1] + speed);
         column++
       ) {
         if (row === at[0] && column === at[1]) continue;
-        if (chebyshev(at, [row, column]) <= speed && board[row][column] === null) {
+        if (
+          chebyshev(at, [row, column]) <= speed &&
+          board[row][column] === null
+        ) {
           moves++;
         }
       }
@@ -444,6 +488,67 @@ function extractStructureV2SideFeatures(
   return result;
 }
 
+function extractTacticalV3SideFeatures(
+  position: ValuePosition,
+  player: Player
+): TacticalV3SideFeatures {
+  const friendly = piecesFor(position.board, player);
+  const enemy = piecesFor(position.board, otherPlayer(player));
+  const result = Object.fromEntries(
+    TACTICAL_V3_SIDE_FEATURE_NAMES.map((name) => [name, 0])
+  ) as TacticalV3SideFeatures;
+  const hq = friendly.find(({ piece }) => piece.type === "HQ");
+  if (!hq) return result;
+
+  const enemyInfantry = enemy.filter(({ piece }) =>
+    INFANTRY_TYPES.has(piece.type)
+  );
+  const friendlyInfantry = friendly.filter(({ piece }) =>
+    INFANTRY_TYPES.has(piece.type)
+  );
+  const distance = (candidate: PlacedPiece) => manhattan(hq.at, candidate.at);
+  const minimumDistance = (type: UnitType) => {
+    const distances = enemyInfantry
+      .filter(({ piece }) => piece.type === type)
+      .map(distance);
+    return distances.length ? Math.min(...distances) : 15;
+  };
+
+  result.hq_enemy_infantry_distance_min = enemyInfantry.length
+    ? Math.min(...enemyInfantry.map(distance))
+    : 15;
+  result.hq_enemy_armored_infantry_distance_min =
+    minimumDistance("ARMORED_INFANTRY");
+  result.hq_enemy_airborne_infantry_distance_min =
+    minimumDistance("AIRBORNE_INFANTRY");
+  result.hq_enemy_infantry_within_two = enemyInfantry.filter(
+    (candidate) => distance(candidate) <= 2
+  ).length;
+  result.hq_enemy_infantry_within_three = enemyInfantry.filter(
+    (candidate) => distance(candidate) <= 3
+  ).length;
+  result.hq_friendly_infantry_within_two = friendlyInfantry.filter(
+    (candidate) => distance(candidate) <= 2
+  ).length;
+  result.hq_friendly_infantry_within_three = friendlyInfantry.filter(
+    (candidate) => distance(candidate) <= 3
+  ).length;
+  for (const attacker of enemyInfantry) {
+    const proximity = Math.max(0, 4 - distance(attacker));
+    const weight =
+      attacker.piece.type === "ARMORED_INFANTRY"
+        ? 1.5
+        : attacker.piece.type === "AIRBORNE_INFANTRY"
+        ? 1.25
+        : 1;
+    result.hq_attack_pressure += proximity * weight;
+  }
+  for (const defender of friendlyInfantry) {
+    result.hq_defense_density += Math.max(0, 4 - distance(defender));
+  }
+  return result;
+}
+
 function extractSideFeatures(
   position: ValuePosition,
   player: Player
@@ -453,14 +558,17 @@ function extractSideFeatures(
   const friendly = piecesFor(board, player);
   const enemy = piecesFor(board, opponent);
   const reserve = reserveFor(position, player);
-  const artillery = friendly.filter(({ piece }) => ARTILLERY_TYPES.has(piece.type));
-  const infantry = friendly.filter(({ piece }) => INFANTRY_TYPES.has(piece.type));
+  const artillery = friendly.filter(({ piece }) =>
+    ARTILLERY_TYPES.has(piece.type)
+  );
+  const infantry = friendly.filter(({ piece }) =>
+    INFANTRY_TYPES.has(piece.type)
+  );
   const bombardment = bombardedSquares(board);
   const ownHomeRank = homeRank(player);
-  const counts = Object.fromEntries(PIECE_TYPES.map((type) => [type, 0])) as Record<
-    (typeof PIECE_TYPES)[number],
-    number
-  >;
+  const counts = Object.fromEntries(
+    PIECE_TYPES.map((type) => [type, 0])
+  ) as Record<(typeof PIECE_TYPES)[number], number>;
   friendly.forEach(
     ({ piece }) => counts[piece.type as (typeof PIECE_TYPES)[number]]++
   );
@@ -472,7 +580,8 @@ function extractSideFeatures(
     result[`board_${type.toLowerCase()}` as SideFeatureName] = counts[type];
   });
   RESERVE_TYPES.forEach((type) => {
-    result[`reserve_${type.toLowerCase()}` as SideFeatureName] = reserve[type] ?? 0;
+    result[`reserve_${type.toLowerCase()}` as SideFeatureName] =
+      reserve[type] ?? 0;
   });
 
   result.material_board = friendly.reduce(
@@ -492,7 +601,9 @@ function extractSideFeatures(
   );
   result.infantry_board = infantry.length;
   result.artillery_board = artillery.length;
-  result.home_rank_occupancy = friendly.filter(({ at }) => at[0] === ownHomeRank).length;
+  result.home_rank_occupancy = friendly.filter(
+    ({ at }) => at[0] === ownHomeRank
+  ).length;
   const structure = structureAndOptionMetrics(board, friendly, ownHomeRank);
   result.relocation_options = structure.relocationOptions;
   result.mean_relocation_options = structure.meanRelocationOptions;
@@ -552,7 +663,8 @@ function extractSideFeatures(
     }
   }
   result.heavy_artillery_centered = artillery.some(
-    (gun) => gun.piece.type === "HEAVY_ARTILLERY" && isHeavyCentered(gun, artillery)
+    (gun) =>
+      gun.piece.type === "HEAVY_ARTILLERY" && isHeavyCentered(gun, artillery)
   )
     ? 1
     : 0;
@@ -606,7 +718,9 @@ function extractSideFeatures(
     paratroopers.some(({ at }) => at[0] === ownHomeRank)
       ? 1
       : 0;
-  const deployedParatroopers = paratroopers.filter(({ at }) => at[0] !== ownHomeRank);
+  const deployedParatroopers = paratroopers.filter(
+    ({ at }) => at[0] !== ownHomeRank
+  );
   result.paratrooper_deployed = deployedParatroopers.length;
   for (const para of deployedParatroopers) {
     result.paratrooper_distance_home += Math.abs(para.at[0] - ownHomeRank);
@@ -642,10 +756,14 @@ function extractSideFeatures(
         result.hq_adjacent_enemy_infantry++;
       }
       if (piece === null && !bombardment[at.join(",")]?.[opponent]) {
-        const enemyInfantryAdjacent = neighbors(at, false).some(([row, column]) => {
-          const neighbor = board[row][column];
-          return neighbor?.player === opponent && INFANTRY_TYPES.has(neighbor.type);
-        });
+        const enemyInfantryAdjacent = neighbors(at, false).some(
+          ([row, column]) => {
+            const neighbor = board[row][column];
+            return (
+              neighbor?.player === opponent && INFANTRY_TYPES.has(neighbor.type)
+            );
+          }
+        );
         if (!enemyInfantryAdjacent) result.hq_escape_squares++;
       }
     }
@@ -687,6 +805,28 @@ export function extractValueFeaturesV2(
     values.some((value) => !Number.isFinite(value))
   ) {
     throw new Error("Invalid GHQ v2 value feature vector");
+  }
+  return values;
+}
+
+export function extractValueFeaturesV3(
+  position: ValuePosition,
+  perspective: Player
+): number[] {
+  const opponent = otherPlayer(perspective);
+  const own = extractTacticalV3SideFeatures(position, perspective);
+  const opp = extractTacticalV3SideFeatures(position, opponent);
+  const values = [
+    ...extractValueFeaturesV2(position, perspective),
+    ...TACTICAL_V3_SIDE_FEATURE_NAMES.map((name) => own[name]),
+    ...TACTICAL_V3_SIDE_FEATURE_NAMES.map((name) => opp[name]),
+    ...TACTICAL_V3_SIDE_FEATURE_NAMES.map((name) => own[name] - opp[name]),
+  ];
+  if (
+    values.length !== VALUE_FEATURE_NAMES_V3.length ||
+    values.some((value) => !Number.isFinite(value))
+  ) {
+    throw new Error("Invalid GHQ v3 value feature vector");
   }
   return values;
 }

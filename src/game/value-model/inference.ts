@@ -2,8 +2,10 @@ import type { Player } from "@/game/engine";
 import {
   extractValueFeatures,
   extractValueFeaturesV2,
+  extractValueFeaturesV3,
   VALUE_FEATURE_NAMES,
   VALUE_FEATURE_NAMES_V2,
+  VALUE_FEATURE_NAMES_V3,
   ValuePosition,
 } from "@/game/value-model/features";
 import generatedModel from "@/game/value-model/model.generated.json";
@@ -107,7 +109,11 @@ export function assertValueModelCompatible(
     artifact.feature_names.every(
       (feature, index) => feature === featureNames[index]
     );
-  if (!matches(VALUE_FEATURE_NAMES) && !matches(VALUE_FEATURE_NAMES_V2)) {
+  if (
+    !matches(VALUE_FEATURE_NAMES) &&
+    !matches(VALUE_FEATURE_NAMES_V2) &&
+    !matches(VALUE_FEATURE_NAMES_V3)
+  ) {
     throw new Error(
       "GHQ value model feature schema does not match the runtime"
     );
@@ -137,9 +143,13 @@ function featuresForArtifact(
   artifact: ValueModelArtifact
 ): number[] {
   assertValueModelCompatible(artifact);
-  return artifact.feature_names.length === VALUE_FEATURE_NAMES_V2.length
-    ? extractValueFeaturesV2(position, perspective)
-    : extractValueFeatures(position, perspective);
+  if (artifact.feature_names.length === VALUE_FEATURE_NAMES_V3.length) {
+    return extractValueFeaturesV3(position, perspective);
+  }
+  if (artifact.feature_names.length === VALUE_FEATURE_NAMES_V2.length) {
+    return extractValueFeaturesV2(position, perspective);
+  }
+  return extractValueFeatures(position, perspective);
 }
 
 export function predictFromFeatures(

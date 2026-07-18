@@ -2,8 +2,10 @@ import { endgame } from "@/game/variants";
 import {
   extractValueFeatures,
   extractValueFeaturesV2,
+  extractValueFeaturesV3,
   VALUE_FEATURE_NAMES,
   VALUE_FEATURE_NAMES_V2,
+  VALUE_FEATURE_NAMES_V3,
 } from "./features";
 import {
   assertValueModelCompatible,
@@ -113,6 +115,25 @@ describe("gradient-boosted value model", () => {
     expect(() => assertValueModelCompatible(artifact)).not.toThrow();
     expect(
       predictFromFeatures(extractValueFeaturesV2(position, "RED"), artifact)
+    ).toBeCloseTo(0.5, 12);
+  });
+
+  it("accepts the append-only tactical v3 schema without changing v2 indices", () => {
+    expect(
+      VALUE_FEATURE_NAMES_V3.slice(0, VALUE_FEATURE_NAMES_V2.length)
+    ).toEqual([...VALUE_FEATURE_NAMES_V2]);
+    const artifact: ValueModelArtifact = {
+      format: "ghq-gradient-boosted-value-v1",
+      feature_names: [...VALUE_FEATURE_NAMES_V3],
+      base_raw_score: 0,
+      learning_rate: 0.1,
+      calibration: { kind: "platt", scale: 1, intercept: 0 },
+      trees: [],
+      metadata: {},
+    };
+    expect(() => assertValueModelCompatible(artifact)).not.toThrow();
+    expect(
+      predictFromFeatures(extractValueFeaturesV3(position, "RED"), artifact)
     ).toBeCloseTo(0.5, 12);
   });
 

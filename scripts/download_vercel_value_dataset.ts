@@ -11,8 +11,10 @@ import { get, list, type ListBlobResultBlob } from "@vercel/blob";
 import { FENtoBoardState } from "../src/game/notation";
 import {
   extractValueFeaturesV2,
+  extractValueFeaturesV3,
   VALUE_FEATURE_NAMES,
   VALUE_FEATURE_NAMES_V2,
+  VALUE_FEATURE_NAMES_V3,
 } from "../src/game/value-model/features";
 
 interface DurableTrainingSample {
@@ -136,11 +138,15 @@ async function main() {
   const outputPath = argument("--output");
   const hqAuditPath = argument("--hq-audit-report");
   const featureSchema = optionalArgument("--feature-schema") ?? "v1";
-  if (featureSchema !== "v1" && featureSchema !== "v2") {
-    throw new Error("--feature-schema must be v1 or v2");
+  if (!["v1", "v2", "v3"].includes(featureSchema)) {
+    throw new Error("--feature-schema must be v1, v2, or v3");
   }
   const featureNames =
-    featureSchema === "v2" ? VALUE_FEATURE_NAMES_V2 : VALUE_FEATURE_NAMES;
+    featureSchema === "v3"
+      ? VALUE_FEATURE_NAMES_V3
+      : featureSchema === "v2"
+      ? VALUE_FEATURE_NAMES_V2
+      : VALUE_FEATURE_NAMES;
   const hqAuditText = await readFile(hqAuditPath, "utf8");
   const hqAudit = JSON.parse(hqAuditText) as ExactHqAuditReport;
   if (hqAudit.format !== "ghq-exact-hq-audit-v1") {
@@ -267,8 +273,10 @@ async function main() {
         ) {
           throw new Error(`Feature mismatch in ${sample.gameId}`);
         }
-        if (featureSchema === "v2" && !sample.fen) {
-          throw new Error(`Missing FEN for v2 features in ${sample.gameId}`);
+        if (featureSchema !== "v1" && !sample.fen) {
+          throw new Error(
+            `Missing FEN for ${featureSchema} features in ${sample.gameId}`
+          );
         }
         const pairId = pairedGameId(sample.generationId, sample.gameId);
         const record = recordsByGame.get(sample.gameId);
@@ -337,9 +345,13 @@ async function main() {
           audit.losingWinProbability > 0.5
       );
       let features = sample.features;
-      if (featureSchema === "v2") {
+      if (featureSchema !== "v1") {
         const state = FENtoBoardState(sample.fen!);
-        features = extractValueFeaturesV2(
+        const extractor =
+          featureSchema === "v3"
+            ? extractValueFeaturesV3
+            : extractValueFeaturesV2;
+        features = extractor(
           {
             board: state.board,
             redReserve: state.redReserve,

@@ -10,8 +10,10 @@ import type { Board, Player, ReserveFleet } from "../src/game/engine";
 import {
   extractValueFeatures,
   extractValueFeaturesV2,
+  extractValueFeaturesV3,
   VALUE_FEATURE_NAMES,
   VALUE_FEATURE_NAMES_V2,
+  VALUE_FEATURE_NAMES_V3,
 } from "../src/game/value-model/features";
 
 type RawPosition = {
@@ -44,13 +46,21 @@ async function main() {
   const positionsPath = argument("--positions");
   const outputPath = argument("--output");
   const featureSchema = optionalArgument("--feature-schema") ?? "v1";
-  if (featureSchema !== "v1" && featureSchema !== "v2") {
-    throw new Error("--feature-schema must be v1 or v2");
+  if (!["v1", "v2", "v3"].includes(featureSchema)) {
+    throw new Error("--feature-schema must be v1, v2, or v3");
   }
   const featureNames =
-    featureSchema === "v2" ? VALUE_FEATURE_NAMES_V2 : VALUE_FEATURE_NAMES;
+    featureSchema === "v3"
+      ? VALUE_FEATURE_NAMES_V3
+      : featureSchema === "v2"
+      ? VALUE_FEATURE_NAMES_V2
+      : VALUE_FEATURE_NAMES;
   const extractFeatures =
-    featureSchema === "v2" ? extractValueFeaturesV2 : extractValueFeatures;
+    featureSchema === "v3"
+      ? extractValueFeaturesV3
+      : featureSchema === "v2"
+      ? extractValueFeaturesV2
+      : extractValueFeatures;
   await mkdir(dirname(outputPath), { recursive: true });
   const output = createWriteStream(outputPath, { encoding: "utf8" });
   output.write(
