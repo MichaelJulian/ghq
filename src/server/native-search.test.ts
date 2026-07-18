@@ -1,13 +1,14 @@
 /** @jest-environment node */
 
-import { afterEach, describe, expect, it } from "@jest/globals";
-import { nativeSearchUrl } from "./native-search";
+import { afterEach, describe, expect, it, jest } from "@jest/globals";
+import { nativeSearchUrl, searchNatively } from "./native-search";
 
 const ORIGINAL = {
   configured: process.env.GHQ_NATIVE_SEARCH_URL,
   environment: process.env.VERCEL_ENV,
   deployment: process.env.VERCEL_URL,
   production: process.env.VERCEL_PROJECT_PRODUCTION_URL,
+  commit: process.env.VERCEL_GIT_COMMIT_SHA,
 };
 
 afterEach(() => {
@@ -20,6 +21,51 @@ afterEach(() => {
   if (ORIGINAL.production === undefined)
     delete process.env.VERCEL_PROJECT_PRODUCTION_URL;
   else process.env.VERCEL_PROJECT_PRODUCTION_URL = ORIGINAL.production;
+  if (ORIGINAL.commit === undefined) delete process.env.VERCEL_GIT_COMMIT_SHA;
+  else process.env.VERCEL_GIT_COMMIT_SHA = ORIGINAL.commit;
+  jest.restoreAllMocks();
+});
+
+describe("native search source attestation", () => {
+  it("rejects a native function from a stale deployment", async () => {
+    process.env.VERCEL_GIT_COMMIT_SHA = "current-revision";
+    jest.spyOn(global, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          codeVersion: "stale-revision",
+          search: {
+            search: {
+              backend: "native-python",
+              value_model_backend: "native-gbdt",
+              value_model_version: "incumbent",
+              code_version: "stale-revision",
+            },
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    await expect(
+      searchNatively(
+        "https://example.test/api/native_search",
+        { fen: "position" },
+        {
+          personality: "balanced",
+          turnNumber: 1,
+          timeMs: 1_000,
+          maxDepth: 2,
+          beamWidth: 6,
+          openingSeed: 1,
+          maxActions: 3,
+          stagnationTurns: 0,
+          valueModel: "incumbent",
+        }
+      )
+    ).rejects.toThrow(
+      "expected current-revision, received stale-revision"
+    );
+  });
 });
 
 describe("native search endpoint resolution", () => {

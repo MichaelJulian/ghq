@@ -471,7 +471,9 @@ async function analyzeFenNatively(
   if (
     rawSearchResult.search.backend !== "native-python" ||
     rawSearchResult.search.value_model_backend !== "native-gbdt" ||
-    rawSearchResult.search.value_model_version !== config.valueModel
+    rawSearchResult.search.value_model_version !== config.valueModel ||
+    rawSearchResult.search.code_version !==
+      (process.env.VERCEL_GIT_COMMIT_SHA ?? "local-unversioned-search")
   ) {
     throw new Error("Cached GHQ search failed native runtime provenance");
   }

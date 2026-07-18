@@ -9,6 +9,7 @@ across the Pyodide and native backends.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
@@ -24,6 +25,7 @@ import _value_model as value_model  # noqa: E402
 
 
 PERSONALITIES = frozenset(ghq_ai.PERSONALITIES)
+CODE_VERSION = os.environ.get("VERCEL_GIT_COMMIT_SHA", "local-unversioned-search")
 
 
 class NativeSearchInputError(ValueError):
@@ -85,6 +87,7 @@ def describe_native_position(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as error:
         raise NativeSearchInputError(str(error)) from error
     return {
+        "codeVersion": CODE_VERSION,
         "fen": board.board_fen(),
         "sideToMove": "RED" if board.is_red_turn() else "BLUE",
         "serializedState": board.serialize(),
@@ -138,6 +141,7 @@ def run_native_search(payload: Dict[str, Any]) -> Dict[str, Any]:
     raw_search["search"]["backend"] = "native-python"
     raw_search["search"]["value_model_backend"] = "native-gbdt"
     raw_search["search"]["value_model_version"] = value_model_version
+    raw_search["search"]["code_version"] = CODE_VERSION
 
     for uci in raw_search["best_turn"]["all_moves"]:
         move = engine.Move.from_uci(uci)
@@ -146,6 +150,7 @@ def run_native_search(payload: Dict[str, Any]) -> Dict[str, Any]:
         board.push(move)
 
     return {
+        "codeVersion": CODE_VERSION,
         "fen": input_fen,
         "sideToMove": side_to_move,
         "resultingFen": board.board_fen(),
@@ -176,6 +181,7 @@ class handler(BaseHTTPRequestHandler):
                 "ok": True,
                 "backend": "native-python",
                 "engine": "public/engine.py",
+                "codeVersion": CODE_VERSION,
             },
         )
 

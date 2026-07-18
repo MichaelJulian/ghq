@@ -29,6 +29,7 @@ function decision(
     fallback: "none",
     searchBackend: "native-python",
     searchValueModelBackend: "native-gbdt",
+    searchCodeVersion: "test-code-version",
     explorationSeed: 1,
     explorationTemperature: 0,
     features: [],
@@ -128,5 +129,20 @@ describe("durable self-play training quality", () => {
         { winner: "RED", termination: "hq-capture" }
       )
     ).toContain("mixed-search-runtime-provenance");
+    expect(
+      durableGameTrainingRejectionReasons(
+        [
+          decision(),
+          decision({ turnNumber: 2, searchCodeVersion: "different-version" }),
+        ],
+        { winner: "RED", termination: "hq-capture" },
+        "test-code-version"
+      )
+    ).toEqual(
+      expect.arrayContaining([
+        "mixed-search-code-version",
+        "mismatched-search-code-version",
+      ])
+    );
   });
 });

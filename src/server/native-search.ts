@@ -23,6 +23,7 @@ interface NativeSearchRequest {
 }
 
 export interface NativeSearchResponse {
+  codeVersion: string;
   fen: string;
   sideToMove: Player;
   resultingFen: string;
@@ -33,6 +34,7 @@ export interface NativeSearchResponse {
 }
 
 export interface NativeDescriptionResponse {
+  codeVersion: string;
   fen: string;
   sideToMove: Player;
   serializedState: string;
@@ -87,6 +89,24 @@ async function postNative<T>(url: string, body: object): Promise<T> {
   return payload as T;
 }
 
+function assertNativeCodeVersion(result: {
+  codeVersion?: string;
+  search?: GhqSearchResult;
+}): void {
+  const expected =
+    process.env.VERCEL_GIT_COMMIT_SHA?.trim() || "local-unversioned-search";
+  const telemetryVersion = result.search?.search.code_version;
+  if (
+    !result.codeVersion ||
+    result.codeVersion !== expected ||
+    (telemetryVersion !== undefined && telemetryVersion !== result.codeVersion)
+  ) {
+    throw new Error(
+      `Native GHQ search code mismatch: expected ${expected}, received ${result.codeVersion ?? "missing"}`
+    );
+  }
+}
+
 export async function searchNatively(
   url: string,
   request: FenAnalysisRequest,
@@ -97,6 +117,7 @@ export async function searchNatively(
     serializedState: request.serializedState,
     ...config,
   });
+  assertNativeCodeVersion(result);
   if (
     result.search?.search?.backend !== "native-python" ||
     result.search.search.value_model_backend !== "native-gbdt"
@@ -112,10 +133,12 @@ export async function describeNatively(
   personality: PersonalityId,
   turnNumber: number
 ): Promise<NativeDescriptionResponse> {
-  return postNative<NativeDescriptionResponse>(url, {
+  const result = await postNative<NativeDescriptionResponse>(url, {
     mode: "describe",
     fen,
     personality,
     turnNumber,
   });
+  assertNativeCodeVersion(result);
+  return result;
 }

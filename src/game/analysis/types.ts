@@ -157,6 +157,8 @@ export interface GhqSearchResult {
     backend?: "pyodide" | "native-python";
     value_model_backend?: "typescript-callback" | "native-gbdt";
     value_model_version?: ValueModelVersion;
+    /** Exact deployed source revision executed by the search backend. */
+    code_version?: string;
   };
   evaluation: {
     before: SearchEvaluationBreakdown;

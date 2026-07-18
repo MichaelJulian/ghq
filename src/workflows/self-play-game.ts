@@ -93,6 +93,8 @@ export interface DurableSelfPlayDecision {
   searchBackend?: "pyodide" | "native-python";
   /** Exact value-inference bridge used inside that search. */
   searchValueModelBackend?: "typescript-callback" | "native-gbdt";
+  /** Exact deployed source revision actually executed by the search backend. */
+  searchCodeVersion?: string;
   explorationSeed: number;
   explorationTemperature: number;
   features: number[];
@@ -185,6 +187,7 @@ interface DurableTrainingSample {
   searchValueModelBackend: NonNullable<
     DurableSelfPlayDecision["searchValueModelBackend"]
   >;
+  searchCodeVersion: string;
 }
 
 async function playDurableTurn(
@@ -265,6 +268,7 @@ async function playDurableTurn(
     recommendationLabel: analysis.search.recommendation_label,
     searchBackend: analysis.search.search.backend,
     searchValueModelBackend: analysis.search.search.value_model_backend,
+    searchCodeVersion: analysis.search.search.code_version,
     explorationSeed: input.explorationSeed,
     explorationTemperature: input.competitor.explorationTemperature,
     features: extractValueFeatures(
@@ -317,6 +321,7 @@ export function isDurableTrainingDecisionEligible(
       decision.fallback !== "seeded" &&
       decision.searchBackend !== undefined &&
       decision.searchValueModelBackend !== undefined &&
+      decision.searchCodeVersion !== undefined &&
       // Depth one evaluates only our resulting position. Depth two includes a
       // complete opponent reply and is the minimum tactically verified label
       // admitted to the value-model dataset.
@@ -326,7 +331,8 @@ export function isDurableTrainingDecisionEligible(
 
 export function durableGameTrainingRejectionReasons(
   decisions: DurableSelfPlayDecision[],
-  outcome: DurableSelfPlayGameResult["outcome"]
+  outcome: DurableSelfPlayGameResult["outcome"],
+  expectedCodeVersion?: string
 ): string[] {
   const reasons: string[] = [];
   if (!outcome.winner || outcome.termination !== "hq-capture") {
@@ -352,7 +358,8 @@ export function durableGameTrainingRejectionReasons(
     decisions.some(
       (decision) =>
         decision.searchBackend === undefined ||
-        decision.searchValueModelBackend === undefined
+        decision.searchValueModelBackend === undefined ||
+        decision.searchCodeVersion === undefined
     )
   ) {
     reasons.push("missing-search-runtime-provenance");
@@ -364,6 +371,20 @@ export function durableGameTrainingRejectionReasons(
       )
     );
     if (runtimePairs.size > 1) reasons.push("mixed-search-runtime-provenance");
+  }
+  const searchCodeVersions = new Set(
+    decisions
+      .map((decision) => decision.searchCodeVersion)
+      .filter((value): value is string => value !== undefined)
+  );
+  if (searchCodeVersions.size > 1) reasons.push("mixed-search-code-version");
+  if (
+    expectedCodeVersion !== undefined &&
+    decisions.some(
+      (decision) => decision.searchCodeVersion !== expectedCodeVersion
+    )
+  ) {
+    reasons.push("mismatched-search-code-version");
   }
   const unverifiedFallbackDecisions = decisions.filter(
     (decision) =>
@@ -486,7 +507,8 @@ export async function playDurableSelfPlayGame(
   if (!outcome) outcome = { termination: "max-turns" };
   const trainingRejectionReasons = durableGameTrainingRejectionReasons(
     decisions,
-    outcome
+    outcome,
+    config.codeVersion
   );
   const trainingEligible = trainingRejectionReasons.length === 0;
   const eligibleDecisions = trainingEligible
@@ -514,9 +536,10 @@ export async function playDurableSelfPlayGame(
           decision.player === "RED"
             ? config.red.valueModelCheckpoint ?? "unknown"
             : config.blue.valueModelCheckpoint ?? "unknown",
-        codeVersion: config.codeVersion ?? "unknown",
+        codeVersion: decision.searchCodeVersion!,
         searchBackend: decision.searchBackend!,
         searchValueModelBackend: decision.searchValueModelBackend!,
+        searchCodeVersion: decision.searchCodeVersion!,
       }))
     : [];
   const result: Omit<DurableSelfPlayGameResult, "storage"> = {

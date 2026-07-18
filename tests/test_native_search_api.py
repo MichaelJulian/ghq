@@ -23,6 +23,7 @@ STARTING_FEN = (
     "IIIIIFFFPRRTH iiiiifffprrth r"
 )
 AVOIDABLE_IMMEDIATE_HQ_LOSSES = (
+    (59, "qi1i4/i1i3i1/1i3i2/8/F5f1/1FF1f1r↓1/I2I1f2/1I4Q1 - - r"),
     (80, "5q2/8/3FI1I1/5I2/2II4/1I6/8/7Q - - b"),
     (90, "7q/8/7F/6F1/4II1I/7I/1I6/I6Q - - b"),
     (85, "1q6/2i5/Fi1i4/2i1ii2/8/6f1/3I2fi/4I1Q1 - - r"),
@@ -49,6 +50,10 @@ class NativeSearchContractTest(unittest.TestCase):
         self.assertEqual(len(result["search"]["best_turn"]["actions"]), 3)
         self.assertEqual(result["search"]["search"]["backend"], "native-python")
         self.assertEqual(result["search"]["search"]["value_model_backend"], "native-gbdt")
+        self.assertEqual(result["codeVersion"], MODULE.CODE_VERSION)
+        self.assertEqual(
+            result["search"]["search"]["code_version"], MODULE.CODE_VERSION
+        )
         self.assertNotEqual(result["fen"], result["resultingFen"])
         self.assertGreater(len(result["serializedState"]), 20)
 
@@ -62,6 +67,7 @@ class NativeSearchContractTest(unittest.TestCase):
         )
         self.assertEqual(described["fen"], result["resultingFen"])
         self.assertEqual(described["serializedState"], result["serializedState"])
+        self.assertEqual(described["codeVersion"], MODULE.CODE_VERSION)
 
         resumed = MODULE.run_native_search(
             {
