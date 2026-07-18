@@ -995,6 +995,25 @@ class SearchTests(unittest.TestCase):
         )
         self.assertTrue(recovery_safety.tactically_safe)
 
+        timed_out_search = ghq_ai.search(
+            board,
+            "para_specialist",
+            time_ms=50,
+            max_depth=2,
+            beam_width=16,
+            turn_number=28,
+        )
+        self.assertNotIn("f5h3", timed_out_search["best_turn"]["actions"])
+        self.assertTrue(
+            timed_out_search["search"]["tactical_return_guard_used"]
+        )
+        self.assertTrue(
+            timed_out_search["search"]["safe_fallback_reply_verified"]
+        )
+        self.assertEqual(
+            timed_out_search["search"]["completed_depth_in_turns"], 2
+        )
+
     def test_paratrooper_interposition_is_a_proven_hq_defense_mission(self):
         root = engine.BaseBoard(
             "q1pt↓4/3r↓i3/8/6r↓i/R↑3ifh↓1/"

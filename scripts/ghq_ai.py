@@ -5456,6 +5456,8 @@ def search(
     hq_exact_return_probe_used = False
     policy_return_guard_used = False
     tactical_return_guard_used = False
+    safe_fallback_reply_verified = False
+    safe_fallback_reply_nodes = 0
     emergency_seed: Optional[SearchResult] = None
     emergency_seed_safe = False
     seed_reply_retry_used = False
@@ -6066,6 +6068,74 @@ def search(
         completed_depth = 0
         fallback_kind = "safe"
 
+    # Safety and policy guards run after the main minimax deadline. Returning
+    # their replacement at depth zero made otherwise useful self-play games
+    # ineligible for training even when Vercel still had enough function time
+    # for one complete opponent reply. Verify the final safe replacement with
+    # a fresh, isolated searcher; never claim depth two on a partial reply.
+    if (
+        fallback_kind == "safe"
+        and completed_depth < 2
+        and not resulting_board.is_game_over()
+        and resulting_board.turn != board.turn
+    ):
+        verifier = Searcher(
+            personality,
+            time_ms=max(2_000, min(10_000, int(time_ms * 0.40))),
+            beam_width=max(4, min(6, beam_width)),
+            turn_number=turn_number,
+            value_function=value_function,
+            policy_function=policy_function,
+            max_actions=max_actions,
+            stagnation_turns=stagnation_turns,
+        )
+        verifier.verification_mode = True
+        verifier.hq_leaf_extension_enabled = False
+        try:
+            reply = verifier.alphabeta(
+                resulting_board, 1, -math.inf, math.inf
+            )
+            selected_purpose = searcher.deadline_safe_turn_purpose_breakdown(
+                board,
+                resulting_board,
+                first_turn,
+                board.turn,
+                retrospective=False,
+            )
+            selected_quality = (
+                (
+                    0.40
+                    * searcher.early_plan_score(
+                        searcher.deadline_safe_action_purpose_labels(
+                            board,
+                            first_turn,
+                            board.turn,
+                            retrospective=False,
+                        )
+                    )
+                    if turn_number <= EARLY_GAME_LAST_TURN
+                    else 0.0
+                )
+                - selected_purpose["total_penalty"]
+                + searcher.deadline_safe_transition_policy_score(
+                    resulting_board, board.turn
+                )
+            )
+            verified_score = reply.score + (
+                selected_quality if board.turn == engine.RED else -selected_quality
+            )
+            best = SearchResult(
+                verified_score, list(first_turn) + list(reply.pv)
+            )
+            completed_depth = 2
+            safe_fallback_reply_verified = True
+            if hq_survival_override_used:
+                hq_survival_reply_verified = True
+        except SearchTimeout:
+            timed_out = True
+        finally:
+            safe_fallback_reply_nodes = verifier.nodes
+
     automatic = [move.uci() for move in first_turn if move.name == "AutoCapture"]
     actions = [move.uci() for move in first_turn if move.name != "AutoCapture"]
     root_eval = evaluation_breakdown(board, personality, turn_number)
@@ -6280,6 +6350,8 @@ def search(
             "hq_exact_return_probe_used": hq_exact_return_probe_used,
             "policy_return_guard_used": policy_return_guard_used,
             "tactical_return_guard_used": tactical_return_guard_used,
+            "safe_fallback_reply_verified": safe_fallback_reply_verified,
+            "safe_fallback_reply_nodes": safe_fallback_reply_nodes,
             "seed_reply_verified": verified_seed is not None,
             "seed_reply_retry_used": seed_reply_retry_used,
         },

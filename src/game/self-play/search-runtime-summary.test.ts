@@ -55,6 +55,7 @@ describe("self-play search runtime summary", () => {
     const guarded = decision(2, "native-python");
     guarded.searchTelemetry!.hqExactReturnProbeUsed = true;
     guarded.searchTelemetry!.tacticalReturnGuardUsed = true;
+    guarded.searchTelemetry!.safeFallbackReplyVerified = true;
     const summary = summarizeSearchRuntime([
       {
         decisions: [
@@ -82,6 +83,8 @@ describe("self-play search runtime summary", () => {
     expect(summary.hqExactReturnProbeDecisions).toBe(1);
     expect(summary.tacticalReturnGuardDecisions).toBe(1);
     expect(summary.tacticalReturnGuardRate).toBeCloseTo(1 / 3);
+    expect(summary.safeFallbackReplyVerifiedDecisions).toBe(1);
+    expect(summary.safeFallbackReplyVerifiedRate).toBeCloseTo(1 / 3);
   });
 
   it("returns finite zero rates for an empty generation", () => {
@@ -98,6 +101,8 @@ describe("self-play search runtime summary", () => {
       hqExactReturnProbeDecisions: 0,
       tacticalReturnGuardDecisions: 0,
       tacticalReturnGuardRate: 0,
+      safeFallbackReplyVerifiedDecisions: 0,
+      safeFallbackReplyVerifiedRate: 0,
     });
   });
 });

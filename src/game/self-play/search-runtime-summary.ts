@@ -16,6 +16,8 @@ export interface SearchRuntimeSummary {
   hqExactReturnProbeDecisions: number;
   tacticalReturnGuardDecisions: number;
   tacticalReturnGuardRate: number;
+  safeFallbackReplyVerifiedDecisions: number;
+  safeFallbackReplyVerifiedRate: number;
 }
 
 function increment(counts: Record<string, number>, key: string): void {
@@ -39,6 +41,7 @@ export function summarizeSearchRuntime(
   let generatedSamples = 0;
   let hqExactReturnProbeDecisions = 0;
   let tacticalReturnGuardDecisions = 0;
+  let safeFallbackReplyVerifiedDecisions = 0;
 
   for (const decision of decisions as DurableSelfPlayDecision[]) {
     increment(backendCounts, decision.searchBackend ?? "unknown");
@@ -61,6 +64,9 @@ export function summarizeSearchRuntime(
       if (decision.searchTelemetry.tacticalReturnGuardUsed) {
         tacticalReturnGuardDecisions++;
       }
+      if (decision.searchTelemetry.safeFallbackReplyVerified) {
+        safeFallbackReplyVerifiedDecisions++;
+      }
     }
   }
 
@@ -80,5 +86,9 @@ export function summarizeSearchRuntime(
     hqExactReturnProbeDecisions,
     tacticalReturnGuardDecisions,
     tacticalReturnGuardRate: count ? tacticalReturnGuardDecisions / count : 0,
+    safeFallbackReplyVerifiedDecisions,
+    safeFallbackReplyVerifiedRate: count
+      ? safeFallbackReplyVerifiedDecisions / count
+      : 0,
   };
 }

@@ -388,6 +388,7 @@ async function main() {
   let hqSurvivalReplyVerifiedDecisions = 0;
   let hqExactReturnProbeDecisions = 0;
   let tacticalReturnGuardDecisions = 0;
+  let safeFallbackReplyVerifiedDecisions = 0;
   let policyReturnGuardDecisions = 0;
   let seedReplyVerifiedDecisions = 0;
   let seedReplyRetryDecisions = 0;
@@ -559,6 +560,9 @@ async function main() {
         }
         if (decision.searchTelemetry.tacticalReturnGuardUsed) {
           tacticalReturnGuardDecisions++;
+        }
+        if (decision.searchTelemetry.safeFallbackReplyVerified) {
+          safeFallbackReplyVerifiedDecisions++;
         }
         if (decision.searchTelemetry.policyReturnGuardUsed) {
           policyReturnGuardDecisions++;
@@ -901,6 +905,12 @@ async function main() {
       tacticalReturnGuardDecisions,
       tacticalReturnGuardRate: Number(
         (tacticalReturnGuardDecisions / Math.max(1, decisions)).toFixed(4)
+      ),
+      safeFallbackReplyVerifiedDecisions,
+      safeFallbackReplyVerifiedRate: Number(
+        (
+          safeFallbackReplyVerifiedDecisions / Math.max(1, decisions)
+        ).toFixed(4)
       ),
       policyReturnGuardDecisions,
       seedReplyVerifiedDecisions,

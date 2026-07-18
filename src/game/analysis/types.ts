@@ -161,6 +161,10 @@ export interface GhqSearchResult {
     hq_exact_return_probe_used?: boolean;
     /** A final invariant replaced a turn with an immediate forced material loss. */
     tactical_return_guard_used?: boolean;
+    /** A fresh post-guard search completed one full opponent reply. */
+    safe_fallback_reply_verified?: boolean;
+    /** Nodes used by the fresh post-guard opponent-reply verifier. */
+    safe_fallback_reply_nodes?: number;
     /** A final invariant replaced a missionless paratrooper return line. */
     policy_return_guard_used?: boolean;
     /** The emergency complete-turn floor received one complete opponent reply. */
