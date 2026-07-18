@@ -963,6 +963,23 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(escape_safety.forced_loss_value, 0.0)
         self.assertTrue(escape_safety.tactically_safe)
 
+        # The final return guard has its own dedicated HQ check. Its bounded
+        # material probe must not spend this small deadline enumerating every
+        # same-turn HQ combination before it notices sbb5 -> sfh3.
+        bounded = ghq_ai.bounded_seed_safety(
+            board,
+            suicide,
+            "para_specialist",
+            28,
+            16,
+            3,
+            50,
+            check_hq_combinations=False,
+        )
+        self.assertIsNotNone(bounded)
+        self.assertEqual(bounded.forced_loss_value, 4.0)
+        self.assertFalse(bounded.tactically_safe)
+
     def test_exact_hq_probe_retains_sparse_artillery_orientation_mate(self):
         root = engine.BaseBoard(
             "4qT←2/5H↑2/4r→3/1I3R↑2/8/2R→5/1R↑2Q3/8 - - b"

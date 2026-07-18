@@ -1883,7 +1883,12 @@ class Searcher:
             total += PIECE_VALUES.get(piece_type, 0.0)
         return total
 
-    def tactical_risk(self, board: engine.BaseBoard, defender: bool) -> Tuple[float, float, float]:
+    def tactical_risk(
+        self,
+        board: engine.BaseBoard,
+        defender: bool,
+        check_hq_combinations: bool = True,
+    ) -> Tuple[float, float, float]:
         """Return risk, forced loss, and critical para/artillery exposure.
 
         Forced start-of-turn captures are resolved far enough to inspect the
@@ -1891,7 +1896,7 @@ class Searcher:
         available to a para and a para left inside a bombardment even when a
         different automatic capture must happen first.
         """
-        cache_key = (board_key(board), defender)
+        cache_key = (board_key(board), defender, check_hq_combinations)
         cached = self.safety_cache.get(cache_key)
         if cached is not None:
             return cached
@@ -1932,7 +1937,7 @@ class Searcher:
         friendly_non_hq = own & ~board.hq
         for position, _ in action_positions[:12]:
             self.check_time(False)
-            if self.has_same_turn_hq_capture(position):
+            if check_hq_combinations and self.has_same_turn_hq_capture(position):
                 # A three-action HQ combination is just as forced as a direct
                 # capture.  Feeding it into the ordinary critical-risk path
                 # makes complete-turn selection retain an HQ escape instead
@@ -1987,18 +1992,27 @@ class Searcher:
         before: engine.BaseBoard,
         after: engine.BaseBoard,
         mover: bool,
+        check_hq_combinations: bool = True,
     ) -> TacticalSafety:
         if after.is_game_over():
             return TacticalSafety(0.0, 0.0, 100.0, 0.0, 0.0, True)
-        baseline, baseline_forced, _ = self.tactical_risk(before, mover)
-        risk, forced, critical = self.tactical_risk(after, mover)
+        baseline, baseline_forced, _ = self.tactical_risk(
+            before, mover, check_hq_combinations
+        )
+        risk, forced, critical = self.tactical_risk(
+            after, mover, check_hq_combinations
+        )
         opponent = not mover
         opponent_turn = (
             after
             if after.turn == opponent and after.turn_moves == 0
             else self.board_as_turn(after, opponent)
         )
-        loses_hq_this_turn = self.has_same_turn_hq_capture(opponent_turn)
+        loses_hq_this_turn = (
+            self.has_same_turn_hq_capture(opponent_turn)
+            if check_hq_combinations
+            else False
+        )
         compensation = max(
             0.0,
             board_material_for(before, opponent) - board_material_for(after, opponent),
@@ -5207,6 +5221,7 @@ def bounded_seed_safety(
     beam_width: int,
     max_actions: int,
     time_ms: int,
+    check_hq_combinations: bool = True,
 ) -> Optional[TacticalSafety]:
     """Assess the emergency seed without consuming the minimax deadline."""
     probe = Searcher(
@@ -5217,7 +5232,14 @@ def bounded_seed_safety(
         max_actions=max_actions,
     )
     try:
-        return probe.assess_turn_safety(board, seed_board, board.turn)
+        if check_hq_combinations:
+            return probe.assess_turn_safety(board, seed_board, board.turn)
+        return probe.assess_turn_safety(
+            board,
+            seed_board,
+            board.turn,
+            check_hq_combinations=False,
+        )
     except SearchTimeout:
         return None
 
@@ -5707,6 +5729,7 @@ def search(
         beam_width,
         max_actions,
         seed_time_ms,
+        check_hq_combinations=False,
     )
     if (
         not hq_survival_override_used
@@ -5742,6 +5765,7 @@ def search(
                 beam_width,
                 max_actions,
                 seed_time_ms,
+                check_hq_combinations=False,
             )
             if replacement_safety is None or not replacement_safety.tactically_safe:
                 continue
