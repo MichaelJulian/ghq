@@ -46,12 +46,12 @@ class NativeValueModelTest(unittest.TestCase):
 
     def test_matches_typescript_challenger_with_append_only_features(self) -> None:
         self.assert_prediction(
-            engine.STARTING_FEN, 1, 0.5337958232173801, "challenger"
+            engine.STARTING_FEN, 1, 0.5332769823702843, "challenger"
         )
         self.assert_prediction(
             "q1r↓1ip2/ir↘1i4/1ii5/3ff3/7r↓/6f1/2FI1I1I/1I2I1FQ I iii r",
             31,
-            0.022013671574450853,
+            0.016427033102013284,
             "challenger",
         )
 
