@@ -147,6 +147,21 @@ def red_value_function(artifact: Dict[str, Any]):
     return evaluate
 
 
+def policy_function(artifact: Dict[str, Any]):
+    """Return the artifact's move-ranking score without changing value."""
+
+    def evaluate(fen: str, turn_number: int, perspective: bool) -> float:
+        board = engine.BaseBoard(fen)
+        return value_model.policy_adjustment_from_features(
+            value_model.extract_features(
+                board, turn_number, perspective, artifact
+            ),
+            artifact,
+        )
+
+    return evaluate
+
+
 def winner_name(outcome: Any) -> Optional[str]:
     if outcome is None or outcome.winner is None:
         return None
@@ -240,6 +255,10 @@ def play_game(config: GameConfig) -> GameResult:
         challenger_color: red_value_function(challenger),
         not challenger_color: red_value_function(baseline),
     }
+    policies = {
+        challenger_color: policy_function(challenger),
+        not challenger_color: policy_function(baseline),
+    }
     board = engine.BaseBoard(engine.STARTING_FEN)
     occurrences = Counter({board.board_fen(): 1})
     strategic_best = {
@@ -271,6 +290,7 @@ def play_game(config: GameConfig) -> GameResult:
             opening_seed=pair_seed,
             max_actions=3,
             stagnation_turns=turns_without_progress,
+            policy_function=policies[mover],
         )
         telemetry = result["search"]
         fallbacks[str(telemetry["fallback_used"])] += 1

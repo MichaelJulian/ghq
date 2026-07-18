@@ -1696,6 +1696,21 @@ class Searcher:
         self.policy_model_evaluations += 1
         return score
 
+    def deadline_safe_transition_policy_score(
+        self, board: engine.BaseBoard, mover: bool
+    ) -> float:
+        """Use available policy guidance without invalidating a fallback.
+
+        Search-time policy evaluation deliberately raises ``SearchTimeout`` so
+        iterative deepening stops promptly. Seed, fallback, and response
+        telemetry can run after that deadline; a missing uncached score must
+        not turn an otherwise legal result into an API failure.
+        """
+        try:
+            return self.transition_policy_score(board, mover)
+        except SearchTimeout:
+            return 0.0
+
     @staticmethod
     def board_as_turn(board: engine.BaseBoard, color: bool) -> engine.BaseBoard:
         probe = board.copy()
@@ -4706,7 +4721,9 @@ def search(
         turn_quality = (
             early_bonus
             - transition_penalty
-            + searcher.transition_policy_score(book_turn.board, board.turn)
+            + searcher.deadline_safe_transition_policy_score(
+                book_turn.board, board.turn
+            )
         )
         score = (
             book_turn.static_score + turn_quality
@@ -4735,7 +4752,7 @@ def search(
             retrospective=False,
         )
         seed_penalty = seed_purpose["total_penalty"]
-        seed_policy_score = searcher.transition_policy_score(
+        seed_policy_score = searcher.deadline_safe_transition_policy_score(
             seed_board, board.turn
         )
         emergency_seed.score += (
@@ -4957,7 +4974,7 @@ def search(
             fallback_quality = (
                 fallback_bonus
                 - fallback_penalty
-                + searcher.transition_policy_score(
+                + searcher.deadline_safe_transition_policy_score(
                     searcher.root_fallback.board, board.turn
                 )
             )
@@ -5049,7 +5066,7 @@ def search(
             survival_quality = (
                 survival_early_bonus
                 - survival_penalty
-                + searcher.transition_policy_score(
+                + searcher.deadline_safe_transition_policy_score(
                     resulting_board, board.turn
                 )
             )
@@ -5097,7 +5114,9 @@ def search(
         )
         seed_penalty = seed_purpose["total_penalty"]
         seed_quality = (
-            searcher.transition_policy_score(resulting_board, board.turn)
+            searcher.deadline_safe_transition_policy_score(
+                resulting_board, board.turn
+            )
             - seed_penalty
         )
         best.score += seed_quality if board.turn == engine.RED else -seed_quality
@@ -5123,7 +5142,9 @@ def search(
             quality = (
                 early_bonus
                 - transition_penalty
-                + searcher.transition_policy_score(turn.board, board.turn)
+                + searcher.deadline_safe_transition_policy_score(
+                    turn.board, board.turn
+                )
             )
             red_score = (
                 turn.static_score + quality

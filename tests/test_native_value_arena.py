@@ -14,10 +14,12 @@ sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "api"))
 
 import _engine as engine  # noqa: E402
+import _value_model as value_model  # noqa: E402
 from run_native_value_arena import (  # noqa: E402
     GameResult,
     extends_strategic_best,
     merge_strategic_best,
+    policy_function,
     red_value_function,
     strategic_progress,
     summarize,
@@ -78,6 +80,24 @@ class NativeValueArenaTest(unittest.TestCase):
         rotated = engine.BaseBoard(engine.STARTING_FEN).mirror().board_fen()
         mirrored_red = evaluate(rotated, 1)
         self.assertAlmostEqual(red + mirrored_red, 1.0, places=12)
+
+    def test_external_policy_head_is_visible_to_arena_search(self) -> None:
+        artifact = {
+            **self.incumbent,
+            "policy_correction": {
+                "feature_indices": [0],
+                "coefficients": [2.0],
+                "scale": 0.25,
+            },
+        }
+        evaluate = policy_function(artifact)
+        features = value_model.extract_features(
+            engine.BaseBoard(engine.STARTING_FEN), 1, engine.RED, artifact
+        )
+        self.assertAlmostEqual(
+            evaluate(engine.STARTING_FEN, 1, engine.RED),
+            0.5 * features[0],
+        )
 
     def test_quality_gate_rejects_one_seeded_fallback(self) -> None:
         report = summarize(

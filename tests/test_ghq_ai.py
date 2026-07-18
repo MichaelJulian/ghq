@@ -939,6 +939,28 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(searcher.policy_model_evaluations, 1)
 
+    def test_deadline_safe_policy_score_does_not_break_fallback(self):
+        calls = []
+
+        def policy(fen, turn_number, mover):
+            calls.append((fen, turn_number, mover))
+            return 1.0
+
+        searcher = ghq_ai.Searcher(
+            "balanced",
+            time_ms=100,
+            beam_width=4,
+            policy_function=policy,
+        )
+        board = engine.BaseBoard()
+        searcher.deadline = 0.0
+
+        self.assertEqual(
+            searcher.deadline_safe_transition_policy_score(board, engine.RED),
+            0.0,
+        )
+        self.assertEqual(calls, [])
+
     def test_non_forcing_rotation_turns_have_a_quota(self):
         board = engine.BaseBoard("7q/8/8/8/i2R→4/8/8/7Q - - r")
         searcher = ghq_ai.Searcher("balanced", time_ms=3000, beam_width=4)
