@@ -93,6 +93,7 @@ const SIDE_FEATURE_NAMES = [
 const STRUCTURE_V2_SIDE_FEATURE_NAMES = [
   "infantry_vertical_adjacent_pairs",
   "infantry_diagonal_adjacent_pairs",
+  "infantry_same_file_run_excess",
   "infantry_isolated_count",
   "infantry_distinct_files",
   "infantry_file_span",
@@ -376,6 +377,21 @@ function extractStructureV2SideFeatures(
       }
       if (rowDistance === 1 && columnDistance === 1) {
         result.infantry_diagonal_adjacent_pairs++;
+      }
+    }
+  }
+  for (let file = 0; file < 8; file++) {
+    const rows = formationInfantry
+      .filter(({ at }) => at[1] === file)
+      .map(({ at }) => at[0])
+      .sort((left, right) => left - right);
+    let run = 1;
+    for (let index = 1; index < rows.length; index++) {
+      if (rows[index] === rows[index - 1] + 1) {
+        run++;
+        if (run >= 3) result.infantry_same_file_run_excess++;
+      } else {
+        run = 1;
       }
     }
   }

@@ -83,6 +83,8 @@ describe("value feature schema v2", () => {
     expect(v2OwnFeature(staggered, "infantry_vertical_adjacent_pairs")).toBe(0);
     expect(v2OwnFeature(vertical, "infantry_diagonal_adjacent_pairs")).toBe(0);
     expect(v2OwnFeature(staggered, "infantry_diagonal_adjacent_pairs")).toBe(2);
+    expect(v2OwnFeature(vertical, "infantry_same_file_run_excess")).toBe(1);
+    expect(v2OwnFeature(staggered, "infantry_same_file_run_excess")).toBe(0);
     expect(v2OwnFeature(vertical, "infantry_distinct_files")).toBe(1);
     expect(v2OwnFeature(staggered, "infantry_distinct_files")).toBe(3);
     expect(v2OwnFeature(vertical, "infantry_frontier_count")).toBe(1);
