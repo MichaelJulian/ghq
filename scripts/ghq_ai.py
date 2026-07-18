@@ -4309,7 +4309,6 @@ def search(
         best.score += -seed_penalty if board.turn == engine.RED else seed_penalty
         fallback_kind = "seeded"
 
-    elapsed_ms = (time.monotonic() - started) * 1000.0
     automatic = [move.uci() for move in first_turn if move.name == "AutoCapture"]
     actions = [move.uci() for move in first_turn if move.name != "AutoCapture"]
     root_eval = evaluation_breakdown(board, personality, turn_number)
@@ -4450,6 +4449,10 @@ def search(
         if fallback_kind == "seeded"
         else "best found"
     )
+    # Include fallback construction and response telemetry. Measuring before
+    # these bounded post-search steps hid the real wall-clock cost precisely
+    # when a deadline fallback was most expensive.
+    elapsed_ms = (time.monotonic() - started) * 1000.0
     return {
         "recommendation_label": recommendation_label,
         "input_fen": board.board_fen(),
