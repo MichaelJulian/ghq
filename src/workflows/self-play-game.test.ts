@@ -27,6 +27,8 @@ function decision(
     completedDepth: 2,
     timedOut: false,
     fallback: "none",
+    searchBackend: "native-python",
+    searchValueModelBackend: "native-gbdt",
     explorationSeed: 1,
     explorationTemperature: 0,
     features: [],
@@ -104,5 +106,27 @@ describe("durable self-play training quality", () => {
         termination: "repetition",
       })
     ).toEqual(["not-hq-capture", "nonstandard-action-limit"]);
+  });
+
+  it("requires one exact search runtime throughout a training game", () => {
+    expect(
+      durableGameTrainingRejectionReasons(
+        [decision({ searchBackend: undefined })],
+        { winner: "RED", termination: "hq-capture" }
+      )
+    ).toContain("missing-search-runtime-provenance");
+    expect(
+      durableGameTrainingRejectionReasons(
+        [
+          decision(),
+          decision({
+            turnNumber: 2,
+            searchBackend: "pyodide",
+            searchValueModelBackend: "typescript-callback",
+          }),
+        ],
+        { winner: "RED", termination: "hq-capture" }
+      )
+    ).toContain("mixed-search-runtime-provenance");
   });
 });

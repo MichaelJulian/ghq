@@ -57,6 +57,9 @@ def validate_schema(
             raise ValueError(f"{name} dataset is missing feature_names")
     if human_schema["feature_names"] != self_play_schema["feature_names"]:
         raise ValueError("human and self-play feature schemas do not match")
+    for field in ("self_play_search_backend", "self_play_value_model_backend"):
+        if not str(self_play_schema.get(field) or "").strip():
+            raise ValueError(f"self-play dataset is missing {field}")
     return list(human_schema["feature_names"])
 
 
@@ -102,6 +105,8 @@ def validate_self_play_samples(
     feature_count: int,
     code_version: str,
     value_model_checkpoint: str,
+    search_backend: str,
+    value_model_backend: str,
 ) -> List[Dict[str, Any]]:
     validated: List[Dict[str, Any]] = []
     games_by_pair: Dict[str, set[str]] = defaultdict(set)
@@ -122,6 +127,18 @@ def validate_self_play_samples(
                 "self-play behavior checkpoint mismatch: "
                 f"expected {value_model_checkpoint}, received "
                 f"{sample.get('behavior_value_model_checkpoint') or 'missing'}"
+            )
+        if sample.get("behavior_search_backend") != search_backend:
+            raise ValueError(
+                "self-play search backend mismatch: "
+                f"expected {search_backend}, received "
+                f"{sample.get('behavior_search_backend') or 'missing'}"
+            )
+        if sample.get("behavior_value_model_backend") != value_model_backend:
+            raise ValueError(
+                "self-play value backend mismatch: "
+                f"expected {value_model_backend}, received "
+                f"{sample.get('behavior_value_model_backend') or 'missing'}"
             )
         game_id = str(sample.get("game_id") or "").strip()
         pair_id = str(sample.get("pair_id") or "").strip()
@@ -181,6 +198,8 @@ def merge_datasets(
         len(feature_names),
         code_version,
         value_model_checkpoint,
+        str(self_play_schema["self_play_search_backend"]),
+        str(self_play_schema["self_play_value_model_backend"]),
     )
     combined = [*human, *self_play]
     reject_duplicate_samples(combined)
@@ -195,6 +214,12 @@ def merge_datasets(
         "source": "human+vercel-self-play",
         "self_play_code_version": code_version,
         "self_play_behavior_value_model_checkpoint": value_model_checkpoint,
+        "self_play_search_backend": self_play_schema[
+            "self_play_search_backend"
+        ],
+        "self_play_value_model_backend": self_play_schema[
+            "self_play_value_model_backend"
+        ],
         "paired_complete_only": True,
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)

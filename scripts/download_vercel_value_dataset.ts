@@ -26,6 +26,8 @@ interface DurableTrainingSample {
   codeVersion: string;
   valueModel?: "incumbent" | "challenger";
   valueModelCheckpoint?: string;
+  searchBackend?: "pyodide" | "native-python";
+  searchValueModelBackend?: "typescript-callback" | "native-gbdt";
 }
 
 interface ExactHqAuditReport {
@@ -124,6 +126,9 @@ async function main() {
   const generationPrefix = argument("--generation-prefix");
   const codeVersion = argument("--code-version");
   const valueModelCheckpoint = argument("--value-model-checkpoint");
+  const searchBackend = optionalArgument("--search-backend") ?? "native-python";
+  const searchValueModelBackend =
+    optionalArgument("--value-model-backend") ?? "native-gbdt";
   const outputPath = argument("--output");
   const hqAuditPath = argument("--hq-audit-report");
   const featureSchema = optionalArgument("--feature-schema") ?? "v1";
@@ -184,6 +189,8 @@ async function main() {
       generation_prefix: generationPrefix,
       code_version: codeVersion,
       behavior_value_model_checkpoint: valueModelCheckpoint,
+      self_play_search_backend: searchBackend,
+      self_play_value_model_backend: searchValueModelBackend,
       paired_complete_only: true,
       exact_hq_audit_required: true,
       exact_hq_audit_sha256: hqAuditSha256,
@@ -227,6 +234,16 @@ async function main() {
             }: expected ${valueModelCheckpoint}, received ${
               sample.valueModelCheckpoint || "missing"
             }`
+          );
+        }
+        if (sample.searchBackend !== searchBackend) {
+          throw new Error(
+            `Search runtime mismatch in ${sample.gameId}: expected ${searchBackend}, received ${sample.searchBackend || "missing"}`
+          );
+        }
+        if (sample.searchValueModelBackend !== searchValueModelBackend) {
+          throw new Error(
+            `Value runtime mismatch in ${sample.gameId}: expected ${searchValueModelBackend}, received ${sample.searchValueModelBackend || "missing"}`
           );
         }
         if (
@@ -313,6 +330,9 @@ async function main() {
           behavior_value_model: sample.valueModel ?? "unknown",
           behavior_value_model_checkpoint:
             sample.valueModelCheckpoint ?? "unknown",
+          behavior_search_backend: sample.searchBackend ?? "unknown",
+          behavior_value_model_backend:
+            sample.searchValueModelBackend ?? "unknown",
           created_at: record.createdAt,
           outcome_reason: "hq-capture",
           turn: sample.turnNumber,
@@ -333,6 +353,8 @@ async function main() {
       generationPrefix,
       codeVersion,
       valueModelCheckpoint,
+      searchBackend,
+      searchValueModelBackend,
       generations: generations.size,
       artifacts: blobs.length,
       games: games.size,

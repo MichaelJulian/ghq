@@ -7,6 +7,10 @@ from scripts.merge_value_datasets import merge_datasets
 
 
 FEATURE_NAMES = ["one", "two"]
+RUNTIME_SCHEMA = {
+    "self_play_search_backend": "native-python",
+    "self_play_value_model_backend": "native-gbdt",
+}
 
 
 def write_dataset(path: Path, samples, **schema_overrides):
@@ -36,6 +40,15 @@ def sample(game_id: str, **overrides):
     }
 
 
+def self_play_sample(game_id: str, **overrides):
+    return sample(
+        game_id,
+        behavior_search_backend="native-python",
+        behavior_value_model_backend="native-gbdt",
+        **overrides,
+    )
+
+
 class MergeValueDatasetsTests(unittest.TestCase):
     def paths(self):
         temporary = tempfile.TemporaryDirectory()
@@ -55,7 +68,11 @@ class MergeValueDatasetsTests(unittest.TestCase):
         }
         write_dataset(
             self_play,
-            [sample("generation-0001", **common), sample("generation-0002", **common)],
+            [
+                self_play_sample("generation-0001", **common),
+                self_play_sample("generation-0002", **common),
+            ],
+            **RUNTIME_SCHEMA,
         )
 
         stats = merge_datasets(
@@ -86,8 +103,11 @@ class MergeValueDatasetsTests(unittest.TestCase):
                     pair_id="generation-pair-0001",
                     code_version="commit-a",
                     behavior_value_model_checkpoint="checkpoint-a",
+                    behavior_search_backend="native-python",
+                    behavior_value_model_backend="native-gbdt",
                 )
             ],
+            **RUNTIME_SCHEMA,
         )
         with self.assertRaisesRegex(ValueError, "incomplete color-swapped pairs"):
             merge_datasets(human, self_play, output, "commit-a", "checkpoint-a")
@@ -105,15 +125,23 @@ class MergeValueDatasetsTests(unittest.TestCase):
         }
         write_dataset(
             self_play,
-            [sample("generation-0001", **common), sample("generation-0002", **common)],
+            [
+                self_play_sample("generation-0001", **common),
+                self_play_sample("generation-0002", **common),
+            ],
+            **RUNTIME_SCHEMA,
         )
         with self.assertRaisesRegex(ValueError, "code version mismatch"):
             merge_datasets(human, self_play, output, "commit-a", "checkpoint-a")
 
         write_dataset(
             self_play,
-            [sample("generation-0001", **common), sample("generation-0002", **common)],
+            [
+                self_play_sample("generation-0001", **common),
+                self_play_sample("generation-0002", **common),
+            ],
             feature_names=["different"],
+            **RUNTIME_SCHEMA,
         )
         with self.assertRaisesRegex(ValueError, "feature schemas do not match"):
             merge_datasets(human, self_play, output, "commit-b", "checkpoint-a")
@@ -132,7 +160,11 @@ class MergeValueDatasetsTests(unittest.TestCase):
         }
         write_dataset(
             self_play,
-            [sample("generation-0001", **common), sample("generation-0002", **common)],
+            [
+                self_play_sample("generation-0001", **common),
+                self_play_sample("generation-0002", **common),
+            ],
+            **RUNTIME_SCHEMA,
         )
         with self.assertRaisesRegex(ValueError, "duplicate value sample"):
             merge_datasets(human, self_play, output, "commit-a", "checkpoint-a")
@@ -154,18 +186,54 @@ class MergeValueDatasetsTests(unittest.TestCase):
                     "generation-0001",
                     **common,
                     behavior_value_model_checkpoint="checkpoint-a",
+                    behavior_search_backend="native-python",
+                    behavior_value_model_backend="native-gbdt",
                 ),
                 sample(
                     "generation-0002",
                     **common,
                     behavior_value_model_checkpoint="checkpoint-b",
+                    behavior_search_backend="native-python",
+                    behavior_value_model_backend="native-gbdt",
                 ),
             ],
+            **RUNTIME_SCHEMA,
         )
         with self.assertRaisesRegex(ValueError, "behavior checkpoint mismatch"):
             merge_datasets(
                 human, self_play, output, "commit-a", "checkpoint-a"
             )
+
+    def test_rejects_missing_or_mixed_search_runtime(self):
+        temporary, human, self_play, output = self.paths()
+        self.addCleanup(temporary.cleanup)
+        write_dataset(human, [sample("human-game")])
+        common = {
+            "source": "vercel_self_play",
+            "generation_id": "generation",
+            "pair_id": "generation-pair-0001",
+            "code_version": "commit-a",
+            "behavior_value_model_checkpoint": "checkpoint-a",
+            "behavior_value_model_backend": "native-gbdt",
+        }
+        write_dataset(
+            self_play,
+            [
+                sample(
+                    "generation-0001",
+                    **common,
+                    behavior_search_backend="native-python",
+                ),
+                sample(
+                    "generation-0002",
+                    **common,
+                    behavior_search_backend="pyodide",
+                ),
+            ],
+            **RUNTIME_SCHEMA,
+        )
+        with self.assertRaisesRegex(ValueError, "search backend mismatch"):
+            merge_datasets(human, self_play, output, "commit-a", "checkpoint-a")
 
 
 if __name__ == "__main__":

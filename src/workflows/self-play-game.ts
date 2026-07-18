@@ -181,6 +181,10 @@ interface DurableTrainingSample {
   valueModel: ValueModelVersion;
   valueModelCheckpoint: string;
   codeVersion: string;
+  searchBackend: NonNullable<DurableSelfPlayDecision["searchBackend"]>;
+  searchValueModelBackend: NonNullable<
+    DurableSelfPlayDecision["searchValueModelBackend"]
+  >;
 }
 
 async function playDurableTurn(
@@ -303,6 +307,8 @@ export function isDurableTrainingDecisionEligible(
       (decision.selfActionLimit ?? 3) === 3 &&
       (decision.opponentActionLimit ?? 3) === 3 &&
       decision.fallback !== "seeded" &&
+      decision.searchBackend !== undefined &&
+      decision.searchValueModelBackend !== undefined &&
       // Depth one evaluates only our resulting position. Depth two includes a
       // complete opponent reply and is the minimum tactically verified label
       // admitted to the value-model dataset.
@@ -333,6 +339,23 @@ export function durableGameTrainingRejectionReasons(
   }
   if (decisions.some((decision) => decision.fallback === "seeded")) {
     reasons.push("unverified-complete-turn-seed");
+  }
+  if (
+    decisions.some(
+      (decision) =>
+        decision.searchBackend === undefined ||
+        decision.searchValueModelBackend === undefined
+    )
+  ) {
+    reasons.push("missing-search-runtime-provenance");
+  } else {
+    const runtimePairs = new Set(
+      decisions.map(
+        (decision) =>
+          `${decision.searchBackend}:${decision.searchValueModelBackend}`
+      )
+    );
+    if (runtimePairs.size > 1) reasons.push("mixed-search-runtime-provenance");
   }
   const unverifiedFallbackDecisions = decisions.filter(
     (decision) =>
@@ -484,6 +507,8 @@ export async function playDurableSelfPlayGame(
             ? config.red.valueModelCheckpoint ?? "unknown"
             : config.blue.valueModelCheckpoint ?? "unknown",
         codeVersion: config.codeVersion ?? "unknown",
+        searchBackend: decision.searchBackend!,
+        searchValueModelBackend: decision.searchValueModelBackend!,
       }))
     : [];
   const result: Omit<DurableSelfPlayGameResult, "storage"> = {
