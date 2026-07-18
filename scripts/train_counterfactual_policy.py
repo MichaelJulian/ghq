@@ -38,7 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--baseline", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--training-report", required=True, type=Path)
-    parser.add_argument("--minimum-pairs", type=int, default=30)
+    parser.add_argument("--minimum-pairs", type=int, default=48)
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument("--require-pass", action="store_true")
     return parser.parse_args()
@@ -373,12 +373,31 @@ def records_at(
 
 def main() -> None:
     args = parse_args()
-    if args.minimum_pairs < 12:
-        raise ValueError("--minimum-pairs must be at least 12")
+    if args.minimum_pairs < 30:
+        raise ValueError("--minimum-pairs must be at least 30")
     feature_names, records, dataset_hash = load_counterfactual_reports(args.report)
     if len(records) < args.minimum_pairs:
         raise ValueError(
             f"need {args.minimum_pairs} confident pairs, found {len(records)}"
+        )
+    root_player_counts = Counter(record["root_player"] for record in records)
+    if any(root_player_counts[player] < 12 for player in ("RED", "BLUE")):
+        raise ValueError(
+            "counterfactual training needs at least 12 trustworthy roots "
+            "for each player"
+        )
+    phase_counts = Counter(
+        "early"
+        if record["source_turn_number"] <= 24
+        else "middle"
+        if record["source_turn_number"] <= 59
+        else "late"
+        for record in records
+    )
+    if any(phase_counts[phase] < 8 for phase in ("early", "middle", "late")):
+        raise ValueError(
+            "counterfactual training needs at least 8 trustworthy roots "
+            "in each phase"
         )
     raw_baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
     baseline_names = list(raw_baseline.get("feature_names") or [])
@@ -507,21 +526,13 @@ def main() -> None:
             *player_gates.values(),
         ]
     )
-    phase_counts = Counter(
-        "early"
-        if record["source_turn_number"] <= 24
-        else "middle"
-        if record["source_turn_number"] <= 59
-        else "late"
-        for record in records
-    )
     report = {
         "format": "ghq-counterfactual-policy-training-v1",
         "reports": [str(path) for path in args.report],
         "dataset_sha256": dataset_hash,
         "pairs": len(records),
         "source_games": len({record["source_game_id"] for record in records}),
-        "root_players": dict(Counter(record["root_player"] for record in records)),
+        "root_players": dict(root_player_counts),
         "phases": dict(phase_counts),
         "split_pairs": {name: int(len(indices)) for name, indices in splits.items()},
         "feature_count": len(feature_names),
