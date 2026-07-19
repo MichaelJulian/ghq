@@ -5998,7 +5998,7 @@ def search(
     # caller's network overhead.
     hard_budget_ms = min(
         50_000,
-        max(time_ms + 3_000, int(time_ms * 2.25)),
+        max(time_ms + 5_000, int(time_ms * 2.25)),
     )
     overall_deadline = started + hard_budget_ms / 1000.0
     # Exact HQ proofs are valuable, but they must not consume the small slice

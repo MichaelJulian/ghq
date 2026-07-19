@@ -275,6 +275,31 @@
         "noWorseThanBaselineCriticalExposure": true,
         "noWorseThanBaselineTwoTurnNetExchange": true
       }
+    },
+    {
+      "id": "dc3-clean-pair-game-0007-turn-120-existing-risk-repair",
+      "source": "Frozen clean pair 0007/0008: BLUE preserved a forced loss and created additional exposure before an eighteen-point collapse",
+      "fen": "3q1p2/5t←h↓1/6i1/8/2FF1I2/IR↑T↑1H→1Ii/1I6/6PQ - - b",
+      "turnNumber": 120,
+      "personality": "para_specialist",
+      "openingSeed": 2886534365,
+      "search": {
+        "timeMs": 2500,
+        "maxDepth": 2,
+        "beamWidth": 6,
+        "maxActions": 3
+      },
+      "acceptance": {
+        "requireFinalSafetyCertified": true,
+        "minimumCompletedDepth": 2,
+        "avoidImmediateHqLoss": true,
+        "maxCandidateForcedLoss": 0,
+        "maxCandidateCriticalExposure": 6,
+        "minimumTwoTurnNetExchange": 0,
+        "noWorseThanBaselineForcedLoss": true,
+        "noWorseThanBaselineCriticalExposure": true,
+        "noWorseThanBaselineTwoTurnNetExchange": true
+      }
     }
   ]
 }

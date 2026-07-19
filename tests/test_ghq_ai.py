@@ -1152,7 +1152,7 @@ class SearchTests(unittest.TestCase):
             turn_number=1,
         )
 
-        self.assertEqual(result["search"]["hard_deadline_ms"], 4_000)
+        self.assertEqual(result["search"]["hard_deadline_ms"], 6_000)
         self.assertEqual(result["search"]["final_safety_reserve_ms"], 1_000)
         self.assertFalse(result["search"]["hard_deadline_reached"])
 
