@@ -157,9 +157,18 @@ class SelfPlaySwingAnalysisTests(unittest.TestCase):
         self.assertEqual(two_turn["actionableCollapseWindows"], 1)
         self.assertEqual(two_turn["preexistingForcedLossWindows"], 0)
         self.assertEqual(
+            two_turn["causalCategoryCounts"],
+            {"new-exposure-collapse": 1},
+        )
+        self.assertEqual(
             two_turn["largestActionableCollapses"][0]["windowId"],
             collapse["windowId"],
         )
+        self.assertEqual(
+            two_turn["largestNewExposureCollapses"][0]["windowId"],
+            collapse["windowId"],
+        )
+        self.assertEqual(two_turn["largestLatentReplyCollapses"], [])
         self.assertEqual(collapse["searchQuality"]["completedDepth"], 2)
         self.assertTrue(
             collapse["windowSearchQuality"][
@@ -216,7 +225,7 @@ class SelfPlaySwingAnalysisTests(unittest.TestCase):
         }
 
         causal = swings.causal_collapse_metrics(
-            before, after_selected, exchange
+            before, after_selected, exchange, 2
         )
 
         self.assertEqual(
@@ -233,6 +242,43 @@ class SelfPlaySwingAnalysisTests(unittest.TestCase):
         self.assertEqual(
             causal["selectedTurnNewCriticalExposureValue"], 0.0
         )
+
+    def test_immediate_undetected_reply_loss_is_actionable_but_later_loss_is_not(self):
+        before = {
+            "own": {
+                "materialValue": 30.0,
+                "tacticalRiskValue": 0.0,
+                "forcedLossValue": 0.0,
+                "criticalExposureValue": 0.0,
+            },
+            "opponent": {
+                "materialValue": 30.0,
+                "tacticalRiskValue": 0.0,
+                "forcedLossValue": 0.0,
+                "criticalExposureValue": 0.0,
+            },
+            "materialBalance": 0.0,
+        }
+        after_selected = copy.deepcopy(before)
+        exchange = {
+            "ownMaterialLost": 6.0,
+            "opponentMaterialLost": 0.0,
+            "netMaterialExchange": -6.0,
+            "assessment": "unfavorable",
+        }
+
+        immediate = swings.causal_collapse_metrics(
+            before, after_selected, exchange, 2
+        )
+        later = swings.causal_collapse_metrics(
+            before, after_selected, exchange, 4
+        )
+
+        self.assertEqual(immediate["category"], "latent-reply-collapse")
+        self.assertTrue(immediate["actionable"])
+        self.assertEqual(immediate["attributionWindowTurns"], 2)
+        self.assertEqual(later["category"], "unresolved-additional-loss")
+        self.assertFalse(later["actionable"])
 
     def test_replay_fails_closed_on_a_resulting_fen_mismatch(self):
         game = collapse_game()

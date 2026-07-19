@@ -231,6 +231,7 @@ def causal_collapse_metrics(
     before: Dict[str, Any],
     after_selected_turn: Dict[str, Any],
     exchange: Dict[str, Any],
+    window_turns: int,
 ) -> Dict[str, Any]:
     """Separate newly caused exposure from an already-forced material loss.
 
@@ -264,9 +265,15 @@ def causal_collapse_metrics(
     elif newly_exposed:
         category = "new-exposure-collapse"
         actionable = True
+    elif window_turns == 2:
+        # A two-turn window is exactly the selected turn plus the opponent's
+        # reply.  Material lost here is causally close enough to train from;
+        # the zero detector delta identifies a tactical-metric blind spot.
+        category = "latent-reply-collapse"
+        actionable = True
     else:
         category = "unresolved-additional-loss"
-        actionable = True
+        actionable = False
 
     return {
         "category": category,
@@ -281,6 +288,7 @@ def causal_collapse_metrics(
         "selectedTurnNewTacticalRiskValue": round(new_risk, 4),
         "selectedTurnNewForcedLossValue": round(new_forced, 4),
         "selectedTurnNewCriticalExposureValue": round(new_critical, 4),
+        "attributionWindowTurns": int(window_turns),
     }
 
 
@@ -548,7 +556,7 @@ def build_window_record(
         "exchange": window_exchange,
         "windowTacticalDeltas": tactical_metric_deltas(before, after),
         "causalCollapse": causal_collapse_metrics(
-            before, after_selected_turn, window_exchange
+            before, after_selected_turn, window_exchange, window_turns
         ),
         "materialEvents": events,
     }
@@ -614,6 +622,31 @@ def summarize_records(
         if record["causalCollapse"]["category"]
         == "within-preexisting-forced-loss"
     ]
+    category_counts = {
+        category: sum(
+            1
+            for record in unfavorable
+            if record["causalCollapse"]["category"] == category
+        )
+        for category in sorted(
+            {
+                record["causalCollapse"]["category"]
+                for record in unfavorable
+            }
+        )
+    }
+    new_exposure_collapses = [
+        record
+        for record in unfavorable
+        if record["causalCollapse"]["category"]
+        == "new-exposure-collapse"
+    ]
+    latent_reply_collapses = [
+        record
+        for record in unfavorable
+        if record["causalCollapse"]["category"]
+        == "latent-reply-collapse"
+    ]
     return {
         "evaluatedWindows": len(records),
         "unfavorableWindows": len(unfavorable),
@@ -622,11 +655,18 @@ def summarize_records(
         "quietWindows": len(quiet),
         "actionableCollapseWindows": len(actionable_collapses),
         "preexistingForcedLossWindows": len(preexisting_forced_loss),
+        "causalCategoryCounts": category_counts,
         "largestUnfavorable": sorted(
             unfavorable, key=unfavorable_sort_key
         )[:top],
         "largestActionableCollapses": sorted(
             actionable_collapses, key=unfavorable_sort_key
+        )[:top],
+        "largestNewExposureCollapses": sorted(
+            new_exposure_collapses, key=unfavorable_sort_key
+        )[:top],
+        "largestLatentReplyCollapses": sorted(
+            latent_reply_collapses, key=unfavorable_sort_key
         )[:top],
         "largestPreexistingForcedLossRealizations": sorted(
             preexisting_forced_loss, key=unfavorable_sort_key
