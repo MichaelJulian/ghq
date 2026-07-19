@@ -171,6 +171,32 @@
         "noWorseThanBaselineCriticalExposure": true,
         "noWorseThanBaselineTwoTurnNetExchange": true
       }
+    },
+    {
+      "id": "ede-game-0010-turn-101-latent-nine-point-reply",
+      "source": "Completed self-play swing: the historical root lost nine material because the narrow reply beam omitted g8f4xe4/d5e4xe3",
+      "fen": "6p1/q1f5/1t↓1ii3/i1h↓i4/8/5R↑2/1R↑1IH↑I1Q/2F2PT↑1 - - r",
+      "turnNumber": 101,
+      "personality": "tactical_gambler",
+      "openingSeed": 0,
+      "search": {
+        "timeMs": 20000,
+        "maxDepth": 2,
+        "beamWidth": 6,
+        "maxActions": 3
+      },
+      "acceptance": {
+        "forbiddenMoves": [
+          "e2e3↖"
+        ],
+        "requireFinalSafetyCertified": true,
+        "minimumCompletedDepth": 2,
+        "avoidImmediateHqLoss": true,
+        "minimumTwoTurnNetExchange": 0,
+        "noWorseThanBaselineForcedLoss": true,
+        "noWorseThanBaselineCriticalExposure": true,
+        "noWorseThanBaselineTwoTurnNetExchange": true
+      }
     }
   ]
 }

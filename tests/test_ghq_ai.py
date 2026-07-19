@@ -3504,6 +3504,34 @@ class SearchTests(unittest.TestCase):
         self.assertTrue(candidates)
         self.assertLessEqual(len(candidates), 2)
 
+    def test_narrow_reply_beam_preserves_strongest_material_conversion(self):
+        board = engine.BaseBoard(
+            "6p1/q1f5/1t↓1ii3/i1h↓i4/4R↑3/"
+            "R↑3H↖3/3I1I1Q/2F2PT↑1 - - b"
+        )
+        searcher = ghq_ai.Searcher(
+            "tactical_gambler",
+            time_ms=60_000,
+            beam_width=6,
+            turn_number=101,
+        )
+        # Exercise the deliberately narrow non-root reply path.
+        searcher.root_key = "different-root"
+        searcher.verification_mode = True
+
+        replies = searcher.generate_turn_candidates(board)
+
+        self.assertTrue(replies)
+        self.assertEqual(
+            searcher.turn_capture_value(board, replies[0].board, board.turn),
+            9.0,
+        )
+        self.assertEqual(
+            [move.uci() for move in replies[0].moves[:2]],
+            ["g8f4xe4", "d5e4xe3"],
+        )
+        self.assertTrue(replies[0].tactically_safe)
+
     def test_purpose_filter_cannot_delete_a_quiet_hq_escape(self):
         board = engine.BaseBoard(
             "q2i1i2/3ii3/4f3/8/8/1F6/IF1I1f2/1P2f1Q1 II i r"

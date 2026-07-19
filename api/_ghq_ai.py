@@ -3682,6 +3682,11 @@ class Searcher:
                 # artillery move sharing the same first action; otherwise the
                 # narrow reply frontier can discard the mate before minimax
                 # sees the completed turn.
+                return -2
+            if self.turn_capture_value(root, partial.board, color) > 0.0:
+                # Concrete material conversion is forcing too. Without this,
+                # four speculative setup groups can occupy the entire narrow
+                # reply frontier before a direct capture gets its next action.
                 return -1
             keys = self.turn_plan_keys(root, partial.moves)
             return (
@@ -3712,6 +3717,7 @@ class Searcher:
             values.sort(
                 key=lambda item: (
                     plan_rank(item),
+                    -self.turn_capture_value(root, item.board, color),
                     len(item.moves) if item.board.is_game_over() else 99,
                     -item.priority,
                     normalized_turn_key(item.moves, color),
@@ -3722,6 +3728,7 @@ class Searcher:
             groups.values(),
             key=lambda values: (
                 plan_rank(values[0]),
+                -self.turn_capture_value(root, values[0].board, color),
                 len(values[0].moves) if values[0].board.is_game_over() else 99,
                 -values[0].priority,
                 normalized_move_uci(values[0].moves[0], color)
@@ -3876,6 +3883,19 @@ class Searcher:
             normalized_turn_key(candidate.moves, color),
         )
 
+    @staticmethod
+    def turn_capture_value(
+        before: engine.BaseBoard,
+        after: engine.BaseBoard,
+        mover: bool,
+    ) -> float:
+        """Material removed from the opponent during one complete turn."""
+        return max(
+            0.0,
+            board_material_for(before, not mover)
+            - board_material_for(after, not mover),
+        )
+
     def select_diverse_turns(
         self,
         board: engine.BaseBoard,
@@ -3949,7 +3969,22 @@ class Searcher:
         )
         for action_class in action_classes:
             quota = 3 if action_class == "development" else 2
-            for candidate in eligible:
+            class_candidates = eligible
+            if action_class == "capture":
+                # A narrow opponent beam must contain the strongest concrete
+                # conversion, not merely the capture turn whose quiet leaf
+                # happened to sort first. Minimax can then judge the resulting
+                # position and any compensation on the following turn.
+                class_candidates = sorted(
+                    eligible,
+                    key=lambda candidate: (
+                        -self.turn_capture_value(
+                            board, candidate.board, board.turn
+                        ),
+                        self.candidate_sort_key(candidate, board.turn),
+                    ),
+                )
+            for candidate in class_candidates:
                 classes, wasteful = self.turn_action_classes(board, candidate.moves)
                 if action_class == "paratrooper" and candidate.paratrooper_mission_penalty > 0.0:
                     continue
@@ -4346,9 +4381,47 @@ class Searcher:
         if len(pool) > evaluation_pool_width:
             self.exhaustive_within_horizon = False
             self.partial_turns_pruned += len(pool) - evaluation_pool_width
+            full_pool = pool
             pool = self._round_robin_partials(
                 pool, evaluation_pool_width, original_turn, board
             )
+            # Round-robin first-action diversity can otherwise retain several
+            # quiet representatives while dropping the completed continuation
+            # that converts the most material. Preserve one best conversion
+            # outside the ordinary pool cap; the later capture quota retains
+            # at most one such reply in a verification beam.
+            capture_extensions = sorted(
+                full_pool,
+                key=lambda partial: (
+                    -self.turn_capture_value(
+                        board, partial.board, original_turn
+                    ),
+                    -partial.priority,
+                    normalized_turn_key(partial.moves, original_turn),
+                ),
+            )
+            best_capture_value = self.turn_capture_value(
+                board, capture_extensions[0].board, original_turn
+            )
+            # Equal captures can differ decisively in the third action: one
+            # may save the attacker from a recapture while another hangs it.
+            # Retain a few best-material completions so safety, rather than
+            # raw atomic priority, chooses that final action.
+            capture_extension_limit = min(4, max(1, self.beam_width))
+            appended = 0
+            for capture_extension in capture_extensions:
+                if (
+                    best_capture_value <= 0.0
+                    or self.turn_capture_value(
+                        board, capture_extension.board, original_turn
+                    )
+                    < best_capture_value
+                    or appended >= capture_extension_limit
+                ):
+                    break
+                if capture_extension not in pool:
+                    pool.append(capture_extension)
+                    appended += 1
 
         if self.root_key == cache_key and self.root_fallback is None:
             fallback_pool = sorted(
@@ -4561,10 +4634,21 @@ class Searcher:
                 # contains one quiet setup action. The action still pays its
                 # purpose penalty; this only lets minimax verify the reply.
                 permitted_no_effect += 1
+            maximum_capture_value = max(
+                self.turn_capture_value(board, candidate.board, original_turn)
+                for candidate in purpose_pool
+            )
             focused = [
                 candidate
                 for candidate, count in zip(purpose_pool, no_effect_counts)
                 if count <= permitted_no_effect
+                or (
+                    maximum_capture_value > 0.0
+                    and self.turn_capture_value(
+                        board, candidate.board, original_turn
+                    )
+                    >= maximum_capture_value
+                )
             ]
             self.purpose_filtered_turns += len(candidates) - len(focused)
             if len(focused) != len(candidates):
