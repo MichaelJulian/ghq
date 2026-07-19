@@ -64,9 +64,12 @@ preserving the same exported tree format and TypeScript inference path.
 Three-action training must pin both the exact search revision and the exact
 value-model checkpoint that generated the behavior policy. It also requires an
 exhaustive HQ-loss audit, complete adjacent color-swapped pairs, complete
-paratrooper-policy telemetry, and zero unverified fallbacks. Download the
-completed games first so auditing and extraction do not depend on local Blob
-credentials:
+paratrooper-policy telemetry, zero unverified fallbacks, and per-position
+behavior-quality telemetry. The latter records the acting agents and
+personality, selected turn, completed reply depth, fallback class, and timeout
+status. Download the completed games first so auditing and extraction do not
+depend on local Blob credentials and the V3 exporter can read that full decision
+telemetry:
 
 ```bash
 pnpm self-play:download \
@@ -118,7 +121,11 @@ same split and count only once toward the 30-unit minimum, even when they have
 different pair IDs, seeds, or generation IDs.
 `value:inspect` runs all trainer-boundary checks without fitting a model and
 reports raw pairs, distinct trajectory units, duplicate pairs, and the exact
-remaining deficit for each data source.
+remaining deficit for each data source. It also reports fallback counts,
+timed-out samples, and how many samples completed depth three or deeper. The V3
+exporter, merger, and trainer all fail closed when behavior-quality telemetry is
+missing, a reply was not completed to depth two, or the move came from a seeded
+or otherwise unverified fallback.
 
 ## Personalities
 

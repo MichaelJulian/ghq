@@ -15,6 +15,7 @@ RUNTIME_SCHEMA = {
     "paratrooper_policy_audit_required": True,
     "zero_unverified_fallbacks_required": True,
     "color_swap_integrity_verified": True,
+    "behavior_quality_telemetry_required": True,
     "exact_hq_audit_sha256": "audit-sha256",
     "exact_hq_audit_max_nodes": 2_000_000,
 }
@@ -48,12 +49,19 @@ def sample(game_id: str, **overrides):
 
 
 def self_play_sample(game_id: str, **overrides):
-    return sample(
-        game_id,
-        behavior_search_backend="native-python",
-        behavior_value_model_backend="native-gbdt",
+    behavior = {
+        "behavior_search_backend": "native-python",
+        "behavior_value_model_backend": "native-gbdt",
+        "behavior_agent_id": "agent-a",
+        "behavior_opponent_id": "agent-b",
+        "behavior_personality": "balanced",
+        "behavior_selected_moves": ["skip"],
+        "behavior_completed_depth": 2,
+        "behavior_fallback": "none",
+        "behavior_timed_out": False,
         **overrides,
-    )
+    }
+    return sample(game_id, **behavior)
 
 
 class MergeValueDatasetsTests(unittest.TestCase):
@@ -103,15 +111,13 @@ class MergeValueDatasetsTests(unittest.TestCase):
         write_dataset(
             self_play,
             [
-                sample(
+                self_play_sample(
                     "generation-0001",
                     source="vercel_self_play",
                     generation_id="generation",
                     pair_id="generation-pair-0001",
                     code_version="commit-a",
                     behavior_value_model_checkpoint="checkpoint-a",
-                    behavior_search_backend="native-python",
-                    behavior_value_model_backend="native-gbdt",
                 )
             ],
             **RUNTIME_SCHEMA,
@@ -218,19 +224,15 @@ class MergeValueDatasetsTests(unittest.TestCase):
         write_dataset(
             self_play,
             [
-                sample(
+                self_play_sample(
                     "generation-0001",
                     **common,
                     behavior_value_model_checkpoint="checkpoint-a",
-                    behavior_search_backend="native-python",
-                    behavior_value_model_backend="native-gbdt",
                 ),
-                sample(
+                self_play_sample(
                     "generation-0002",
                     **common,
                     behavior_value_model_checkpoint="checkpoint-b",
-                    behavior_search_backend="native-python",
-                    behavior_value_model_backend="native-gbdt",
                 ),
             ],
             **RUNTIME_SCHEMA,
@@ -255,12 +257,12 @@ class MergeValueDatasetsTests(unittest.TestCase):
         write_dataset(
             self_play,
             [
-                sample(
+                self_play_sample(
                     "generation-0001",
                     **common,
                     behavior_search_backend="native-python",
                 ),
-                sample(
+                self_play_sample(
                     "generation-0002",
                     **common,
                     behavior_search_backend="pyodide",
@@ -269,6 +271,43 @@ class MergeValueDatasetsTests(unittest.TestCase):
             **RUNTIME_SCHEMA,
         )
         with self.assertRaisesRegex(ValueError, "search backend mismatch"):
+            merge_datasets(human, self_play, output, "commit-a", "checkpoint-a")
+
+    def test_rejects_shallow_or_unverified_behavior_telemetry(self):
+        temporary, human, self_play, output = self.paths()
+        self.addCleanup(temporary.cleanup)
+        write_dataset(human, [sample("human-game")])
+        common = {
+            "source": "vercel_self_play",
+            "generation_id": "generation",
+            "pair_id": "generation-pair-0001",
+            "code_version": "commit-a",
+            "behavior_value_model_checkpoint": "checkpoint-a",
+        }
+        write_dataset(
+            self_play,
+            [
+                self_play_sample(
+                    "generation-0001", behavior_completed_depth=1, **common
+                ),
+                self_play_sample("generation-0002", **common),
+            ],
+            **RUNTIME_SCHEMA,
+        )
+        with self.assertRaisesRegex(ValueError, "complete opponent reply"):
+            merge_datasets(human, self_play, output, "commit-a", "checkpoint-a")
+
+        write_dataset(
+            self_play,
+            [
+                self_play_sample(
+                    "generation-0001", behavior_fallback="seeded", **common
+                ),
+                self_play_sample("generation-0002", **common),
+            ],
+            **RUNTIME_SCHEMA,
+        )
+        with self.assertRaisesRegex(ValueError, "unverified behavior fallback"):
             merge_datasets(human, self_play, output, "commit-a", "checkpoint-a")
 
 

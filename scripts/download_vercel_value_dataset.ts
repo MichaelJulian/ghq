@@ -36,6 +36,29 @@ interface DurableTrainingSample {
   valueModelCheckpoint?: string;
   searchBackend?: "pyodide" | "native-python";
   searchValueModelBackend?: "typescript-callback" | "native-gbdt";
+  agentId?: string;
+  opponentId?: string;
+  personality?: string;
+  selectedMoves?: string[];
+  completedDepth?: number;
+  fallback?: "none" | "safe" | "seeded";
+  timedOut?: boolean;
+}
+
+function requireBehaviorQualityTelemetry(sample: DurableTrainingSample) {
+  if (
+    !sample.agentId ||
+    !sample.opponentId ||
+    !sample.personality ||
+    !Array.isArray(sample.selectedMoves) ||
+    !Number.isSafeInteger(sample.completedDepth) ||
+    !["none", "safe", "seeded"].includes(sample.fallback ?? "") ||
+    typeof sample.timedOut !== "boolean"
+  ) {
+    throw new Error(
+      `Missing behavior-quality telemetry in ${sample.gameId} turn ${sample.turnNumber}`
+    );
+  }
 }
 
 interface ExactHqAuditReport {
@@ -138,6 +161,13 @@ function persistedTrainingSamples(
           : game.blueValueModelCheckpoint,
       searchBackend: decision.searchBackend,
       searchValueModelBackend: decision.searchValueModelBackend,
+      agentId: decision.agentId,
+      opponentId: decision.opponentId,
+      personality: decision.personality,
+      selectedMoves: decision.selectedMoves,
+      completedDepth: decision.completedDepth,
+      fallback: decision.fallback,
+      timedOut: decision.timedOut,
     }));
 }
 
@@ -387,6 +417,9 @@ async function main() {
             }`
           );
         }
+        if (featureSchema === "v3") {
+          requireBehaviorQualityTelemetry(sample);
+        }
         if (
           featureSchema === "v1" &&
           sample.features.length !== VALUE_FEATURE_NAMES.length
@@ -463,6 +496,9 @@ async function main() {
           }`
         );
       }
+      if (featureSchema === "v3") {
+        requireBehaviorQualityTelemetry(sample);
+      }
       if (
         featureSchema === "v1" &&
         sample.features.length !== VALUE_FEATURE_NAMES.length
@@ -533,6 +569,7 @@ async function main() {
       paratrooper_policy_audit_required: true,
       zero_unverified_fallbacks_required: true,
       color_swap_integrity_verified: true,
+      behavior_quality_telemetry_required: featureSchema === "v3",
       exact_hq_audit_sha256: hqAuditSha256,
       exact_hq_audit_max_nodes: hqAudit.maxNodesPerAudit,
     })}\n`
@@ -596,6 +633,13 @@ async function main() {
           behavior_search_backend: sample.searchBackend ?? "unknown",
           behavior_value_model_backend:
             sample.searchValueModelBackend ?? "unknown",
+          behavior_agent_id: sample.agentId,
+          behavior_opponent_id: sample.opponentId,
+          behavior_personality: sample.personality,
+          behavior_selected_moves: sample.selectedMoves,
+          behavior_completed_depth: sample.completedDepth,
+          behavior_fallback: sample.fallback,
+          behavior_timed_out: sample.timedOut,
           created_at: record.createdAt,
           outcome_reason: "hq-capture",
           turn: sample.turnNumber,

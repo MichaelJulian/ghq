@@ -66,6 +66,7 @@ def validate_schema(
         "paratrooper_policy_audit_required",
         "zero_unverified_fallbacks_required",
         "color_swap_integrity_verified",
+        "behavior_quality_telemetry_required",
     ):
         if self_play_schema.get(field) is not True:
             raise ValueError(f"self-play dataset has not verified {field}")
@@ -153,6 +154,22 @@ def validate_self_play_samples(
                 f"expected {value_model_backend}, received "
                 f"{sample.get('behavior_value_model_backend') or 'missing'}"
             )
+        for field in (
+            "behavior_agent_id",
+            "behavior_opponent_id",
+            "behavior_personality",
+        ):
+            if not str(sample.get(field) or "").strip():
+                raise ValueError(f"self-play sample is missing {field}")
+        if not isinstance(sample.get("behavior_selected_moves"), list):
+            raise ValueError("self-play sample is missing behavior_selected_moves")
+        completed_depth = sample.get("behavior_completed_depth")
+        if not isinstance(completed_depth, int) or completed_depth < 2:
+            raise ValueError("self-play sample lacks a complete opponent reply")
+        if sample.get("behavior_fallback") not in ("none", "safe"):
+            raise ValueError("self-play sample has an unverified behavior fallback")
+        if not isinstance(sample.get("behavior_timed_out"), bool):
+            raise ValueError("self-play sample is missing behavior_timed_out")
         game_id = str(sample.get("game_id") or "").strip()
         pair_id = str(sample.get("pair_id") or "").strip()
         generation_id = str(sample.get("generation_id") or "").strip()
@@ -238,6 +255,7 @@ def merge_datasets(
         "paratrooper_policy_audit_required": True,
         "zero_unverified_fallbacks_required": True,
         "color_swap_integrity_verified": True,
+        "behavior_quality_telemetry_required": True,
         "exact_hq_audit_sha256": self_play_schema[
             "exact_hq_audit_sha256"
         ],

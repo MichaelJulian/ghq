@@ -118,6 +118,7 @@ def validate_self_play_dataset_boundary(
         "paratrooper_policy_audit_required",
         "zero_unverified_fallbacks_required",
         "color_swap_integrity_verified",
+        "behavior_quality_telemetry_required",
     ):
         if schema.get(field) is not True:
             raise ValueError(f"self-play dataset has not verified {field}")
@@ -165,6 +166,30 @@ def validate_self_play_dataset_boundary(
         if not game_id or not pair_id or not generation_id:
             raise ValueError(
                 "self-play rows require game, pair, and generation provenance"
+            )
+        for field in (
+            "behavior_agent_id",
+            "behavior_opponent_id",
+            "behavior_personality",
+        ):
+            if not str(row.get(field) or "").strip():
+                raise ValueError(f"self-play row {game_id} is missing {field}")
+        if not isinstance(row.get("behavior_selected_moves"), list):
+            raise ValueError(
+                f"self-play row {game_id} is missing behavior_selected_moves"
+            )
+        completed_depth = row.get("behavior_completed_depth")
+        if not isinstance(completed_depth, int) or completed_depth < 2:
+            raise ValueError(
+                f"self-play row {game_id} lacks a complete opponent reply"
+            )
+        if row.get("behavior_fallback") not in ("none", "safe"):
+            raise ValueError(
+                f"self-play row {game_id} has an unverified behavior fallback"
+            )
+        if not isinstance(row.get("behavior_timed_out"), bool):
+            raise ValueError(
+                f"self-play row {game_id} is missing behavior_timed_out"
             )
         prior_pair = pair_by_game.setdefault(game_id, pair_id)
         if prior_pair != pair_id:
@@ -354,6 +379,20 @@ def dataset_readiness_summary(
             "distinctTrajectories": len(self_play_units),
             "duplicateTrajectoryPairs": max(
                 0, len(self_play_pairs) - len(self_play_units)
+            ),
+            "samplesByFallback": dict(
+                Counter(
+                    str(row["behavior_fallback"])
+                    for row in self_play_rows
+                )
+            ),
+            "timedOutSamples": sum(
+                bool(row["behavior_timed_out"])
+                for row in self_play_rows
+            ),
+            "depthAtLeastThreeSamples": sum(
+                int(row["behavior_completed_depth"]) >= 3
+                for row in self_play_rows
             ),
         },
     }
