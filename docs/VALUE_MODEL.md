@@ -7,9 +7,10 @@ Python or a native machine-learning runtime.
 
 ## Data policy
 
-- Human training uses decisive HQ-capture and resignation games. The
-  experimental two-action self-play pipeline also admits repetition draws with
-  a neutral 0.5 target. Timeouts, no-progress stops, and max-turn games remain
+- Human training uses decisive HQ-capture and resignation games. The legacy
+  two-action experiment also admitted repetition draws with a neutral 0.5
+  target. Production three-action self-play training admits only quality-gated
+  HQ captures; timeouts, no-progress stops, repetitions, and max-turn games are
   excluded.
 - Undo/redo actions are resolved before replay.
 - Start-of-turn captures are restored from `historyLog`.
@@ -60,14 +61,35 @@ pnpm value:download:2a -- \
 The trainer represents each 0.5 target as half-weight win and loss observations,
 preserving the same exported tree format and TypeScript inference path.
 
-Three-action training downloads must pin both the exact search revision and the
-exact value-model checkpoint that generated the behavior policy:
+Three-action training must pin both the exact search revision and the exact
+value-model checkpoint that generated the behavior policy. It also requires an
+exhaustive HQ-loss audit, complete adjacent color-swapped pairs, complete
+paratrooper-policy telemetry, and zero unverified fallbacks. Download the
+completed games first so auditing and extraction do not depend on local Blob
+credentials:
 
 ```bash
+pnpm self-play:download -- \
+  --generation <generation-id> \
+  --output .data/<generation-id>.jsonl
+
+pnpm self-play:audit-hq -- \
+  --input .data/<generation-id>.jsonl \
+  --max-nodes 2000000 \
+  --output .data/<generation-id>-hq-audit.json \
+  --fail-on-avoidable \
+  --fail-on-inconclusive
+
 pnpm value:download:vercel -- \
-  --generation-prefix vercel-r3b3-example \
+  --generation-prefix <generation-id> \
+  --input .data/<generation-id>.jsonl \
+  --created-at <manifest-created-at-iso> \
   --code-version <full-git-sha> \
   --value-model-checkpoint <checkpoint-id> \
+  --search-backend native-python \
+  --value-model-backend native-gbdt \
+  --feature-schema v3 \
+  --hq-audit-report .data/<generation-id>-hq-audit.json \
   --output .data/value-selfplay.jsonl
 
 pnpm value:merge -- \
@@ -77,6 +99,12 @@ pnpm value:merge -- \
   --value-model-checkpoint <checkpoint-id> \
   --output .data/value-mixed.jsonl
 ```
+
+`--input` may be repeated when every cohort has the same search and behavior
+provenance and the audit report covers all of them. The trainer requires at
+least 30 independent audited color-swapped pairs from the self-play source
+before it will create train, calibration, validation, and test splits. Do not
+weaken that gate or train on a collection of unrelated search revisions.
 
 ## Personalities
 
@@ -145,7 +173,7 @@ Run `pnpm dev:bot-lab`, then open `http://localhost:3000/bot-lab` to use the
 dashboard locally.
 
 - Play the Bot uses the production interactive board against the same search
-  endpoint used by FEN analysis. The current experiment caps both sides at two
+  endpoint used by FEN analysis. Both sides use the production limit of three
   voluntary actions per turn.
 - Character Arena plays one or several complete player turns, preserves the
   serialized engine state between requests, and allows every resulting position
