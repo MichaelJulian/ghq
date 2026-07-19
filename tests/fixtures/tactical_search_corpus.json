@@ -250,6 +250,31 @@
         "noWorseThanBaselineCriticalExposure": true,
         "noWorseThanBaselineTwoTurnNetExchange": true
       }
+    },
+    {
+      "id": "dc3-clean-pair-turn-30-deadline-safe-bombardment",
+      "source": "Frozen clean color-swapped pair 0009/0010: under Vercel-equivalent throughput the selected continuation hung an artillery after a mandatory bombardment",
+      "fen": "qf1i1i1p/i1i1i1i1/1ir↓t↓1f2/2r↓h↘4/8/I1I1I1I1/1FT↑IH↑R↑1Q/I1R↑1IFIF R i b",
+      "turnNumber": 30,
+      "personality": "tactical_gambler",
+      "openingSeed": 2457339662,
+      "search": {
+        "timeMs": 2500,
+        "maxDepth": 2,
+        "beamWidth": 6,
+        "maxActions": 3
+      },
+      "acceptance": {
+        "requireFinalSafetyCertified": true,
+        "minimumCompletedDepth": 2,
+        "avoidImmediateHqLoss": true,
+        "maxCandidateForcedLoss": 0,
+        "maxCandidateCriticalExposure": 0,
+        "minimumTwoTurnNetExchange": 0,
+        "noWorseThanBaselineForcedLoss": true,
+        "noWorseThanBaselineCriticalExposure": true,
+        "noWorseThanBaselineTwoTurnNetExchange": true
+      }
     }
   ]
 }

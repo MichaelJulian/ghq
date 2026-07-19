@@ -7039,6 +7039,47 @@ def search(
 
     if not final_known_safe:
         restore_floor = certified_hq_survival_floor or certified_safety_floor
+        if restore_floor is None and proven_forced_mate_score is None:
+            # A mandatory bombardment followed by Skip can be the only cheap
+            # proof available after a slow worker exhausts minimax.  It is
+            # strategically quiet, but objectively preferable to returning a
+            # seed that the final probe has already shown hangs artillery.
+            # Certify this deterministic floor before accepting any assessed
+            # least-loss line; no voluntary paratrooper or filler action can
+            # enter it.
+            minimal_moves, minimal_board = deterministic_skip_turn(board)
+            minimal_policy = searcher.deadline_safe_turn_purpose_breakdown(
+                board,
+                minimal_board,
+                minimal_moves,
+                board.turn,
+                retrospective=False,
+            )
+            minimal_budget = remaining_overall_ms(final_safety_reserve_ms)
+            minimal_safety = (
+                bounded_seed_safety(
+                    board,
+                    minimal_board,
+                    personality,
+                    turn_number,
+                    beam_width,
+                    max_actions,
+                    minimal_budget,
+                    check_hq_combinations=True,
+                )
+                if minimal_budget >= 50
+                else None
+            )
+            if (
+                minimal_policy["paratrooper_mission_penalty"] <= 0.0
+                and minimal_safety is not None
+                and minimal_safety.tactically_safe
+            ):
+                restore_floor = CertifiedSafetyFloor(
+                    tuple(move.uci() for move in minimal_moves),
+                    searcher.quick_score(minimal_board),
+                    "deterministic_safe_skip",
+                )
         if restore_floor is None:
             # Root candidates exist only after assess_turn_safety completed.
             # Prefer the least exposed, strongest policy-clean proof when the
