@@ -56,6 +56,9 @@ describe("self-play search runtime summary", () => {
     guarded.searchTelemetry!.hqExactReturnProbeUsed = true;
     guarded.searchTelemetry!.tacticalReturnGuardUsed = true;
     guarded.searchTelemetry!.safeFallbackReplyVerified = true;
+    guarded.searchTelemetry!.seedReplyVerified = true;
+    guarded.searchTelemetry!.seedSafetyRetryUsed = true;
+    guarded.searchTelemetry!.seedSafetyRetryVerified = true;
     const summary = summarizeSearchRuntime([
       {
         decisions: [
@@ -85,6 +88,11 @@ describe("self-play search runtime summary", () => {
     expect(summary.tacticalReturnGuardRate).toBeCloseTo(1 / 3);
     expect(summary.safeFallbackReplyVerifiedDecisions).toBe(1);
     expect(summary.safeFallbackReplyVerifiedRate).toBeCloseTo(1 / 3);
+    expect(summary.seedReplyVerifiedDecisions).toBe(1);
+    expect(summary.seedReplyVerifiedRate).toBeCloseTo(1 / 3);
+    expect(summary.seedSafetyRetryDecisions).toBe(1);
+    expect(summary.seedSafetyRetryVerifiedDecisions).toBe(1);
+    expect(summary.seedSafetyRetryVerificationRate).toBe(1);
   });
 
   it("returns finite zero rates for an empty generation", () => {
@@ -103,6 +111,11 @@ describe("self-play search runtime summary", () => {
       tacticalReturnGuardRate: 0,
       safeFallbackReplyVerifiedDecisions: 0,
       safeFallbackReplyVerifiedRate: 0,
+      seedReplyVerifiedDecisions: 0,
+      seedReplyVerifiedRate: 0,
+      seedSafetyRetryDecisions: 0,
+      seedSafetyRetryVerifiedDecisions: 0,
+      seedSafetyRetryVerificationRate: 0,
     });
   });
 });

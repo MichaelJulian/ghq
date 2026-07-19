@@ -18,6 +18,11 @@ export interface SearchRuntimeSummary {
   tacticalReturnGuardRate: number;
   safeFallbackReplyVerifiedDecisions: number;
   safeFallbackReplyVerifiedRate: number;
+  seedReplyVerifiedDecisions: number;
+  seedReplyVerifiedRate: number;
+  seedSafetyRetryDecisions: number;
+  seedSafetyRetryVerifiedDecisions: number;
+  seedSafetyRetryVerificationRate: number;
 }
 
 function increment(counts: Record<string, number>, key: string): void {
@@ -42,6 +47,9 @@ export function summarizeSearchRuntime(
   let hqExactReturnProbeDecisions = 0;
   let tacticalReturnGuardDecisions = 0;
   let safeFallbackReplyVerifiedDecisions = 0;
+  let seedReplyVerifiedDecisions = 0;
+  let seedSafetyRetryDecisions = 0;
+  let seedSafetyRetryVerifiedDecisions = 0;
 
   for (const decision of decisions as DurableSelfPlayDecision[]) {
     increment(backendCounts, decision.searchBackend ?? "unknown");
@@ -67,6 +75,15 @@ export function summarizeSearchRuntime(
       if (decision.searchTelemetry.safeFallbackReplyVerified) {
         safeFallbackReplyVerifiedDecisions++;
       }
+      if (decision.searchTelemetry.seedReplyVerified) {
+        seedReplyVerifiedDecisions++;
+      }
+      if (decision.searchTelemetry.seedSafetyRetryUsed) {
+        seedSafetyRetryDecisions++;
+        if (decision.searchTelemetry.seedSafetyRetryVerified) {
+          seedSafetyRetryVerifiedDecisions++;
+        }
+      }
     }
   }
 
@@ -89,6 +106,13 @@ export function summarizeSearchRuntime(
     safeFallbackReplyVerifiedDecisions,
     safeFallbackReplyVerifiedRate: count
       ? safeFallbackReplyVerifiedDecisions / count
+      : 0,
+    seedReplyVerifiedDecisions,
+    seedReplyVerifiedRate: count ? seedReplyVerifiedDecisions / count : 0,
+    seedSafetyRetryDecisions,
+    seedSafetyRetryVerifiedDecisions,
+    seedSafetyRetryVerificationRate: seedSafetyRetryDecisions
+      ? seedSafetyRetryVerifiedDecisions / seedSafetyRetryDecisions
       : 0,
   };
 }
