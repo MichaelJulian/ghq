@@ -47,6 +47,9 @@ class ProgressStructureAnalysisTests(unittest.TestCase):
         )
 
         self.assertEqual(report["snapshotGames"], 0)
+        self.assertEqual(report["uniqueSnapshotPositions"], 0)
+        self.assertEqual(report["maxPositionMultiplicity"], 0)
+        self.assertEqual(report["positionMultiplicity"], [])
         self.assertEqual(report["sidePositions"], 0)
         self.assertEqual(report["metrics"], {})
 

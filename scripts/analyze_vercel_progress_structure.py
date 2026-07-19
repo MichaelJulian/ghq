@@ -155,6 +155,10 @@ def summarize_metric_rows(rows: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
 
 def analyze_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
     snapshots = summary.get("progress", {}).get("snapshots", [])
+    position_counts: Dict[str, int] = {}
+    for snapshot in snapshots:
+        fen = str(snapshot["currentFen"])
+        position_counts[fen] = position_counts.get(fen, 0) + 1
     rows = [
         row
         for snapshot in snapshots
@@ -164,6 +168,11 @@ def analyze_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
         "format": "ghq-progress-structure-v1",
         "generationId": summary.get("generationId"),
         "snapshotGames": len(snapshots),
+        "uniqueSnapshotPositions": len(position_counts),
+        "maxPositionMultiplicity": max(position_counts.values(), default=0),
+        "positionMultiplicity": sorted(
+            position_counts.values(), reverse=True
+        ),
         "completedTurns": sorted(
             {int(snapshot["completedTurns"]) for snapshot in snapshots}
         ),
