@@ -60,6 +60,19 @@ def validate_schema(
     for field in ("self_play_search_backend", "self_play_value_model_backend"):
         if not str(self_play_schema.get(field) or "").strip():
             raise ValueError(f"self-play dataset is missing {field}")
+    for field in (
+        "paired_complete_only",
+        "exact_hq_audit_required",
+        "paratrooper_policy_audit_required",
+        "zero_unverified_fallbacks_required",
+        "color_swap_integrity_verified",
+    ):
+        if self_play_schema.get(field) is not True:
+            raise ValueError(f"self-play dataset has not verified {field}")
+    if not str(self_play_schema.get("exact_hq_audit_sha256") or "").strip():
+        raise ValueError("self-play dataset is missing exact_hq_audit_sha256")
+    if int(self_play_schema.get("exact_hq_audit_max_nodes") or 0) < 100_000:
+        raise ValueError("self-play dataset has an insufficient exact HQ audit")
     return list(human_schema["feature_names"])
 
 
@@ -221,6 +234,16 @@ def merge_datasets(
             "self_play_value_model_backend"
         ],
         "paired_complete_only": True,
+        "exact_hq_audit_required": True,
+        "paratrooper_policy_audit_required": True,
+        "zero_unverified_fallbacks_required": True,
+        "color_swap_integrity_verified": True,
+        "exact_hq_audit_sha256": self_play_schema[
+            "exact_hq_audit_sha256"
+        ],
+        "exact_hq_audit_max_nodes": self_play_schema[
+            "exact_hq_audit_max_nodes"
+        ],
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as handle:

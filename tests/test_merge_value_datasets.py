@@ -10,6 +10,13 @@ FEATURE_NAMES = ["one", "two"]
 RUNTIME_SCHEMA = {
     "self_play_search_backend": "native-python",
     "self_play_value_model_backend": "native-gbdt",
+    "paired_complete_only": True,
+    "exact_hq_audit_required": True,
+    "paratrooper_policy_audit_required": True,
+    "zero_unverified_fallbacks_required": True,
+    "color_swap_integrity_verified": True,
+    "exact_hq_audit_sha256": "audit-sha256",
+    "exact_hq_audit_max_nodes": 2_000_000,
 }
 
 
@@ -111,6 +118,35 @@ class MergeValueDatasetsTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "incomplete color-swapped pairs"):
             merge_datasets(human, self_play, output, "commit-a", "checkpoint-a")
+
+    def test_rejects_a_dataset_without_audited_admission_gates(self):
+        temporary, human, self_play, output = self.paths()
+        self.addCleanup(temporary.cleanup)
+        write_dataset(human, [sample("human-game")])
+        common = {
+            "source": "vercel_self_play",
+            "generation_id": "generation",
+            "pair_id": "generation-pair-0001",
+            "code_version": "commit-a",
+            "behavior_value_model_checkpoint": "checkpoint-a",
+        }
+        incomplete_schema = dict(RUNTIME_SCHEMA)
+        incomplete_schema.pop("color_swap_integrity_verified")
+        write_dataset(
+            self_play,
+            [
+                self_play_sample("generation-0001", **common),
+                self_play_sample("generation-0002", **common),
+            ],
+            **incomplete_schema,
+        )
+
+        with self.assertRaisesRegex(
+            ValueError, "color_swap_integrity_verified"
+        ):
+            merge_datasets(
+                human, self_play, output, "commit-a", "checkpoint-a"
+            )
 
     def test_rejects_schema_or_revision_mismatch(self):
         temporary, human, self_play, output = self.paths()

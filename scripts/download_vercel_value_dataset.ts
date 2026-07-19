@@ -532,6 +532,7 @@ async function main() {
       exact_hq_audit_required: true,
       paratrooper_policy_audit_required: true,
       zero_unverified_fallbacks_required: true,
+      color_swap_integrity_verified: true,
       exact_hq_audit_sha256: hqAuditSha256,
       exact_hq_audit_max_nodes: hqAudit.maxNodesPerAudit,
     })}\n`
