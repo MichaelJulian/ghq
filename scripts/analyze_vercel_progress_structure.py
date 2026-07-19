@@ -45,6 +45,12 @@ DANGER_METRICS = (
 )
 
 GAME_NUMBER_PATTERN = re.compile(r"^(.*)-(\d+)$")
+PIECE_VALUE_BY_NAME = {
+    str(engine.PIECE_NAMES[piece_type]): float(
+        ghq_ai.PIECE_VALUES[piece_type]
+    )
+    for piece_type in ghq_ai.NON_HQ_TYPES
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -141,6 +147,13 @@ def piece_inventory(board: engine.BaseBoard, color: bool) -> Dict[str, int]:
         )
         for piece_type in ghq_ai.NON_HQ_TYPES
     }
+
+
+def inventory_value(inventory: Dict[str, Any]) -> float:
+    return sum(
+        float(count) * PIECE_VALUE_BY_NAME.get(str(piece_type), 0.0)
+        for piece_type, count in inventory.items()
+    )
 
 
 def forced_capture_targets(
@@ -446,6 +459,48 @@ def compare_checkpoint_reports(
             )
             for piece_type in target_types
         }
+        opponent_key = (key[0], "BLUE" if key[1] == "RED" else "RED")
+        prior_opponent = before_positions.get(opponent_key)
+        current_opponent = after_positions.get(opponent_key)
+        prior_own_value = inventory_value(
+            dict(prior.get("piece_inventory") or {})
+        )
+        current_own_value = (
+            inventory_value(dict(current.get("piece_inventory") or {}))
+            if current is not None
+            else None
+        )
+        prior_opponent_value = (
+            inventory_value(
+                dict(prior_opponent.get("piece_inventory") or {})
+            )
+            if prior_opponent is not None
+            else None
+        )
+        current_opponent_value = (
+            inventory_value(
+                dict(current_opponent.get("piece_inventory") or {})
+            )
+            if current_opponent is not None
+            else None
+        )
+        own_material_lost = (
+            max(0.0, prior_own_value - current_own_value)
+            if current_own_value is not None
+            else None
+        )
+        opponent_material_lost = (
+            max(0.0, prior_opponent_value - current_opponent_value)
+            if prior_opponent_value is not None
+            and current_opponent_value is not None
+            else None
+        )
+        net_material_exchange = (
+            opponent_material_lost - own_material_lost
+            if own_material_lost is not None
+            and opponent_material_lost is not None
+            else None
+        )
         repair_outcomes.append(
             {
                 "gameId": key[0],
@@ -462,6 +517,20 @@ def compare_checkpoint_reports(
                     if retained_by_type
                     else None
                 ),
+                "ownMaterialLost": own_material_lost,
+                "opponentMaterialLost": opponent_material_lost,
+                "netMaterialExchange": net_material_exchange,
+                "materialExchangeAssessment": (
+                    "favorable"
+                    if net_material_exchange is not None
+                    and net_material_exchange > 0.0
+                    else "unfavorable"
+                    if net_material_exchange is not None
+                    and net_material_exchange < 0.0
+                    else "even"
+                    if net_material_exchange == 0.0
+                    else None
+                ),
             }
         )
     return {
@@ -476,6 +545,14 @@ def compare_checkpoint_reports(
         ),
         "threatenedInventoryRetained": sum(
             outcome["allThreatenedInventoryRetained"] is True
+            for outcome in repair_outcomes
+        ),
+        "favorableMaterialExchanges": sum(
+            outcome["materialExchangeAssessment"] == "favorable"
+            for outcome in repair_outcomes
+        ),
+        "unfavorableMaterialExchanges": sum(
+            outcome["materialExchangeAssessment"] == "unfavorable"
             for outcome in repair_outcomes
         ),
         "repairOutcomes": repair_outcomes,

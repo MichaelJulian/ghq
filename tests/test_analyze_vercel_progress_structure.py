@@ -126,6 +126,14 @@ class ProgressStructureAnalysisTests(unittest.TestCase):
                     "side": "RED",
                     "to_move": True,
                     "tactical_risk_value": 5.0,
+                    "piece_inventory": {"ARTILLERY": 1},
+                },
+                {
+                    "gameId": "game-1",
+                    "side": "BLUE",
+                    "to_move": False,
+                    "tactical_risk_value": 0.0,
+                    "piece_inventory": {"ARMORED_ARTILLERY": 1},
                 }
             ],
         }
@@ -150,6 +158,14 @@ class ProgressStructureAnalysisTests(unittest.TestCase):
                     "side": "RED",
                     "to_move": True,
                     "tactical_risk_value": 0.0,
+                    "piece_inventory": {},
+                },
+                {
+                    "gameId": "game-1",
+                    "side": "BLUE",
+                    "to_move": False,
+                    "tactical_risk_value": 0.0,
+                    "piece_inventory": {},
                 }
             ],
         }
@@ -167,6 +183,17 @@ class ProgressStructureAnalysisTests(unittest.TestCase):
             comparison["sameSideRiskFreeAtLaterCheckpoint"], 1
         )
         self.assertEqual(comparison["threatenedInventoryRetained"], 0)
+        self.assertEqual(comparison["favorableMaterialExchanges"], 1)
+        self.assertEqual(comparison["unfavorableMaterialExchanges"], 0)
+        self.assertEqual(
+            comparison["repairOutcomes"][0]["ownMaterialLost"], 3.0
+        )
+        self.assertEqual(
+            comparison["repairOutcomes"][0]["opponentMaterialLost"], 5.0
+        )
+        self.assertEqual(
+            comparison["repairOutcomes"][0]["netMaterialExchange"], 2.0
+        )
         self.assertEqual(comparison["structuralDebtPositionDelta"], -1)
         self.assertEqual(
             comparison["immediateForcedCapturePositionDelta"], -1

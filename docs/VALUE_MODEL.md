@@ -259,3 +259,10 @@ while swapping which color receives the challenger. `--max-turns` is the number
 of rollout turns after that starting position. This remains a screening tool:
 its quality gate rejects seeded or poorly verified searches, and a favorable
 result still requires a larger untouched promotion arena.
+
+For live generation checkpoints, `self-play:analyze-progress` distinguishes
+structural debt, repair obligations, and immediate capture threats. When a
+previous checkpoint is supplied, repair outcomes include threatened-piece
+survival plus own material lost, opponent material lost, and the net exchange.
+Use the exchange result to avoid labeling a deliberate trade-up as a hanging
+piece merely because the originally threatened unit disappeared.
