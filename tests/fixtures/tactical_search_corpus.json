@@ -1,0 +1,176 @@
+{
+  "format": "ghq-tactical-search-corpus-v1",
+  "name": "observed-self-play-safety-regressions-v1",
+  "baseline": {
+    "productionDeployment": "a043c04",
+    "url": "https://ghq-one.vercel.app"
+  },
+  "positions": [
+    {
+      "id": "live-armored-infantry-suicide-turn-28",
+      "source": "Human-reviewed game: BLUE must not play f5h3 into sbb5/sfh3",
+      "fen": "qi2iii1/ir↓i5/4r↓3/1i3f2/1IR↑H↑4/1R↑2R↑1I1/3I3I/2P1I2Q FFF i b",
+      "turnNumber": 28,
+      "personality": "para_specialist",
+      "openingSeed": 0,
+      "search": {
+        "timeMs": 50,
+        "maxDepth": 2,
+        "beamWidth": 16,
+        "maxActions": 3
+      },
+      "acceptance": {
+        "forbiddenMoves": [
+          "f5h3"
+        ],
+        "requireFinalSafetyCertified": true,
+        "minimumCompletedDepth": 2,
+        "avoidImmediateHqLoss": true,
+        "maxCandidateForcedLoss": 0,
+        "noWorseThanBaselineForcedLoss": true,
+        "noWorseThanBaselineCriticalExposure": true
+      }
+    },
+    {
+      "id": "dc3-game-0002-turn-46-unverified-fallback",
+      "source": "Vercel generation vercel-r3b3-6a5cd039-mrrtvz19; quarantined turn-46 fallback",
+      "fen": "qf1i1ip1/it↓ih↓i1r↓i/1ir↓2ff1/r↓3i3/5F1R↑/2I1I1I1/IFR↑IH↑IT↑I/1PI1F1R↑Q - - b",
+      "turnNumber": 46,
+      "personality": "fortress",
+      "openingSeed": 4031290020,
+      "search": {
+        "timeMs": 1000,
+        "maxDepth": 2,
+        "beamWidth": 6,
+        "maxActions": 3
+      },
+      "acceptance": {
+        "requireFinalSafetyCertified": true,
+        "minimumCompletedDepth": 2,
+        "avoidImmediateHqLoss": true,
+        "maxCandidateForcedLoss": 0,
+        "maxCandidateCriticalExposure": 0,
+        "noWorseThanBaselineForcedLoss": true,
+        "noWorseThanBaselineCriticalExposure": true
+      }
+    },
+    {
+      "id": "dc3-game-0006-turn-53-unverified-fallback",
+      "source": "Vercel generation vercel-r3b3-6a5cd039-mrrtvz19; quarantined turn-53 fallback",
+      "fen": "3i1i1p/1qf1f1i1/1i1t↓1h↓1r↓/i7/1FI5/I2FH↑1R↑1/T←4IR↑I/1P2F1R↑Q - - r",
+      "turnNumber": 53,
+      "personality": "battery_commander",
+      "openingSeed": 4229967738,
+      "search": {
+        "timeMs": 1000,
+        "maxDepth": 2,
+        "beamWidth": 6,
+        "maxActions": 3
+      },
+      "acceptance": {
+        "requireFinalSafetyCertified": true,
+        "avoidImmediateHqLoss": true,
+        "maxCandidateForcedLoss": 0,
+        "maxCandidateCriticalExposure": 0,
+        "noWorseThanBaselineForcedLoss": true,
+        "noWorseThanBaselineCriticalExposure": true
+      }
+    },
+    {
+      "id": "dc3-game-0009-turn-61-hq-threat",
+      "source": "Vercel generation vercel-r3b3-6a5cd039-mrrtvz19; RED begins with forced HQ exposure 100",
+      "fen": "q2i1i1p/4i3/i7/1h↓6/4i3/4Ir↓2/8/2H↑R↑FQ2 - - r",
+      "turnNumber": 61,
+      "personality": "para_specialist",
+      "openingSeed": 133678160,
+      "search": {
+        "timeMs": 20000,
+        "maxDepth": 2,
+        "beamWidth": 6,
+        "maxActions": 3
+      },
+      "acceptance": {
+        "requireFinalSafetyCertified": true,
+        "minimumCompletedDepth": 2,
+        "avoidImmediateHqLoss": true,
+        "maxCandidateForcedLoss": 0,
+        "maxCandidateCriticalExposure": 6,
+        "noWorseThanBaselineForcedLoss": true,
+        "noWorseThanBaselineCriticalExposure": true
+      }
+    },
+    {
+      "id": "dc3-game-0012-turn-61-material-danger",
+      "source": "Vercel generation vercel-r3b3-6a5cd039-mrrtvz19; RED begins with forced material loss four",
+      "fen": "qf1pi3/2i1i3/1t↓1r↓2i1/i1r↓h↓4/4i1i1/I2FIR↑2/1F1I1PI1/5IR↑Q - - r",
+      "turnNumber": 61,
+      "personality": "balanced",
+      "openingSeed": 1784467513,
+      "search": {
+        "timeMs": 20000,
+        "maxDepth": 2,
+        "beamWidth": 6,
+        "maxActions": 3
+      },
+      "acceptance": {
+        "requireFinalSafetyCertified": true,
+        "minimumCompletedDepth": 2,
+        "avoidImmediateHqLoss": true,
+        "maxCandidateForcedLoss": 1,
+        "maxCandidateCriticalExposure": 1,
+        "noWorseThanBaselineForcedLoss": true,
+        "noWorseThanBaselineCriticalExposure": true
+      }
+    },
+    {
+      "id": "ede-game-0001-turn-34-depth-two-collapse",
+      "source": "Completed self-play swing: historical sbd3/g6g5/skip lost net ten material on the immediate reply",
+      "fen": "2ir↓1i2/qi1r↓it↓ir↓/5fh↙f/1R↑2R↑3/5R↑2/1T↑H↑I1I1I/1FI1I1I1/F2I1F1Q IP p b",
+      "turnNumber": 34,
+      "personality": "fortress",
+      "openingSeed": 4266056328,
+      "search": {
+        "timeMs": 20000,
+        "maxDepth": 2,
+        "beamWidth": 6,
+        "maxActions": 3
+      },
+      "acceptance": {
+        "requireFinalSafetyCertified": true,
+        "minimumCompletedDepth": 2,
+        "avoidImmediateHqLoss": true,
+        "maxCandidateForcedLoss": 2,
+        "maxCandidateCriticalExposure": 2,
+        "minimumTwoTurnNetExchange": -1,
+        "noWorseThanBaselineForcedLoss": true,
+        "noWorseThanBaselineCriticalExposure": true,
+        "noWorseThanBaselineTwoTurnNetExchange": true
+      }
+    },
+    {
+      "id": "dc3-game-0011-turn-71-hq-and-heavy-guns",
+      "source": "Vercel generation vercel-r3b3-6a5cd039-mrrtvz19; RED begins with forced HQ plus heavy-artillery exposure 106",
+      "fen": "qi3fp1/2i1i1i1/8/2t↓5/4I2h↓/R↑1H↗2R↑I1/1I3I2/4F1R↑Q - - r",
+      "turnNumber": 71,
+      "personality": "tactical_gambler",
+      "openingSeed": 2380500667,
+      "search": {
+        "timeMs": 20000,
+        "maxDepth": 2,
+        "beamWidth": 6,
+        "maxActions": 3
+      },
+      "acceptance": {
+        "requireFinalSafetyCertified": true,
+        "minimumCompletedDepth": 2,
+        "avoidImmediateHqLoss": true,
+        "maxCandidateForcedLoss": 0,
+        "maxCandidateCriticalExposure": 6,
+        "minimumTwoTurnNetExchange": 11,
+        "noWorseThanBaselineForcedLoss": true,
+        "noWorseThanBaselineCriticalExposure": true,
+        "noWorseThanBaselineTwoTurnNetExchange": true
+      }
+    }
+  ]
+}

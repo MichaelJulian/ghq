@@ -230,6 +230,35 @@ the next arena turn so draw offers and other state not represented by FEN are
 preserved. Recommendations are labeled `best found` unless the requested search
 horizon was exhaustive.
 
+## Search-checkpoint tactical gate
+
+Before replacing the production search code, compare its complete API bundle
+against the candidate on the human-reviewed tactical corpus. Each bundle runs
+in a separate interpreter, so imports and model artifacts cannot leak between
+checkpoints:
+
+```bash
+pnpm search:checkpoint-evaluate \
+  --baseline-api-dir /tmp/ghq-production/api \
+  --candidate-api-dir api \
+  --corpus tests/fixtures/tactical_search_corpus.json \
+  --output .data/search-checkpoint-evaluation.json
+```
+
+The engine, value-runtime, and value-model SHA-256 fingerprints must match
+between bundles; only the search implementation is allowed to differ. This
+prevents a model or rules change from being misreported as a search-code win.
+The gate replays every returned move with the current production rules and
+measures immediate HQ loss, forced material loss, and critical exposure for
+the mover. When depth two completed, it also replays the full opponent reply
+and measures the resulting two-turn net material exchange. Per-position limits
+encode the actual failure that created the regression. A candidate is eligible
+for a paired arena only when every position passes its invariant and neither
+forced loss, critical exposure, nor reply exchange regresses relative to the
+frozen baseline. Final-safety certification is required separately from search
+depth: a deep line can still be quarantined if the final serialized turn failed
+its objective certificate.
+
 ## Native candidate screening
 
 Before spending a durable Vercel arena on a value-model challenger, screen it
