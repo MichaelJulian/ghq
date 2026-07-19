@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it } from "@jest/globals";
 import {
   persistSelfPlayProgress,
+  selfPlayGamePathname,
   SELF_PLAY_PROGRESS_PUT_OPTIONS,
   selfPlayProgressPathname,
   type SelfPlayProgressSnapshot,
@@ -55,6 +56,17 @@ describe("self-play progress storage", () => {
       allowOverwrite: true,
       contentType: "application/json",
     });
+  });
+
+  it("builds a bounded game artifact path inside its generation", () => {
+    expect(
+      selfPlayGamePathname("generation-1", "generation-1-0007")
+    ).toBe(
+      "self-play/generations/generation-1/games/generation-1-0007.json"
+    );
+    expect(() =>
+      selfPlayGamePathname("generation-1", "another-generation-0007")
+    ).toThrow("does not belong to generation");
   });
 
   it("does not attempt a write when Blob storage is unavailable", async () => {

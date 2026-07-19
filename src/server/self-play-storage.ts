@@ -124,6 +124,18 @@ export function selfPlayProgressPathname(
   )}/progress/${safeSegment(gameId)}.json`;
 }
 
+export function selfPlayGamePathname(
+  generationId: string,
+  gameId: string
+): string {
+  const safeGenerationId = safeSegment(generationId);
+  const safeGameId = safeSegment(gameId);
+  if (!safeGameId.startsWith(`${safeGenerationId}-`)) {
+    throw new Error("Self-play game does not belong to generation");
+  }
+  return `${SELF_PLAY_BLOB_PREFIX}${safeGenerationId}/games/${safeGameId}.json`;
+}
+
 export const SELF_PLAY_PROGRESS_PUT_OPTIONS = {
   access: "private" as const,
   addRandomSuffix: false,
@@ -327,4 +339,17 @@ export async function readPersistedSelfPlayGames<T>(
   return readPersistedJsonArtifacts<T>(
     `${SELF_PLAY_BLOB_PREFIX}${generationId}/games/`
   );
+}
+
+export async function readPersistedSelfPlayGame<T>(
+  generationId: string,
+  gameId: string
+): Promise<T | undefined> {
+  if (!selfPlayStorageConfigured()) return undefined;
+  const response = await get(selfPlayGamePathname(generationId, gameId), {
+    access: "private",
+    useCache: false,
+  });
+  if (!response?.stream || response.statusCode !== 200) return undefined;
+  return (await new Response(response.stream).json()) as T;
 }

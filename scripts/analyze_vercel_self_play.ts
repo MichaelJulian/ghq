@@ -2,7 +2,7 @@
 /** Summarize selected persisted Vercel self-play generations. */
 
 import "dotenv/config";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { get, list, type ListBlobResultBlob } from "@vercel/blob";
 
 import {
@@ -206,18 +206,40 @@ function summarizeTacticalPatterns<
 }
 
 async function main() {
-  const generationIds = argumentsFor("--generation");
-  if (!generationIds.length) {
-    throw new Error("Pass at least one --generation <generation-id>");
+  const requestedGenerationIds = argumentsFor("--generation");
+  const inputPaths = argumentsFor("--input");
+  if (!requestedGenerationIds.length && !inputPaths.length) {
+    throw new Error(
+      "Pass --generation <generation-id> or --input <downloaded-games.jsonl>"
+    );
   }
 
-  const blobs = (await Promise.all(generationIds.map(gameBlobs))).flat();
   const games: DurableSelfPlayGameResult[] = [];
+  for (const inputPath of inputPaths) {
+    const lines = (await readFile(inputPath, "utf8"))
+      .split(/\r?\n/)
+      .filter(Boolean);
+    games.push(
+      ...lines.map(
+        (line) => JSON.parse(line) as DurableSelfPlayGameResult
+      )
+    );
+  }
+  const blobs = (
+    await Promise.all(requestedGenerationIds.map(gameBlobs))
+  ).flat();
   for (let index = 0; index < blobs.length; index += 12) {
     games.push(
       ...(await Promise.all(blobs.slice(index, index + 12).map(readGame)))
     );
   }
+  if (!games.length) throw new Error("No completed self-play games found");
+  const generationIds = [
+    ...new Set([
+      ...requestedGenerationIds,
+      ...games.map((game) => game.generationId),
+    ]),
+  ].sort();
 
   const outcomes: Record<string, number> = {};
   const terminations: Record<string, number> = {};
