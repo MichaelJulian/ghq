@@ -303,7 +303,7 @@ After downloading completed durable games, replay every recorded turn and rank
 the positions that preceded the largest net material losses:
 
 ```bash
-pnpm self-play:analyze-swings -- \
+pnpm self-play:analyze-swings \
   --input .data/<generation-id>.jsonl \
   --windows 2,4,6,10 \
   --top 10 \
