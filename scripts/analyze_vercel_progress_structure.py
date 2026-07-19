@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import statistics
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
@@ -39,6 +40,8 @@ DANGER_METRICS = (
     "infantry_isolation_penalty",
     "airborne_survival_penalty",
 )
+
+GAME_NUMBER_PATTERN = re.compile(r"^(.*)-(\d+)$")
 
 
 def parse_args() -> argparse.Namespace:
@@ -153,6 +156,50 @@ def summarize_metric_rows(rows: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def summarize_pair_diversity(
+    snapshots: Iterable[Dict[str, Any]],
+) -> Dict[str, Any]:
+    positions_by_pair: Dict[str, List[str]] = {}
+    unpaired_games = 0
+    for snapshot in snapshots:
+        game_id = str(snapshot["gameId"])
+        match = GAME_NUMBER_PATTERN.match(game_id)
+        if match is None:
+            unpaired_games += 1
+            continue
+        game_number = int(match.group(2))
+        if game_number < 1:
+            unpaired_games += 1
+            continue
+        pair_number = (game_number - 1) // 2 + 1
+        pair_id = f"{match.group(1)}-pair-{pair_number}"
+        positions_by_pair.setdefault(pair_id, []).append(
+            str(snapshot["currentFen"])
+        )
+    complete_signatures = [
+        tuple(sorted(positions))
+        for positions in positions_by_pair.values()
+        if len(positions) == 2
+    ]
+    signature_counts: Dict[tuple[str, ...], int] = {}
+    for signature in complete_signatures:
+        signature_counts[signature] = signature_counts.get(signature, 0) + 1
+    return {
+        "completeColorSwapPairs": len(complete_signatures),
+        "incompleteColorSwapPairs": sum(
+            len(positions) != 2 for positions in positions_by_pair.values()
+        ),
+        "unpairedSnapshotGames": unpaired_games,
+        "uniquePairTrajectories": len(signature_counts),
+        "maxPairTrajectoryMultiplicity": max(
+            signature_counts.values(), default=0
+        ),
+        "pairTrajectoryMultiplicity": sorted(
+            signature_counts.values(), reverse=True
+        ),
+    }
+
+
 def analyze_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
     snapshots = summary.get("progress", {}).get("snapshots", [])
     position_counts: Dict[str, int] = {}
@@ -173,6 +220,7 @@ def analyze_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
         "positionMultiplicity": sorted(
             position_counts.values(), reverse=True
         ),
+        "pairDiversity": summarize_pair_diversity(snapshots),
         "completedTurns": sorted(
             {int(snapshot["completedTurns"]) for snapshot in snapshots}
         ),
