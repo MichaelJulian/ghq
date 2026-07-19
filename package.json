@@ -14,6 +14,7 @@
     "test:watch": "jest --watch",
     "value:positions": "python3 scripts/extract_value_positions.py",
     "value:features": "tsx scripts/build_value_dataset.ts",
+    "value:inspect": ".venv/bin/python scripts/inspect_value_dataset.py",
     "value:train": ".venv/bin/python scripts/train_value_model.py",
     "value:train:counterfactual": ".venv/bin/python scripts/train_counterfactual_policy.py",
     "value:train:pairwise": ".venv/bin/python scripts/train_pairwise_tree_correction.py",

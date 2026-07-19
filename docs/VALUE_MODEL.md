@@ -32,15 +32,15 @@ Training is an offline build step. Runtime inference remains Vercel-compatible.
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-train.txt
 
-pnpm value:positions -- \
+pnpm value:positions \
   --games-csv /path/to/Games_rows.csv \
   --output .data/value-positions.jsonl
 
-pnpm value:features -- \
+pnpm value:features \
   --positions .data/value-positions.jsonl \
   --output .data/value-features.jsonl
 
-pnpm value:train -- \
+pnpm value:train \
   --dataset .data/value-features.jsonl \
   --output src/game/value-model/model.generated.json \
   --report .data/value-model-report.json
@@ -53,7 +53,7 @@ position format and reuse this trainer without changing production inference.
 Two-action Vercel games can be extracted directly from private Blob storage:
 
 ```bash
-pnpm value:download:2a -- \
+pnpm value:download:2a \
   --generation-prefix vercel-r2b2- \
   --output .data/value-2a.jsonl
 ```
@@ -69,18 +69,18 @@ completed games first so auditing and extraction do not depend on local Blob
 credentials:
 
 ```bash
-pnpm self-play:download -- \
+pnpm self-play:download \
   --generation <generation-id> \
   --output .data/<generation-id>.jsonl
 
-pnpm self-play:audit-hq -- \
+pnpm self-play:audit-hq \
   --input .data/<generation-id>.jsonl \
   --max-nodes 2000000 \
   --output .data/<generation-id>-hq-audit.json \
   --fail-on-avoidable \
   --fail-on-inconclusive
 
-pnpm value:download:vercel -- \
+pnpm value:download:vercel \
   --generation-prefix <generation-id> \
   --input .data/<generation-id>.jsonl \
   --created-at <manifest-created-at-iso> \
@@ -92,12 +92,16 @@ pnpm value:download:vercel -- \
   --hq-audit-report .data/<generation-id>-hq-audit.json \
   --output .data/value-selfplay.jsonl
 
-pnpm value:merge -- \
+pnpm value:merge \
   --human .data/value-features.jsonl \
   --self-play .data/value-selfplay.jsonl \
   --code-version <full-git-sha> \
   --value-model-checkpoint <checkpoint-id> \
   --output .data/value-mixed.jsonl
+
+pnpm value:inspect \
+  --dataset .data/value-mixed.jsonl \
+  --output .data/value-readiness.json
 ```
 
 `--input` may be repeated when every cohort has the same search and behavior
@@ -112,6 +116,9 @@ cannot bypass those gates by skipping the exporter or merger. It also hashes
 each pair's canonical feature trajectory: repeated trajectories stay in the
 same split and count only once toward the 30-unit minimum, even when they have
 different pair IDs, seeds, or generation IDs.
+`value:inspect` runs all trainer-boundary checks without fitting a model and
+reports raw pairs, distinct trajectory units, duplicate pairs, and the exact
+remaining deficit for each data source.
 
 ## Personalities
 

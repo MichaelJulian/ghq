@@ -12,6 +12,7 @@ import numpy as np
 from scripts.train_value_model import (
     align_append_only_baseline_schema,
     chronological_split,
+    dataset_readiness_summary,
     evaluation_unit,
     exported_probabilities,
     exported_raw_scores,
@@ -377,6 +378,21 @@ class ValueModelWeightTests(unittest.TestCase):
             units = {evaluation_unit(row) for row in rows}
             self.assertEqual(len(units), 1)
             self.assertEqual({row["pair_id"] for row in rows}, {"pair-0", "pair-1"})
+            readiness = dataset_readiness_summary(["signal"], rows)
+            self.assertEqual(
+                readiness["selfPlay"],
+                {
+                    "games": 4,
+                    "pairs": 2,
+                    "distinctTrajectories": 1,
+                    "duplicateTrajectoryPairs": 1,
+                },
+            )
+            self.assertEqual(
+                readiness["evaluationUnitDeficitBySource"],
+                {"vercel_self_play": 29},
+            )
+            self.assertFalse(readiness["readyForTraining"])
 
     def test_parses_a_validation_selected_self_play_share_grid(self):
         self.assertEqual(

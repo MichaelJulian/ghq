@@ -303,6 +303,62 @@ def evaluation_unit(row: Dict[str, Any]) -> Tuple[str, str]:
     return source, str(row["game_id"])
 
 
+def dataset_readiness_summary(
+    feature_names: List[str], rows: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    sources = sorted({data_source(row) for row in rows})
+    units_by_source = {
+        source: {
+            evaluation_unit(row)[1]
+            for row in rows
+            if data_source(row) == source
+        }
+        for source in sources
+    }
+    games_by_source = {
+        source: {
+            str(row["game_id"])
+            for row in rows
+            if data_source(row) == source
+        }
+        for source in sources
+    }
+    deficits = {
+        source: max(0, 30 - len(units))
+        for source, units in units_by_source.items()
+    }
+    self_play_rows = [
+        row for row in rows if data_source(row) == "vercel_self_play"
+    ]
+    self_play_pairs = {
+        str(row["pair_id"]) for row in self_play_rows
+    }
+    self_play_units = units_by_source.get("vercel_self_play", set())
+    return {
+        "format": "ghq-value-dataset-readiness-v1",
+        "auditBoundaryValidated": bool(self_play_rows),
+        "featureCount": len(feature_names),
+        "samples": len(rows),
+        "sources": dict(Counter(data_source(row) for row in rows)),
+        "gamesBySource": {
+            source: len(games) for source, games in games_by_source.items()
+        },
+        "evaluationUnitsBySource": {
+            source: len(units) for source, units in units_by_source.items()
+        },
+        "evaluationUnitDeficitBySource": deficits,
+        "readyForTraining": all(deficit == 0 for deficit in deficits.values()),
+        "selfPlay": {
+            "games": len(games_by_source.get("vercel_self_play", set())),
+            "pairs": len(self_play_pairs),
+            "distinctTrajectories": len(self_play_units),
+            "duplicateTrajectoryPairs": max(
+                0, len(self_play_pairs) - len(self_play_units)
+            ),
+        },
+    }
+
+
 def validate_self_play_code_version(
     rows: List[Dict[str, Any]], required: Optional[str] = None
 ) -> Optional[str]:
