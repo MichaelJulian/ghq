@@ -227,6 +227,63 @@ def tactical_metric_deltas(
     return deltas
 
 
+def causal_collapse_metrics(
+    before: Dict[str, Any],
+    after_selected_turn: Dict[str, Any],
+    exchange: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Separate newly caused exposure from an already-forced material loss.
+
+    This is deliberately conservative: a loss covered by the forced-loss value
+    that existed before the selected turn is not called avoidable.  It remains
+    visible for audit, but is excluded from actionable collapse examples.
+    """
+    preexisting_forced_loss = float(before["own"]["forcedLossValue"])
+    own_material_lost = float(exchange["ownMaterialLost"])
+    covered_by_preexisting = min(
+        own_material_lost, preexisting_forced_loss
+    )
+    loss_beyond_preexisting = max(
+        0.0, own_material_lost - preexisting_forced_loss
+    )
+    selected_deltas = tactical_metric_deltas(before, after_selected_turn)
+    new_risk = max(0.0, selected_deltas["ownTacticalRiskValueDelta"])
+    new_forced = max(0.0, selected_deltas["ownForcedLossValueDelta"])
+    new_critical = max(
+        0.0, selected_deltas["ownCriticalExposureValueDelta"]
+    )
+    unfavorable = exchange["assessment"] == "unfavorable"
+    newly_exposed = new_forced > 0.0 or new_critical > 0.0
+
+    if not unfavorable:
+        category = "not-unfavorable"
+        actionable = False
+    elif loss_beyond_preexisting <= 0.0 and not newly_exposed:
+        category = "within-preexisting-forced-loss"
+        actionable = False
+    elif newly_exposed:
+        category = "new-exposure-collapse"
+        actionable = True
+    else:
+        category = "unresolved-additional-loss"
+        actionable = True
+
+    return {
+        "category": category,
+        "actionable": actionable,
+        "preexistingForcedLossValue": round(preexisting_forced_loss, 4),
+        "ownMaterialLostCoveredByPreexistingForcedLoss": round(
+            covered_by_preexisting, 4
+        ),
+        "ownMaterialLostBeyondPreexistingForcedLoss": round(
+            loss_beyond_preexisting, 4
+        ),
+        "selectedTurnNewTacticalRiskValue": round(new_risk, 4),
+        "selectedTurnNewForcedLossValue": round(new_forced, 4),
+        "selectedTurnNewCriticalExposureValue": round(new_critical, 4),
+    }
+
+
 def decision_search_quality(decision: Dict[str, Any]) -> Dict[str, Any]:
     telemetry = decision.get("searchTelemetry") or {}
     depth = int(decision.get("completedDepth") or 0)
@@ -455,6 +512,11 @@ def build_window_record(
         is not None
     ]
     game_id = str(game.payload["gameId"])
+    selected_turn_exchange = exchange_metrics(before, after_selected_turn)
+    selected_turn_tactical_deltas = tactical_metric_deltas(
+        before, after_selected_turn
+    )
+    window_exchange = exchange_metrics(before, after)
     return {
         "windowId": (
             f"{game_id}:{player}:turn-{start_turn}:index-{start_index}:"
@@ -480,15 +542,14 @@ def build_window_record(
         "windowSearchQuality": aggregate_search_quality(window),
         "before": before,
         "afterSelectedTurn": after_selected_turn,
-        "selectedTurnExchange": exchange_metrics(
-            before, after_selected_turn
-        ),
-        "selectedTurnTacticalDeltas": tactical_metric_deltas(
-            before, after_selected_turn
-        ),
+        "selectedTurnExchange": selected_turn_exchange,
+        "selectedTurnTacticalDeltas": selected_turn_tactical_deltas,
         "after": after,
-        "exchange": exchange_metrics(before, after),
+        "exchange": window_exchange,
         "windowTacticalDeltas": tactical_metric_deltas(before, after),
+        "causalCollapse": causal_collapse_metrics(
+            before, after_selected_turn, window_exchange
+        ),
         "materialEvents": events,
     }
 
@@ -542,14 +603,33 @@ def summarize_records(
         for record in records
         if record["exchange"]["assessment"] == "quiet"
     ]
+    actionable_collapses = [
+        record
+        for record in unfavorable
+        if record["causalCollapse"]["actionable"]
+    ]
+    preexisting_forced_loss = [
+        record
+        for record in unfavorable
+        if record["causalCollapse"]["category"]
+        == "within-preexisting-forced-loss"
+    ]
     return {
         "evaluatedWindows": len(records),
         "unfavorableWindows": len(unfavorable),
         "favorableTradeWindows": len(favorable),
         "evenTradeWindows": len(even),
         "quietWindows": len(quiet),
+        "actionableCollapseWindows": len(actionable_collapses),
+        "preexistingForcedLossWindows": len(preexisting_forced_loss),
         "largestUnfavorable": sorted(
             unfavorable, key=unfavorable_sort_key
+        )[:top],
+        "largestActionableCollapses": sorted(
+            actionable_collapses, key=unfavorable_sort_key
+        )[:top],
+        "largestPreexistingForcedLossRealizations": sorted(
+            preexisting_forced_loss, key=unfavorable_sort_key
         )[:top],
         "largestFavorableTrades": sorted(
             favorable, key=favorable_sort_key

@@ -143,6 +143,23 @@ class SelfPlaySwingAnalysisTests(unittest.TestCase):
         self.assertEqual(collapse["exchange"]["netMaterialExchange"], -10.0)
         self.assertEqual(collapse["exchange"]["materialBalanceDelta"], -10.0)
         self.assertEqual(collapse["exchange"]["assessment"], "unfavorable")
+        self.assertEqual(
+            collapse["causalCollapse"]["category"],
+            "new-exposure-collapse",
+        )
+        self.assertTrue(collapse["causalCollapse"]["actionable"])
+        self.assertEqual(
+            collapse["causalCollapse"][
+                "ownMaterialLostBeyondPreexistingForcedLoss"
+            ],
+            6.0,
+        )
+        self.assertEqual(two_turn["actionableCollapseWindows"], 1)
+        self.assertEqual(two_turn["preexistingForcedLossWindows"], 0)
+        self.assertEqual(
+            two_turn["largestActionableCollapses"][0]["windowId"],
+            collapse["windowId"],
+        )
         self.assertEqual(collapse["searchQuality"]["completedDepth"], 2)
         self.assertTrue(
             collapse["windowSearchQuality"][
@@ -159,6 +176,63 @@ class SelfPlaySwingAnalysisTests(unittest.TestCase):
         self.assertIn("tacticalRiskValue", collapse["before"]["own"])
         self.assertIn("forcedLossValue", collapse["after"]["own"])
         self.assertIn("criticalExposureValue", collapse["after"]["opponent"])
+
+    def test_preexisting_forced_loss_is_not_called_actionable(self):
+        before = {
+            "own": {
+                "materialValue": 30.0,
+                "tacticalRiskValue": 8.0,
+                "forcedLossValue": 8.0,
+                "criticalExposureValue": 8.0,
+            },
+            "opponent": {
+                "materialValue": 30.0,
+                "tacticalRiskValue": 0.0,
+                "forcedLossValue": 0.0,
+                "criticalExposureValue": 0.0,
+            },
+            "materialBalance": 0.0,
+        }
+        after_selected = {
+            "own": {
+                "materialValue": 30.0,
+                "tacticalRiskValue": 5.0,
+                "forcedLossValue": 5.0,
+                "criticalExposureValue": 5.0,
+            },
+            "opponent": {
+                "materialValue": 30.0,
+                "tacticalRiskValue": 0.0,
+                "forcedLossValue": 0.0,
+                "criticalExposureValue": 0.0,
+            },
+            "materialBalance": 0.0,
+        }
+        exchange = {
+            "ownMaterialLost": 8.0,
+            "opponentMaterialLost": 0.0,
+            "netMaterialExchange": -8.0,
+            "assessment": "unfavorable",
+        }
+
+        causal = swings.causal_collapse_metrics(
+            before, after_selected, exchange
+        )
+
+        self.assertEqual(
+            causal["category"], "within-preexisting-forced-loss"
+        )
+        self.assertFalse(causal["actionable"])
+        self.assertEqual(
+            causal["ownMaterialLostCoveredByPreexistingForcedLoss"], 8.0
+        )
+        self.assertEqual(
+            causal["ownMaterialLostBeyondPreexistingForcedLoss"], 0.0
+        )
+        self.assertEqual(causal["selectedTurnNewForcedLossValue"], 0.0)
+        self.assertEqual(
+            causal["selectedTurnNewCriticalExposureValue"], 0.0
+        )
 
     def test_replay_fails_closed_on_a_resulting_fen_mismatch(self):
         game = collapse_game()
