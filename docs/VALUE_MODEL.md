@@ -104,7 +104,11 @@ pnpm value:merge -- \
 provenance and the audit report covers all of them. The trainer requires at
 least 30 independent audited color-swapped pairs from the self-play source
 before it will create train, calibration, validation, and test splits. Do not
-weaken that gate or train on a collection of unrelated search revisions.
+weaken that gate or train on a collection of unrelated search revisions. The
+trainer independently revalidates the audit attestations, exact search/model
+backends, revision and checkpoint binding, pair completeness, generation
+boundaries, and duplicate sample identities; hand-assembled self-play JSONL
+cannot bypass those gates by skipping the exporter or merger.
 
 ## Personalities
 
