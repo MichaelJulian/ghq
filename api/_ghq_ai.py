@@ -2840,6 +2840,8 @@ class Searcher:
                     current.turn_moves >= self.max_actions - 1
                     and move.name != "AutoCapture"
                 ):
+                    if not self.terminal_action_may_capture_hq(current, move):
+                        continue
                     child = current.copy()
                     child.push(move)
                     outcome = child.outcome()
@@ -2852,6 +2854,47 @@ class Searcher:
                 frontier.append(child)
         self.exact_same_turn_hq_capture_cache[cache_key] = False
         return False
+
+    @staticmethod
+    def terminal_action_may_capture_hq(
+        board: engine.BaseBoard, move: engine.Move
+    ) -> bool:
+        """Whether a turn-ending action can produce an HQ-capture outcome.
+
+        A legal action that neither directly captures the HQ nor leaves it in
+        the attacker's artillery field cannot end in an HQ capture.  If the
+        HQ is already bombarded, keep every action because moving or engaging
+        the defender's last mobile piece can make that bombardment terminal.
+        Otherwise only an artillery move newly aimed through the HQ needs the
+        comparatively expensive child/outcome construction.
+        """
+        enemy_hq = board.hq & board.occupied_co[not board.turn]
+        if enemy_hq & board.bombarded_co[board.turn]:
+            return True
+        piece_type = Searcher.move_piece_type(board, move)
+        if (
+            piece_type is None
+            or not engine.is_artillery(piece_type)
+            or move.to_square is None
+        ):
+            return False
+        orientation = move.orientation
+        if orientation is None and move.name == "Reinforce":
+            orientation = (
+                engine.ORIENT_N
+                if board.turn == engine.RED
+                else engine.ORIENT_S
+            )
+        if orientation is None:
+            return False
+        distance = 3 if piece_type == engine.HEAVY_ARTILLERY else 2
+        target = board.get_bombardment_target(
+            move.to_square, orientation, distance
+        )
+        return bool(
+            target is not None
+            and engine.between_inclusive_end(move.to_square, target) & enemy_hq
+        )
 
     @staticmethod
     def exact_hq_capture_move_priority(
