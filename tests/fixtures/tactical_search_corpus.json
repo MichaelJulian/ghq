@@ -197,6 +197,34 @@
         "noWorseThanBaselineCriticalExposure": true,
         "noWorseThanBaselineTwoTurnNetExchange": true
       }
+    },
+    {
+      "id": "ede-game-0011-turn-32-two-exposed-guns",
+      "source": "Completed self-play swing: historical d5e5/c6b5/d7c6 allowed a4a5xb5 and f4f5xe5 in one reply",
+      "fen": "q3f1r↓p/i1fh↓1f2/1ir↓it↓1i1/3r↓4/I4F2/1F2R↖T↑R↑I/I1IH↑1II1/1IR↑FI1PQ - iii b",
+      "turnNumber": 32,
+      "personality": "balanced",
+      "openingSeed": 0,
+      "search": {
+        "timeMs": 20000,
+        "maxDepth": 2,
+        "beamWidth": 6,
+        "maxActions": 3
+      },
+      "acceptance": {
+        "forbiddenMoves": [
+          "c6b5↓"
+        ],
+        "requireFinalSafetyCertified": true,
+        "minimumCompletedDepth": 2,
+        "avoidImmediateHqLoss": true,
+        "maxCandidateForcedLoss": 0,
+        "maxCandidateCriticalExposure": 3,
+        "minimumTwoTurnNetExchange": -3,
+        "noWorseThanBaselineForcedLoss": true,
+        "noWorseThanBaselineCriticalExposure": true,
+        "noWorseThanBaselineTwoTurnNetExchange": true
+      }
     }
   ]
 }

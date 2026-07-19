@@ -3532,6 +3532,58 @@ class SearchTests(unittest.TestCase):
         )
         self.assertTrue(replies[0].tactically_safe)
 
+    def test_tactical_risk_counts_two_exposed_guns_in_one_reply(self):
+        board = engine.BaseBoard(
+            "q3f1r↓p/i1fh↓1f2/1ir↓it↓1i1/3r↓4/"
+            "I4F2/1F2R↖T↑R↑I/I1IH↑1II1/1IR↑FI1PQ - iii b"
+        )
+        historical = board.copy()
+        for uci in ("d5e5↓", "c6b5↓", "d7c6↓"):
+            historical.push(engine.Move.from_uci(uci))
+        reduced = board.copy()
+        for uci in ("d5c4↓", "skip"):
+            reduced.push(engine.Move.from_uci(uci))
+        searcher = ghq_ai.Searcher(
+            "balanced", time_ms=60_000, beam_width=6, turn_number=32
+        )
+
+        total, critical = searcher.max_capture_sequence_risk(
+            historical, engine.BLUE
+        )
+
+        self.assertEqual((total, critical), (6.0, 6.0))
+        historical_safety = searcher.assess_turn_safety(
+            board, historical, engine.BLUE
+        )
+        reduced_safety = searcher.assess_turn_safety(
+            board, reduced, engine.BLUE
+        )
+        self.assertFalse(historical_safety.tactically_safe)
+        self.assertTrue(reduced_safety.tactically_safe)
+        self.assertEqual(
+            searcher.uncompensated_safety_penalty(historical_safety), 6.0
+        )
+        self.assertEqual(
+            searcher.uncompensated_safety_penalty(reduced_safety), 3.0
+        )
+
+    def test_forced_capture_target_escape_survives_atomic_ordering(self):
+        board = engine.BaseBoard(
+            "qf1pi3/2i1i3/1t↓1r↓2i1/i1r↓h↓4/4i1i1/"
+            "I2FIR↑2/1F1I1PI1/5IR↑Q - - r"
+        )
+        searcher = ghq_ai.Searcher(
+            "balanced", time_ms=60_000, beam_width=6, turn_number=61
+        )
+        escape = next(
+            move for move in board.generate_legal_moves() if move.uci() == "d3c2"
+        )
+
+        threatened = searcher.immediate_capture_targets(board, engine.RED)
+
+        self.assertTrue(engine.BB_SQUARES[engine.parse_square("d3")] & threatened)
+        self.assertGreaterEqual(searcher.move_priority(board, escape), 4200.0)
+
     def test_purpose_filter_cannot_delete_a_quiet_hq_escape(self):
         board = engine.BaseBoard(
             "q2i1i2/3ii3/4f3/8/8/1F6/IF1I1f2/1P2f1Q1 II i r"

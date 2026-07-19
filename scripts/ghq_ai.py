@@ -955,6 +955,10 @@ class Searcher:
         self.hq_escape_unlock_move_cache: Dict[Tuple[BoardKey, str], bool] = {}
         self.capture_setup_move_cache: Dict[Tuple[BoardKey, str], bool] = {}
         self.followup_capture_value_cache: Dict[Tuple[BoardKey, str], float] = {}
+        self.capture_sequence_risk_cache: Dict[
+            Tuple[BoardKey, bool], Tuple[float, float]
+        ] = {}
+        self.immediate_capture_targets_cache: Dict[Tuple[BoardKey, bool], int] = {}
         self.root_key: Optional[BoardKey] = None
         self.root_fallback: Optional[TurnCandidate] = None
         self.root_ranked_turns: List[Tuple[float, TurnCandidate]] = []
@@ -1928,6 +1932,136 @@ class Searcher:
             total += PIECE_VALUES.get(piece_type, 0.0)
         return total
 
+    def max_capture_sequence_risk(
+        self, board: engine.BaseBoard, defender: bool
+    ) -> Tuple[float, float]:
+        """Maximum risky material and critical material capturable this turn.
+
+        The old tactical probe kept only the single largest legal capture.
+        GHQ permits three actions, so two guns could be taken in one reply
+        while the position still reported only three points of exposure.
+        Enumerate capture continuations only; this stays far smaller than full
+        turn generation while covering the concrete multi-capture failure.
+        """
+        cache_key = (board_key(board), defender)
+        cached = self.capture_sequence_risk_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        attacker = not defender
+        critical_types = {
+            engine.HQ,
+            engine.AIRBORNE_INFANTRY,
+            engine.ARTILLERY,
+            engine.ARMORED_ARTILLERY,
+            engine.HEAVY_ARTILLERY,
+        }
+
+        def target_risk(
+            position: engine.BaseBoard, move: engine.Move
+        ) -> Tuple[float, float]:
+            target = move.capture_preference
+            if target is None or not (
+                engine.BB_SQUARES[target] & position.occupied_co[defender]
+            ):
+                return (0.0, 0.0)
+            target_type = position.piece_type_at(target)
+            value = PIECE_VALUES.get(target_type, 0.0)
+            critical_target = target_type in critical_types
+            if move.name == "AutoCapture":
+                return (value, value if critical_target else 0.0)
+            attacker_type = self.move_piece_type(position, move)
+            if (
+                target_type in ARTILLERY_TYPES
+                and attacker_type == engine.AIRBORNE_INFANTRY
+                and move.to_square is not None
+            ):
+                defender_infantry = position.occupied_co[defender] & (
+                    position.infantry
+                    | position.armored_infantry
+                    | position.airborne_infantry
+                )
+                if (
+                    engine.BB_ADJACENT_SQUARES[move.to_square]
+                    & defender_infantry
+                ):
+                    return (0.0, 0.0)
+            if not critical_target:
+                target_mask = engine.BB_SQUARES[target]
+                friendly_non_hq = position.occupied_co[defender] & ~position.hq
+                support = (
+                    engine.BB_ADJACENT_SQUARES[target]
+                    & friendly_non_hq
+                    & ~target_mask
+                )
+                if support:
+                    return (0.0, 0.0)
+            return (value, value if critical_target else 0.0)
+
+        def unique_captures(position: engine.BaseBoard) -> List[engine.Move]:
+            # Voluntary infantry captures have no meaningful orientation
+            # clones, while forced artillery captures may. Collapse identical
+            # source/target/destination actions before the two-ply probe.
+            unique: Dict[Tuple[Any, ...], engine.Move] = {}
+            for move in position.generate_legal_captures():
+                key = (
+                    move.name,
+                    move.from_square,
+                    move.to_square,
+                    move.capture_preference,
+                    move.unit_type,
+                )
+                unique.setdefault(key, move)
+            return list(unique.values())
+
+        best_total = 0.0
+        best_critical = 0.0
+        actions_left = max(0, self.max_actions - int(board.turn_moves))
+        for first in unique_captures(board):
+            self.check_time(False)
+            first_total, first_critical = target_risk(board, first)
+            best_total = max(best_total, first_total)
+            best_critical = max(best_critical, first_critical)
+            first_cost = 0 if first.name == "AutoCapture" else 1
+            if actions_left - first_cost <= 0:
+                continue
+            child = board.copy()
+            child.push(first)
+            if child.turn != attacker or child.is_game_over():
+                continue
+            for second in unique_captures(child):
+                second_total, second_critical = target_risk(child, second)
+                best_total = max(
+                    best_total, first_total + second_total
+                )
+                best_critical = max(
+                    best_critical, first_critical + second_critical
+                )
+        result = (best_total, best_critical)
+        self.capture_sequence_risk_cache[cache_key] = result
+        return result
+
+    def immediate_capture_targets(self, board: engine.BaseBoard, defender: bool) -> int:
+        """Pieces the opponent can capture before the defender acts again.
+
+        This intentionally feeds only atomic-action ordering. A move from one
+        of these squares must survive the partial beam long enough for the
+        complete-turn safety check to decide whether it is a real rescue.
+        """
+        cache_key = (board_key(board), defender)
+        cached = self.immediate_capture_targets_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        probe = self.board_as_turn(board, not defender)
+        targets = engine.BB_EMPTY
+        for reply in probe.generate_legal_moves():
+            target = reply.capture_preference
+            if target is not None and (
+                engine.BB_SQUARES[target] & probe.occupied_co[defender]
+            ):
+                targets |= engine.BB_SQUARES[target]
+        self.immediate_capture_targets_cache[cache_key] = targets
+        return targets
+
     def tactical_risk(
         self,
         board: engine.BaseBoard,
@@ -1971,15 +2105,13 @@ class Searcher:
         action_positions.extend(frontier if not action_positions else [])
 
         own = board.occupied_co[defender]
-        critical = own & (board.hq | board.airborne_infantry | board.artillery | board.armored_artillery | board.heavy_artillery)
         forced_value = max(
             (self.mask_value(board, lost_mask & own) for _, lost_mask in action_positions),
             default=0.0,
         )
-        max_direct_critical = 0.0
-        max_other_hanging = 0.0
+        max_capture_risk = 0.0
+        max_critical_capture_risk = 0.0
         same_turn_hq_loss = False
-        friendly_non_hq = own & ~board.hq
         for position, _ in action_positions[:12]:
             self.check_time(False)
             if check_hq_combinations and self.has_same_turn_hq_capture(position):
@@ -1988,47 +2120,22 @@ class Searcher:
                 # makes complete-turn selection retain an HQ escape instead
                 # of trusting a superficially quiet position.
                 same_turn_hq_loss = True
-            for move in position.generate_legal_captures():
-                target = move.capture_preference
-                if target is None or not (engine.BB_SQUARES[target] & own):
-                    continue
-                target_mask = engine.BB_SQUARES[target]
-                if target_mask & critical:
-                    target_type = board.piece_type_at(target)
-                    attacker_type = self.move_piece_type(position, move)
-                    if (
-                        target_type in ARTILLERY_TYPES
-                        and attacker_type == engine.AIRBORNE_INFANTRY
-                        and move.to_square is not None
-                    ):
-                        defender_infantry = position.occupied_co[defender] & (
-                            position.infantry
-                            | position.armored_infantry
-                            | position.airborne_infantry
-                        )
-                        if engine.BB_ADJACENT_SQUARES[move.to_square] & defender_infantry:
-                            # A diagonally adjacent infantry covers both para
-                            # landing squares beside its artillery. The capture
-                            # is possible, but it is not a clean hanging gun.
-                            continue
-                    max_direct_critical = max(
-                        max_direct_critical,
-                        PIECE_VALUES.get(target_type, 0.0),
-                    )
-                    continue
-                # Ordinary infantry is treated as hanging only if it has no
-                # adjacent friendly unit. Protected trades remain for minimax.
-                support = engine.BB_ADJACENT_SQUARES[target] & friendly_non_hq & ~target_mask
-                if not support:
-                    max_other_hanging = max(
-                        max_other_hanging,
-                        PIECE_VALUES.get(board.piece_type_at(target), 0.0),
-                    )
+            capture_risk, critical_capture_risk = (
+                self.max_capture_sequence_risk(position, defender)
+            )
+            max_capture_risk = max(max_capture_risk, capture_risk)
+            max_critical_capture_risk = max(
+                max_critical_capture_risk, critical_capture_risk
+            )
 
         if same_turn_hq_loss:
             forced_value = max(forced_value, PIECE_VALUES[engine.HQ])
-        risk = forced_value + max_direct_critical + max_other_hanging
-        result = (risk, forced_value, forced_value + max_direct_critical)
+        risk = forced_value + max_capture_risk
+        result = (
+            risk,
+            forced_value,
+            forced_value + max_critical_capture_risk,
+        )
         self.safety_cache[cache_key] = result
         return result
 
@@ -2099,6 +2206,24 @@ class Searcher:
             critical_loss,
             safe,
         )
+
+    @staticmethod
+    def uncompensated_safety_penalty(safety: TacticalSafety) -> float:
+        """Order safe defenses by material still concretely capturable."""
+        forced = max(
+            0.0, safety.forced_loss_value - safety.compensation_value
+        )
+        remaining = max(
+            0.0,
+            safety.new_risk_value - safety.compensation_value,
+            safety.para_or_artillery_loss_value - safety.compensation_value,
+        )
+        # Automatic/forced loss is more certain than an available critical
+        # capture, but both remain material-denominated. Doubling the forced
+        # term makes one guaranteed infantry preferable to three guaranteed
+        # points while still preferring a one-point forced loss over a loose
+        # six-point gun sequence.
+        return 2.0 * forced + remaining
 
     @staticmethod
     def points_toward_home(color: bool, orientation: Optional[int]) -> bool:
@@ -3369,6 +3494,18 @@ class Searcher:
         priority = 0.0
         piece_type = self.move_piece_type(board, move)
         if (
+            move.from_square is not None
+            and move.to_square is not None
+            and move.from_square != move.to_square
+            and PIECE_VALUES.get(piece_type, 0.0) >= 3.0
+            and engine.BB_SQUARES[move.from_square]
+            & self.immediate_capture_targets(board, board.turn)
+        ):
+            # A quiet evacuation of material already available to an enemy
+            # capture is a forcing candidate. The complete-turn safety score
+            # remains responsible for rejecting fake or inferior escapes.
+            priority += 4200.0
+        if (
             piece_type == engine.HQ
             and move.from_square is not None
             and move.to_square is not None
@@ -4195,7 +4332,7 @@ class Searcher:
                     working,
                     cleaned_priority,
                     self.heuristic_score(working) if terminal is None else terminal,
-                    max(0.0, safety.new_risk_value - safety.compensation_value),
+                    self.uncompensated_safety_penalty(safety),
                     safety.tactically_safe,
                     purpose["net_purpose_penalty"],
                     purpose["paratrooper_mission_penalty"],
@@ -4423,6 +4560,65 @@ class Searcher:
                     pool.append(capture_extension)
                     appended += 1
 
+            # The same pool cap must not erase a completed multi-action
+            # paratrooper extraction after its quiet unlock survived the
+            # atomic beam. Keep one strongest representative per extraction
+            # plan class; objective safety and purpose filters still run below.
+            preserved_extraction_unlocks: set[str] = set()
+            for extraction_extension in sorted(
+                full_pool,
+                key=lambda partial: (
+                    -(
+                        self.formation_quality(partial.board, original_turn)
+                        + optionality_score(partial.board, original_turn)
+                    ),
+                    -partial.priority,
+                    normalized_turn_key(partial.moves, original_turn),
+                ),
+            ):
+                extraction_unlocks = {
+                    str(key[1])
+                    for key in self.turn_plan_keys(
+                        board, extraction_extension.moves
+                    )
+                    if key[0] == "unlock_and_extract"
+                }
+                new_unlocks = extraction_unlocks - preserved_extraction_unlocks
+                if not new_unlocks:
+                    continue
+                if extraction_extension not in pool:
+                    pool.append(extraction_extension)
+                preserved_extraction_unlocks.update(new_unlocks)
+                if len(preserved_extraction_unlocks) >= 4:
+                    break
+
+            threatened_high_value = self.immediate_capture_targets(
+                board, original_turn
+            )
+            rescue_extensions = [
+                partial
+                for partial in full_pool
+                if any(
+                    move.from_square is not None
+                    and engine.BB_SQUARES[move.from_square]
+                    & threatened_high_value
+                    and PIECE_VALUES.get(
+                        board.piece_type_at(move.from_square), 0.0
+                    )
+                    >= 3.0
+                    for move in partial.moves
+                )
+            ]
+            rescue_extensions.sort(
+                key=lambda partial: (
+                    -partial.priority,
+                    normalized_turn_key(partial.moves, original_turn),
+                )
+            )
+            for rescue_extension in rescue_extensions[:4]:
+                if rescue_extension not in pool:
+                    pool.append(rescue_extension)
+
         if self.root_key == cache_key and self.root_fallback is None:
             fallback_pool = sorted(
                 pool,
@@ -4526,7 +4722,7 @@ class Searcher:
                     partial.board,
                     partial.priority,
                     self.heuristic_score(partial.board) if terminal is None else terminal,
-                    max(0.0, safety.new_risk_value - safety.compensation_value),
+                    self.uncompensated_safety_penalty(safety),
                     safety.tactically_safe,
                     purpose["net_purpose_penalty"],
                     purpose["paratrooper_mission_penalty"],
@@ -4613,7 +4809,27 @@ class Searcher:
             safety_pool = [
                 candidate for candidate in candidates if candidate.tactically_safe
             ]
-            purpose_pool = safety_pool if safety_pool else candidates
+            if safety_pool:
+                minimum_safety_penalty = min(
+                    candidate.safety_penalty for candidate in safety_pool
+                )
+                # Objective defense is lexicographic. Once a turn proves it
+                # can save two extra material points, a strategically prettier
+                # line may not elect to leave those pieces capturable. The
+                # small tolerance keeps equivalent one-point infantry noise
+                # from collapsing all diversity.
+                purpose_pool = [
+                    candidate
+                    for candidate in safety_pool
+                    if candidate.safety_penalty
+                    <= minimum_safety_penalty + 0.75
+                    or any(
+                        key[0] in ("unlock_and_extract", "escape_and_extract")
+                        for key in self.turn_plan_keys(board, candidate.moves)
+                    )
+                ]
+            else:
+                purpose_pool = candidates
             no_effect_counts = [
                 sum(
                     bool(
@@ -4702,6 +4918,15 @@ class Searcher:
                     "escape_and_extract",
                 )
                 else 1,
+                (
+                    -(
+                        self.formation_quality(item[1].board, original_turn)
+                        + optionality_score(item[1].board, original_turn)
+                    )
+                    if item[0][0]
+                    in ("unlock_and_extract", "escape_and_extract")
+                    else 0.0
+                ),
                 self.candidate_sort_key(item[1], original_turn),
             ),
         )
@@ -4720,6 +4945,32 @@ class Searcher:
             if len(selected) < turn_capacity:
                 selected.append(candidate)
                 continue
+            candidate_has_extraction = any(
+                key[0] in ("unlock_and_extract", "escape_and_extract")
+                for key in self.turn_plan_keys(board, candidate.moves)
+            )
+            selected_extraction_unlocks = {
+                str(key[1])
+                for retained in selected
+                for key in self.turn_plan_keys(board, retained.moves)
+                if key[0] == "unlock_and_extract"
+            }
+            candidate_extraction_unlocks = {
+                str(key[1])
+                for key in self.turn_plan_keys(board, candidate.moves)
+                if key[0] == "unlock_and_extract"
+            }
+            if (
+                candidate_has_extraction
+                and candidate_extraction_unlocks
+                - selected_extraction_unlocks
+                and len(selected_extraction_unlocks) < 2
+            ):
+                # Two distinct proved extraction unlocks may exceed the
+                # generic capacity; they must not evict an objectively safer
+                # rescue merely to preserve tactical diversity.
+                selected.append(candidate)
+                continue
             # The cap controls cost, but it may not erase a multi-action save
             # or extraction sequence. Replace the weakest generic slot.
             replace_index = next(
@@ -4727,6 +4978,8 @@ class Searcher:
                     index
                     for index in range(len(selected) - 1, -1, -1)
                     if selected[index] not in preserved_plans
+                    and selected[index].safety_penalty + 0.75
+                    >= candidate.safety_penalty
                 ),
                 None,
             )
@@ -5587,8 +5840,8 @@ def material_safe_recovery_turn(
             board=resulting,
             priority=0.0,
             static_score=ordering_probe.quick_score(resulting),
-            safety_penalty=max(
-                0.0, safety.new_risk_value - safety.compensation_value
+            safety_penalty=ordering_probe.uncompensated_safety_penalty(
+                safety
             ),
             tactically_safe=True,
             purpose_penalty=purpose["net_purpose_penalty"],
@@ -5874,11 +6127,7 @@ def search(
                     seed_board,
                     0.0,
                     searcher.quick_score(seed_board),
-                    max(
-                        0.0,
-                        seed_safety.new_risk_value
-                        - seed_safety.compensation_value,
-                    ),
+                    searcher.uncompensated_safety_penalty(seed_safety),
                     True,
                     seed_purpose["net_purpose_penalty"],
                     seed_purpose["paratrooper_mission_penalty"],
@@ -6265,6 +6514,7 @@ def search(
     # bounded assessment.
     if selected_candidate is not None:
         selected_is_tactically_safe = selected_candidate.tactically_safe
+        selected_safety_penalty = selected_candidate.safety_penalty
     else:
         selected_safety_budget = remaining_overall_ms(seed_time_ms)
         selected_safety = (
@@ -6284,16 +6534,54 @@ def search(
         selected_is_tactically_safe = bool(
             selected_safety is not None and selected_safety.tactically_safe
         )
+        selected_safety_penalty = (
+            searcher.uncompensated_safety_penalty(selected_safety)
+            if selected_safety is not None
+            else float("inf")
+        )
+    certified_root_options = [
+        candidate
+        for candidate in known_root_candidates
+        if candidate.tactically_safe
+        and candidate.paratrooper_mission_penalty <= 0.0
+    ]
+    best_certified_safety_penalty = min(
+        (candidate.safety_penalty for candidate in certified_root_options),
+        default=selected_safety_penalty,
+    )
+    selected_is_safety_dominated = (
+        selected_safety_penalty > best_certified_safety_penalty + 0.75
+    )
     if (
         not hq_survival_override_used
-        and not selected_is_tactically_safe
+        and (
+            not selected_is_tactically_safe
+            or selected_is_safety_dominated
+        )
     ):
         verified_seed_move_key = tuple(move.uci() for move in seed_moves)
+        verified_seed_candidate = next(
+            (
+                candidate
+                for candidate in known_root_candidates
+                if tuple(move.uci() for move in candidate.moves)
+                == verified_seed_move_key
+            ),
+            None,
+        )
         verified_seed_is_known_safe = emergency_seed_safe or any(
             candidate.tactically_safe
             and tuple(move.uci() for move in candidate.moves)
             == verified_seed_move_key
             for candidate in known_root_candidates
+        )
+        verified_seed_is_not_dominated = (
+            verified_seed_candidate is not None
+            and verified_seed_candidate.safety_penalty
+            <= best_certified_safety_penalty + 0.75
+        ) or (
+            verified_seed_candidate is None
+            and not certified_root_options
         )
         # The reply-first floor may already have proved the emergency seed
         # against one complete opponent turn while either the bounded seed
@@ -6301,7 +6589,11 @@ def search(
         # Prefer that exact doubly-proven line over a merely safety-screened
         # replacement. Otherwise a late tactical guard can throw away depth
         # two, time out in the fresh verifier, and report a depth-zero fallback.
-        if verified_seed is not None and verified_seed_is_known_safe:
+        if (
+            verified_seed is not None
+            and verified_seed_is_known_safe
+            and verified_seed_is_not_dominated
+        ):
             first_turn = list(seed_moves)
             resulting_board = seed_board
             best = verified_seed
@@ -6335,6 +6627,19 @@ def search(
             consider_replacement(searcher.root_fallback)
             for candidate in searcher.turn_cache.get(searcher.root_key or "", []):
                 consider_replacement(candidate)
+
+            replacement_options.sort(
+                key=lambda candidate: (
+                    candidate.safety_penalty,
+                    candidate.purpose_penalty,
+                    -(
+                        candidate.static_score
+                        if board.turn == engine.RED
+                        else -candidate.static_score
+                    ),
+                    normalized_turn_key(candidate.moves, board.turn),
+                )
+            )
 
             for replacement in replacement_options[:8]:
                 first_turn = list(replacement.moves)
