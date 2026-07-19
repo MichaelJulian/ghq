@@ -10,7 +10,8 @@ export const DURABLE_SEARCH_SLOT_MS = 50_000;
 export function scheduleDurableSearch(
   index: number,
   games: number,
-  epochMs: number
+  epochMs: number,
+  maxConcurrentSearches = MAX_CONCURRENT_DURABLE_SEARCHES
 ): DurableSelfPlayGameConfig["searchSchedule"] {
   if (
     !Number.isSafeInteger(index) ||
@@ -19,15 +20,18 @@ export function scheduleDurableSearch(
     games < 1 ||
     index >= games ||
     !Number.isSafeInteger(epochMs) ||
-    epochMs < 0
+    epochMs < 0 ||
+    !Number.isSafeInteger(maxConcurrentSearches) ||
+    maxConcurrentSearches < 1 ||
+    maxConcurrentSearches > MAX_CONCURRENT_DURABLE_SEARCHES
   ) {
     throw new RangeError("Invalid durable search schedule input");
   }
-  const laneCount = Math.ceil(games / MAX_CONCURRENT_DURABLE_SEARCHES);
+  const laneCount = Math.ceil(games / maxConcurrentSearches);
   if (laneCount === 1) return undefined;
   return {
     epochMs,
-    lane: Math.floor(index / MAX_CONCURRENT_DURABLE_SEARCHES),
+    lane: Math.floor(index / maxConcurrentSearches),
     laneCount,
     slotMs: DURABLE_SEARCH_SLOT_MS,
   };

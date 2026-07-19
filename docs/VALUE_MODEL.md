@@ -266,3 +266,57 @@ previous checkpoint is supplied, repair outcomes include threatened-piece
 survival plus own material lost, opponent material lost, and the net exchange.
 Use the exchange result to avoid labeling a deliberate trade-up as a hanging
 piece merely because the originally threatened unit disappeared.
+
+## Durable search quality and counterfactuals
+
+Vercel CPU contention changes how often a nominal depth-two search actually
+finishes its opponent reply. Both the ordinary and counterfactual start
+endpoints therefore accept `maxConcurrentSearches` from 1 through 4. The Bot
+Lab defaults to two simultaneous searches for clean-data batches, and
+counterfactual request preparation emits the same conservative default:
+
+```bash
+pnpm self-play:counterfactual:prepare -- \
+  --generation <completed-generation-id> \
+  --max-roots 8 \
+  --max-per-game 1 \
+  --candidates 2 \
+  --replicates 2 \
+  --max-concurrent-searches 2 \
+  --output .data/counterfactual-request.json
+```
+
+The endpoint schedules those runs into durable 50-second slots rather than
+starting as many as 32 native searches at once. The generation manifest records
+the concurrency cap, lane count, and slot duration, so verification-rate
+comparisons remain reproducible.
+
+Counterfactual training artifacts must identify every consumed root three
+ways: exact root ID, semantic root fingerprint, and source game ID. Evaluation
+rejects a candidate if an untouched holdout overlaps on any identity. Semantic
+duplicates count once; a promising result that disappears after this
+deduplication is not eligible for a native arena or deployment.
+
+## Material-collapse windows
+
+After downloading completed durable games, replay every recorded turn and rank
+the positions that preceded the largest net material losses:
+
+```bash
+pnpm self-play:analyze-swings -- \
+  --input .data/<generation-id>.jsonl \
+  --windows 2,4,6,10 \
+  --top 10 \
+  --output .data/<generation-id>-swings.json
+```
+
+Window sizes are complete player turns and may be any comma-separated values or
+inclusive ranges from 1 through 10. A two-turn window includes the selected
+turn and its immediate reply. The analyzer verifies every move against the
+production Python engine, requires exact FEN continuity, and fails closed on
+incomplete or mismatched games. Each retained window includes the starting FEN
+and moves, search depth/fallback/deadline quality, before/after inventories,
+immediate tactical risk, forced loss and critical exposure, and every material
+event inside the window. `netMaterialExchange` is opponent material lost minus
+own material lost, so negative windows are collapses and positive windows are
+reported separately as favorable trades.

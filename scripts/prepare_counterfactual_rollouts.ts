@@ -139,11 +139,12 @@ async function main() {
     throw new Error(`No completed games found for ${generationId}`);
   }
 
-  const [excluded, excludedFingerprints, excludedSourceGames] = await Promise.all([
-    excludedRootIds(),
-    excludedRootFingerprints(),
-    excludedSourceGameIds(),
-  ]);
+  const [excluded, excludedFingerprints, excludedSourceGames] =
+    await Promise.all([
+      excludedRootIds(),
+      excludedRootFingerprints(),
+      excludedSourceGameIds(),
+    ]);
   const roots = selectCounterfactualRoots(games, {
     maxRoots: integerArgument("--max-roots", 8, 1, 16),
     skipRoots: integerArgument("--skip-roots", 0, 0, 10_000),
@@ -151,12 +152,7 @@ async function main() {
     candidatesPerRoot: integerArgument("--candidates", 2, 2, 4),
     maxScoreMargin: numberArgument("--max-margin", 1, 0.000_001, 100),
     minTurnNumber: integerArgument("--min-turn", 5, 1, 399),
-    minStrategicDivergence: numberArgument(
-      "--min-divergence",
-      0,
-      0,
-      100
-    ),
+    minStrategicDivergence: numberArgument("--min-divergence", 0, 0, 100),
     excludeRootIds: excluded,
     excludeRootFingerprints: excludedFingerprints,
     excludeSourceGameIds: excludedSourceGames,
@@ -180,6 +176,12 @@ async function main() {
     timeMs: integerArgument("--time-ms", 20_000, 50, 30_000),
     maxDepth: integerArgument("--max-depth", 2, 1, 3),
     beamWidth: integerArgument("--beam", 6, 2, 16),
+    maxConcurrentSearches: integerArgument(
+      "--max-concurrent-searches",
+      2,
+      1,
+      4
+    ),
     rolloutTurns: integerArgument("--rollout-turns", 24, 2, 120),
     // A single deterministic continuation frequently gives both candidate
     // branches the same binary winner and therefore no policy information.

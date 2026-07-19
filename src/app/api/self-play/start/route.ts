@@ -27,6 +27,8 @@ interface StartBatchRequest {
   maxTurns?: number;
   repetitionLimit?: number;
   noProgressTurns?: number;
+  /** Cap simultaneous native searches to trade throughput for verification. */
+  maxConcurrentSearches?: number;
   redMaxActions?: number;
   blueMaxActions?: number;
   personalities?: PersonalityId[];
@@ -77,6 +79,13 @@ export async function POST(request: Request) {
       100,
       "noProgressTurns"
     );
+    const maxConcurrentSearches = integer(
+      input.maxConcurrentSearches,
+      MAX_CONCURRENT_DURABLE_SEARCHES,
+      1,
+      MAX_CONCURRENT_DURABLE_SEARCHES,
+      "maxConcurrentSearches"
+    );
     const redMaxActions = integer(
       input.redMaxActions,
       3,
@@ -124,7 +133,7 @@ export async function POST(request: Request) {
       16
     )}-${Date.now().toString(36)}`;
     const codeVersion = process.env.VERCEL_GIT_COMMIT_SHA ?? "local";
-    const searchLaneCount = Math.ceil(games / MAX_CONCURRENT_DURABLE_SEARCHES);
+    const searchLaneCount = Math.ceil(games / maxConcurrentSearches);
     const searchScheduleEpochMs = Date.now() + 5_000;
     const runs = await Promise.all(
       Array.from({ length: games }, async (_, index) => {
@@ -154,7 +163,8 @@ export async function POST(request: Request) {
             searchSchedule: scheduleDurableSearch(
               index,
               games,
-              searchScheduleEpochMs
+              searchScheduleEpochMs,
+              maxConcurrentSearches
             ),
           },
         ]);
@@ -205,10 +215,7 @@ export async function POST(request: Request) {
           redMaxActions,
           blueMaxActions,
           seed,
-          maxConcurrentSearches: Math.min(
-            games,
-            MAX_CONCURRENT_DURABLE_SEARCHES
-          ),
+          maxConcurrentSearches: Math.min(games, maxConcurrentSearches),
           searchLaneCount,
           searchSlotMs:
             searchLaneCount > 1 ? DURABLE_SEARCH_SLOT_MS : undefined,
@@ -237,7 +244,7 @@ export async function POST(request: Request) {
         pairedColorSwap: true,
         valueModelArena,
         manifestStorage,
-        maxConcurrentSearches: Math.min(games, MAX_CONCURRENT_DURABLE_SEARCHES),
+        maxConcurrentSearches: Math.min(games, maxConcurrentSearches),
         searchLaneCount,
         runs,
       },

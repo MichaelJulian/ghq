@@ -9,6 +9,11 @@ import {
 } from "@/game/self-play/counterfactual";
 import { valueModelCheckpointId } from "@/game/value-model/inference";
 import {
+  DURABLE_SEARCH_SLOT_MS,
+  MAX_CONCURRENT_DURABLE_SEARCHES,
+  scheduleDurableSearch,
+} from "@/game/self-play/durable-schedule";
+import {
   persistSelfPlayGenerationManifest,
   type SelfPlayGenerationManifest,
 } from "@/server/self-play-storage";
@@ -32,6 +37,7 @@ interface CounterfactualStartRequest {
   explorationTemperature?: number;
   repetitionLimit?: number;
   noProgressTurns?: number;
+  maxConcurrentSearches?: number;
   branches?: CounterfactualBranch[];
 }
 
@@ -237,9 +243,7 @@ export async function POST(request: Request) {
       "rolloutTurns"
     );
     const replicates = integer(input.replicates, 1, 1, 4, "replicates");
-    const explorationTemperature = Number(
-      input.explorationTemperature ?? 0
-    );
+    const explorationTemperature = Number(input.explorationTemperature ?? 0);
     if (
       !Number.isFinite(explorationTemperature) ||
       explorationTemperature < 0 ||
@@ -262,6 +266,13 @@ export async function POST(request: Request) {
       4,
       100,
       "noProgressTurns"
+    );
+    const maxConcurrentSearches = integer(
+      input.maxConcurrentSearches,
+      2,
+      1,
+      MAX_CONCURRENT_DURABLE_SEARCHES,
+      "maxConcurrentSearches"
     );
     if (
       branches.some(
@@ -286,6 +297,8 @@ export async function POST(request: Request) {
         replicate,
       }))
     );
+    const searchLaneCount = Math.ceil(runSpecs.length / maxConcurrentSearches);
+    const searchScheduleEpochMs = Date.now() + 5_000;
     const runs = await Promise.all(
       runSpecs.map(async ({ branch, replicate }, index) => {
         const red = competitor(
@@ -317,6 +330,12 @@ export async function POST(request: Request) {
             repetitionLimit,
             noProgressTurns,
             codeVersion,
+            searchSchedule: scheduleDurableSearch(
+              index,
+              runSpecs.length,
+              searchScheduleEpochMs,
+              maxConcurrentSearches
+            ),
           },
         ]);
         return { gameId, runId: run.runId, red, blue, branch, replicate };
@@ -346,6 +365,9 @@ export async function POST(request: Request) {
         blueMaxActions: 3,
         seed,
         explorationTemperature,
+        maxConcurrentSearches: Math.min(runSpecs.length, maxConcurrentSearches),
+        searchLaneCount,
+        searchSlotMs: searchLaneCount > 1 ? DURABLE_SEARCH_SLOT_MS : undefined,
       },
       expectedProvenance: {
         incumbentCheckpoints: [checkpoint],
@@ -392,6 +414,8 @@ export async function POST(request: Request) {
         rolloutTurns,
         replicates,
         explorationTemperature,
+        maxConcurrentSearches: Math.min(runSpecs.length, maxConcurrentSearches),
+        searchLaneCount,
         manifestStorage,
         runs: runs.map(({ gameId, runId, branch, replicate }) => ({
           gameId,

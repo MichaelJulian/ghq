@@ -18,6 +18,7 @@ interface RunReference {
 interface StoredBatch {
   generationId: string;
   createdAt: string;
+  maxConcurrentSearches?: number;
   redMaxActions?: number;
   blueMaxActions?: number;
   runs: RunReference[];
@@ -51,6 +52,7 @@ interface RunStatus {
 
 interface StartResponse {
   generationId: string;
+  maxConcurrentSearches: number;
   redMaxActions: number;
   blueMaxActions: number;
   runs: RunReference[];
@@ -156,6 +158,7 @@ export function SelfPlayRuns() {
   const [timeMs, setTimeMs] = useState(20_000);
   const [depth, setDepth] = useState(2);
   const [beam, setBeam] = useState(6);
+  const [maxConcurrentSearches, setMaxConcurrentSearches] = useState(2);
   const [batches, setBatches] = useState<StoredBatch[]>([]);
   const [statuses, setStatuses] = useState<Record<string, RunStatus>>({});
   const [busy, setBusy] = useState(false);
@@ -218,6 +221,7 @@ export function SelfPlayRuns() {
           maxTurns: 160,
           repetitionLimit: 3,
           noProgressTurns: 36,
+          maxConcurrentSearches,
           redMaxActions: 3,
           blueMaxActions: 3,
           seed: Date.now() >>> 0,
@@ -229,6 +233,7 @@ export function SelfPlayRuns() {
         {
           generationId: body.generationId,
           createdAt: new Date().toISOString(),
+          maxConcurrentSearches: body.maxConcurrentSearches,
           redMaxActions: body.redMaxActions,
           blueMaxActions: body.blueMaxActions,
           runs: body.runs,
@@ -236,7 +241,7 @@ export function SelfPlayRuns() {
         ...batches,
       ]);
       setMessage(
-        `${body.runs.length} durable 3-action games launched on Vercel.`
+        `${body.runs.length} durable 3-action games launched with at most ${body.maxConcurrentSearches} simultaneous searches.`
       );
     } catch (error) {
       setMessage(
@@ -332,7 +337,7 @@ export function SelfPlayRuns() {
         </p>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="grid gap-2 md:grid-cols-4">
+        <div className="grid gap-2 md:grid-cols-5">
           <BatchNumber
             label="Games"
             value={games}
@@ -363,6 +368,13 @@ export function SelfPlayRuns() {
               onChange={setBeam}
             />
           </div>
+          <BatchNumber
+            label="Concurrent"
+            value={maxConcurrentSearches}
+            min={1}
+            max={4}
+            onChange={setMaxConcurrentSearches}
+          />
         </div>
         <div className="flex flex-wrap gap-2">
           <Button onClick={startBatch} disabled={busy}>
@@ -405,6 +417,9 @@ export function SelfPlayRuns() {
                 <div className="mt-1 text-xs text-slate-500">
                   {new Date(latest.createdAt).toLocaleString()} ·{" "}
                   {latest.runs.length} games
+                  {latest.maxConcurrentSearches
+                    ? ` · ${latest.maxConcurrentSearches} concurrent`
+                    : ""}
                 </div>
               </div>
               <div className="flex items-center gap-2 text-sm font-bold text-indigo-700">

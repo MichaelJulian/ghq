@@ -37,6 +37,21 @@ describe("durable self-play scheduling", () => {
     expect(scheduleDurableSearch(3, 4, 1_000)).toBeUndefined();
   });
 
+  it("can reduce concurrency for a clean-data cohort", () => {
+    const schedules = Array.from({ length: 12 }, (_, index) =>
+      scheduleDurableSearch(index, 12, 1_000, 2)
+    );
+
+    expect(schedules.map((schedule) => schedule?.lane)).toEqual([
+      0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5,
+    ]);
+    expect(schedules.every((schedule) => schedule?.laneCount === 6)).toBe(true);
+  });
+
+  it("rejects a concurrency cap above the production ceiling", () => {
+    expect(() => scheduleDurableSearch(0, 12, 1_000, 5)).toThrow(RangeError);
+  });
+
   it("isolates value checkpoint and color within an arena pair", () => {
     const first = scheduleDurableCompetitors({
       index: 0,
