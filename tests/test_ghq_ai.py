@@ -1139,6 +1139,7 @@ class SearchTests(unittest.TestCase):
         )
 
         self.assertEqual(result["search"]["hard_deadline_ms"], 4_000)
+        self.assertEqual(result["search"]["final_safety_reserve_ms"], 1_000)
         self.assertFalse(result["search"]["hard_deadline_reached"])
 
     def test_sparse_orientation_proof_reclassifies_old_turn_107_escape(self):

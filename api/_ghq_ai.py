@@ -5521,6 +5521,18 @@ def search(
         max(time_ms + 3_000, int(time_ms * 2.25)),
     )
     overall_deadline = started + hard_budget_ms / 1000.0
+    # Exact HQ proofs are valuable, but they must not consume the small slice
+    # needed to prove that the final serialized turn does not simply hang a
+    # piece.  The latter check is deliberately cheap (HQ combinations are
+    # handled separately) and is the last line of defence against a timed-out
+    # seed such as the historical f5-h3 armored-infantry suicide.
+    final_safety_reserve_ms = min(
+        5_000,
+        max(1_000, int(time_ms * 0.20)),
+    )
+    post_search_probe_deadline = (
+        overall_deadline - final_safety_reserve_ms / 1000.0
+    )
 
     def remaining_overall_ms(maximum: int) -> int:
         return max(
@@ -5822,7 +5834,7 @@ def search(
     # absolute request deadline. Individual helpers may finish earlier, but no
     # later replacement path receives a fresh clock that can cross Vercel's
     # hard function limit.
-    searcher.deadline = overall_deadline
+    searcher.deadline = post_search_probe_deadline
 
     if best is None:
         if verified_seed is not None:
@@ -5994,6 +6006,11 @@ def search(
                 searcher.verification_mode = previous_verification_mode
             fallback_kind = "safe"
 
+    # Release the protected slice only after every potentially expensive HQ
+    # proof has finished. Material safety and its recovery pass can now fail
+    # closed without letting the request cross the absolute Vercel deadline.
+    searcher.deadline = overall_deadline
+
     # Approximate minimax is allowed to rank positions imperfectly, but it may
     # not return a turn that the objective safety probe already knows loses a
     # para, artillery, or unsupported infantry by force.  A timed-out native
@@ -6151,6 +6168,7 @@ def search(
         replacement = searcher.root_fallback
         if (
             replacement is not None
+            and replacement.tactically_safe
             and replacement.paratrooper_mission_penalty <= 0.0
         ):
             first_turn = list(replacement.moves)
@@ -6179,7 +6197,26 @@ def search(
                     board.turn,
                     retrospective=False,
                 )
-                if clean_purpose["paratrooper_mission_penalty"] <= 0.0:
+                clean_safety_budget = remaining_overall_ms(seed_time_ms)
+                clean_safety = (
+                    bounded_seed_safety(
+                        board,
+                        clean_board,
+                        personality,
+                        turn_number,
+                        beam_width,
+                        max_actions,
+                        clean_safety_budget,
+                        check_hq_combinations=False,
+                    )
+                    if clean_safety_budget >= 50
+                    else None
+                )
+                if (
+                    clean_purpose["paratrooper_mission_penalty"] <= 0.0
+                    and clean_safety is not None
+                    and clean_safety.tactically_safe
+                ):
                     first_turn = clean_moves
                     resulting_board = clean_board
                     best = clean_seed
@@ -6503,6 +6540,7 @@ def search(
             "timed_out": timed_out,
             "hard_deadline_ms": hard_budget_ms,
             "hard_deadline_reached": time.monotonic() >= overall_deadline,
+            "final_safety_reserve_ms": final_safety_reserve_ms,
             "fallback_used": fallback_kind,
             "opening_book_used": opening_book_used,
             "early_game_focus": turn_number <= EARLY_GAME_LAST_TURN,
