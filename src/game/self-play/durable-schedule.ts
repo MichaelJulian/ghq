@@ -1,5 +1,37 @@
-import type { DurableSelfPlayCompetitor } from "@/workflows/self-play-game";
+import type {
+  DurableSelfPlayCompetitor,
+  DurableSelfPlayGameConfig,
+} from "@/workflows/self-play-game";
 import { valueModelCheckpointId } from "@/game/value-model/inference";
+
+export const MAX_CONCURRENT_DURABLE_SEARCHES = 4;
+export const DURABLE_SEARCH_SLOT_MS = 50_000;
+
+export function scheduleDurableSearch(
+  index: number,
+  games: number,
+  epochMs: number
+): DurableSelfPlayGameConfig["searchSchedule"] {
+  if (
+    !Number.isSafeInteger(index) ||
+    index < 0 ||
+    !Number.isSafeInteger(games) ||
+    games < 1 ||
+    index >= games ||
+    !Number.isSafeInteger(epochMs) ||
+    epochMs < 0
+  ) {
+    throw new RangeError("Invalid durable search schedule input");
+  }
+  const laneCount = Math.ceil(games / MAX_CONCURRENT_DURABLE_SEARCHES);
+  if (laneCount === 1) return undefined;
+  return {
+    epochMs,
+    lane: Math.floor(index / MAX_CONCURRENT_DURABLE_SEARCHES),
+    laneCount,
+    slotMs: DURABLE_SEARCH_SLOT_MS,
+  };
+}
 
 export interface DurableScheduleInput {
   index: number;

@@ -16,6 +16,7 @@ import {
 } from "@/game/self-play/strategic-progress";
 import { auditParatrooperTrainingPolicy } from "@/game/self-play/training-policy";
 import { analyzeFen } from "@/server/fen-analysis";
+import { sleep } from "workflow";
 import {
   persistSelfPlayArtifacts,
   persistSelfPlayProgress,
@@ -50,6 +51,13 @@ export interface DurableSelfPlayGameConfig {
   repetitionLimit?: number;
   noProgressTurns?: number;
   codeVersion?: string;
+  /** Absolute slots that cap concurrent CPU-heavy searches within a batch. */
+  searchSchedule?: {
+    epochMs: number;
+    lane: number;
+    laneCount: number;
+    slotMs: number;
+  };
 }
 
 export interface DurableSelfPlayDecision {
@@ -349,6 +357,32 @@ function turnSeed(seed: number, turnNumber: number): number {
   return (seed + Math.imul(turnNumber, 0x9e3779b1)) >>> 0;
 }
 
+export function durableSearchSlotAt(
+  schedule: DurableSelfPlayGameConfig["searchSchedule"],
+  turnNumber: number,
+  initialTurnNumber = 1
+): Date | undefined {
+  if (!schedule) return undefined;
+  const { epochMs, lane, laneCount, slotMs } = schedule;
+  if (
+    !Number.isSafeInteger(epochMs) ||
+    epochMs < 0 ||
+    !Number.isSafeInteger(lane) ||
+    lane < 0 ||
+    !Number.isSafeInteger(laneCount) ||
+    laneCount < 1 ||
+    lane >= laneCount ||
+    !Number.isSafeInteger(slotMs) ||
+    slotMs < 1 ||
+    !Number.isSafeInteger(turnNumber) ||
+    turnNumber < initialTurnNumber
+  ) {
+    throw new RangeError("Invalid durable self-play search schedule");
+  }
+  const turnOffset = turnNumber - initialTurnNumber;
+  return new Date(epochMs + (lane + turnOffset * laneCount) * slotMs);
+}
+
 export function isDurableTrainingDecisionEligible(
   decision: DurableSelfPlayDecision,
   outcome: DurableSelfPlayGameResult["outcome"]
@@ -543,18 +577,20 @@ export function durableSelfPlayProgressSnapshot(input: {
           fallback: latestUnverifiedFallback.fallback as "safe" | "seeded",
           timedOut: latestUnverifiedFallback.timedOut,
           seedReplyVerified:
-            latestUnverifiedFallback.searchTelemetry?.seedReplyVerified === true,
-          seedSafetyRetryUsed:
-            latestUnverifiedFallback.searchTelemetry?.seedSafetyRetryUsed === true,
-          seedSafetyRetryVerified:
-            latestUnverifiedFallback.searchTelemetry?.seedSafetyRetryVerified ===
+            latestUnverifiedFallback.searchTelemetry?.seedReplyVerified ===
             true,
+          seedSafetyRetryUsed:
+            latestUnverifiedFallback.searchTelemetry?.seedSafetyRetryUsed ===
+            true,
+          seedSafetyRetryVerified:
+            latestUnverifiedFallback.searchTelemetry
+              ?.seedSafetyRetryVerified === true,
           safeFallbackReplyVerified:
             latestUnverifiedFallback.searchTelemetry
               ?.safeFallbackReplyVerified === true,
           tacticalReturnGuardUsed:
-            latestUnverifiedFallback.searchTelemetry?.tacticalReturnGuardUsed ===
-            true,
+            latestUnverifiedFallback.searchTelemetry
+              ?.tacticalReturnGuardUsed === true,
         }
       : undefined,
     timedOutDecisions: input.decisions.filter((decision) => decision.timedOut)
@@ -613,6 +649,12 @@ export async function playDurableSelfPlayGame(
   while (turnNumber <= maxTurns && !outcome) {
     const competitor = player === "RED" ? config.red : config.blue;
     const opponent = player === "RED" ? config.blue : config.red;
+    const searchSlot = durableSearchSlotAt(
+      config.searchSchedule,
+      turnNumber,
+      initialTurnNumber
+    );
+    if (searchSlot) await sleep(searchSlot);
     const step = await playDurableTurn({
       fen,
       serializedState,

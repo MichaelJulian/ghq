@@ -2,7 +2,12 @@ import { NextResponse } from "next/server";
 import { start } from "workflow/api";
 import { PERSONALITIES } from "@/game/value-model/personalities";
 import type { PersonalityId } from "@/game/analysis/types";
-import { scheduleDurableCompetitors } from "@/game/self-play/durable-schedule";
+import {
+  DURABLE_SEARCH_SLOT_MS,
+  MAX_CONCURRENT_DURABLE_SEARCHES,
+  scheduleDurableCompetitors,
+  scheduleDurableSearch,
+} from "@/game/self-play/durable-schedule";
 import { persistSelfPlayGenerationManifest } from "@/server/self-play-storage";
 import {
   playDurableSelfPlayGame,
@@ -115,10 +120,12 @@ export async function POST(request: Request) {
     );
     const generationId = `vercel-${
       valueModelArena ? "arena-" : ""
-    }r${redMaxActions}b${blueMaxActions}-${seed.toString(16)}-${Date.now().toString(
-      36
-    )}`;
+    }r${redMaxActions}b${blueMaxActions}-${seed.toString(
+      16
+    )}-${Date.now().toString(36)}`;
     const codeVersion = process.env.VERCEL_GIT_COMMIT_SHA ?? "local";
+    const searchLaneCount = Math.ceil(games / MAX_CONCURRENT_DURABLE_SEARCHES);
+    const searchScheduleEpochMs = Date.now() + 5_000;
     const runs = await Promise.all(
       Array.from({ length: games }, async (_, index) => {
         // Adjacent games form a controlled color-swapped pair: same matchup and
@@ -144,6 +151,11 @@ export async function POST(request: Request) {
             repetitionLimit,
             noProgressTurns,
             codeVersion,
+            searchSchedule: scheduleDurableSearch(
+              index,
+              games,
+              searchScheduleEpochMs
+            ),
           },
         ]);
         return {
@@ -193,6 +205,13 @@ export async function POST(request: Request) {
           redMaxActions,
           blueMaxActions,
           seed,
+          maxConcurrentSearches: Math.min(
+            games,
+            MAX_CONCURRENT_DURABLE_SEARCHES
+          ),
+          searchLaneCount,
+          searchSlotMs:
+            searchLaneCount > 1 ? DURABLE_SEARCH_SLOT_MS : undefined,
         },
         expectedProvenance: {
           incumbentCheckpoints: [...checkpoints.incumbentCheckpoints].sort(),
@@ -218,6 +237,8 @@ export async function POST(request: Request) {
         pairedColorSwap: true,
         valueModelArena,
         manifestStorage,
+        maxConcurrentSearches: Math.min(games, MAX_CONCURRENT_DURABLE_SEARCHES),
+        searchLaneCount,
         runs,
       },
       { status: 202 }

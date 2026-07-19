@@ -3,6 +3,7 @@
 import { describe, expect, it } from "@jest/globals";
 import {
   actionMadeProgress,
+  durableSearchSlotAt,
   durableSelfPlayProgressSnapshot,
   durableGameTrainingRejectionReasons,
   isDurableTrainingDecisionEligible,
@@ -46,6 +47,19 @@ function decision(
 }
 
 describe("durable self-play training quality", () => {
+  it("places concurrent games into stable absolute search lanes", () => {
+    const schedule = {
+      epochMs: 1_000,
+      lane: 2,
+      laneCount: 3,
+      slotMs: 50_000,
+    };
+
+    expect(durableSearchSlotAt(schedule, 1)?.getTime()).toBe(101_000);
+    expect(durableSearchSlotAt(schedule, 2)?.getTime()).toBe(251_000);
+    expect(durableSearchSlotAt(undefined, 2)).toBeUndefined();
+  });
+
   it("derives a counterfactual start's side and absolute turn from its FEN", () => {
     const state = resolveDurableInitialState({
       initialFen: "qr↓6/iii5/8/8/8/8/5III/6R↑Q IIIIIFFFPRRTH iiiiifffprrth b",

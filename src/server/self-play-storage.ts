@@ -65,6 +65,9 @@ export interface SelfPlayGenerationManifest {
     blueMaxActions: number;
     seed: number;
     explorationTemperature?: number;
+    maxConcurrentSearches?: number;
+    searchLaneCount?: number;
+    searchSlotMs?: number;
   };
   expectedProvenance: {
     incumbentCheckpoints: string[];

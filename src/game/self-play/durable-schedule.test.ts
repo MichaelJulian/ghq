@@ -2,7 +2,10 @@
 
 import { describe, expect, it } from "@jest/globals";
 import type { DurableSelfPlayCompetitor } from "@/workflows/self-play-game";
-import { scheduleDurableCompetitors } from "./durable-schedule";
+import {
+  scheduleDurableCompetitors,
+  scheduleDurableSearch,
+} from "./durable-schedule";
 
 const competitors: DurableSelfPlayCompetitor[] = ["balanced", "fortress"].map(
   (personality) => ({
@@ -16,6 +19,24 @@ const competitors: DurableSelfPlayCompetitor[] = ["balanced", "fortress"].map(
 );
 
 describe("durable self-play scheduling", () => {
+  it("caps a large batch at four concurrent search lanes", () => {
+    const schedules = Array.from({ length: 12 }, (_, index) =>
+      scheduleDurableSearch(index, 12, 1_000)
+    );
+
+    expect(schedules.slice(0, 4).map((schedule) => schedule?.lane)).toEqual([
+      0, 0, 0, 0,
+    ]);
+    expect(schedules.slice(4, 8).map((schedule) => schedule?.lane)).toEqual([
+      1, 1, 1, 1,
+    ]);
+    expect(schedules.slice(8).map((schedule) => schedule?.lane)).toEqual([
+      2, 2, 2, 2,
+    ]);
+    expect(schedules.every((schedule) => schedule?.laneCount === 3)).toBe(true);
+    expect(scheduleDurableSearch(3, 4, 1_000)).toBeUndefined();
+  });
+
   it("isolates value checkpoint and color within an arena pair", () => {
     const first = scheduleDurableCompetitors({
       index: 0,
