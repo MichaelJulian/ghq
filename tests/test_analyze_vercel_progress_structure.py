@@ -101,6 +101,71 @@ class ProgressStructureAnalysisTests(unittest.TestCase):
         self.assertEqual(report["sidePositions"], 0)
         self.assertEqual(report["metrics"], {})
 
+    def test_compares_runtime_deltas_and_repair_obligations(self):
+        before = {
+            "generationId": "generation-1",
+            "completedTurns": [20],
+            "structuralDebtPositions": 2,
+            "immediateForcedCapturePositions": 1,
+            "snapshotTelemetry": [
+                {
+                    "gameId": "game-1",
+                    "decisions": 20,
+                    "depthAtLeastTwoDecisions": 16,
+                    "fallbackDecisions": 1,
+                    "unverifiedFallbackDecisions": 0,
+                    "timedOutDecisions": 16,
+                }
+            ],
+            "positionMetrics": [
+                {
+                    "gameId": "game-1",
+                    "side": "RED",
+                    "to_move": True,
+                    "tactical_risk_value": 5.0,
+                }
+            ],
+        }
+        after = {
+            "generationId": "generation-1",
+            "completedTurns": [30],
+            "structuralDebtPositions": 1,
+            "immediateForcedCapturePositions": 0,
+            "snapshotTelemetry": [
+                {
+                    "gameId": "game-1",
+                    "decisions": 30,
+                    "depthAtLeastTwoDecisions": 25,
+                    "fallbackDecisions": 2,
+                    "unverifiedFallbackDecisions": 0,
+                    "timedOutDecisions": 25,
+                }
+            ],
+            "positionMetrics": [
+                {
+                    "gameId": "game-1",
+                    "side": "RED",
+                    "to_move": True,
+                    "tactical_risk_value": 0.0,
+                }
+            ],
+        }
+
+        comparison = progress_structure.compare_checkpoint_reports(
+            before, after
+        )
+        self.assertEqual(comparison["sharedGames"], 1)
+        self.assertEqual(comparison["counterDeltas"]["decisions"], 10)
+        self.assertEqual(
+            comparison["counterDeltas"]["depthAtLeastTwoDecisions"], 9
+        )
+        self.assertEqual(comparison["counterDeltas"]["fallbackDecisions"], 1)
+        self.assertEqual(comparison["repairsClearedAtCheckpoint"], 1)
+        self.assertEqual(comparison["structuralDebtPositionDelta"], -1)
+        self.assertEqual(
+            comparison["immediateForcedCapturePositionDelta"], -1
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

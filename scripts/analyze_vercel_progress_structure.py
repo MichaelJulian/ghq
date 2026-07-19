@@ -51,6 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--generation", required=True)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--previous", type=Path)
     parser.add_argument("--base-url", default="https://ghq-one.vercel.app")
     return parser.parse_args()
 
@@ -290,6 +291,7 @@ def analyze_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
             }
             for snapshot in snapshots
         ],
+        "positionMetrics": rows,
         "completedTurns": sorted(
             {int(snapshot["completedTurns"]) for snapshot in snapshots}
         ),
@@ -297,9 +299,99 @@ def analyze_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def compare_checkpoint_reports(
+    before: Dict[str, Any], after: Dict[str, Any]
+) -> Dict[str, Any]:
+    if before.get("generationId") != after.get("generationId"):
+        raise ValueError("checkpoint reports belong to different generations")
+    before_games = {
+        str(item["gameId"]): item
+        for item in before.get("snapshotTelemetry", [])
+    }
+    after_games = {
+        str(item["gameId"]): item
+        for item in after.get("snapshotTelemetry", [])
+    }
+    shared_games = sorted(set(before_games).intersection(after_games))
+    counter_fields = (
+        "decisions",
+        "depthAtLeastTwoDecisions",
+        "fallbackDecisions",
+        "unverifiedFallbackDecisions",
+        "timedOutDecisions",
+    )
+    counter_deltas = {
+        field: sum(
+            int(after_games[game].get(field) or 0)
+            - int(before_games[game].get(field) or 0)
+            for game in shared_games
+        )
+        for field in counter_fields
+    }
+    before_positions = {
+        (str(item["gameId"]), str(item["side"])): item
+        for item in before.get("positionMetrics", [])
+    }
+    after_positions = {
+        (str(item["gameId"]), str(item["side"])): item
+        for item in after.get("positionMetrics", [])
+    }
+    repair_keys = sorted(
+        key
+        for key, item in before_positions.items()
+        if bool(item.get("to_move"))
+        and float(item.get("tactical_risk_value") or 0.0) > 0.0
+    )
+    repair_outcomes = []
+    for key in repair_keys:
+        prior = before_positions[key]
+        current = after_positions.get(key)
+        current_risk = (
+            float(current.get("tactical_risk_value") or 0.0)
+            if current is not None
+            else None
+        )
+        repair_outcomes.append(
+            {
+                "gameId": key[0],
+                "side": key[1],
+                "priorRiskValue": float(prior["tactical_risk_value"]),
+                "currentRiskValue": current_risk,
+                "riskClearedAtCheckpoint": (
+                    current_risk == 0.0 if current_risk is not None else None
+                ),
+            }
+        )
+    return {
+        "beforeCompletedTurns": before.get("completedTurns", []),
+        "afterCompletedTurns": after.get("completedTurns", []),
+        "sharedGames": len(shared_games),
+        "counterDeltas": counter_deltas,
+        "repairObligations": len(repair_outcomes),
+        "repairsClearedAtCheckpoint": sum(
+            outcome["riskClearedAtCheckpoint"] is True
+            for outcome in repair_outcomes
+        ),
+        "repairOutcomes": repair_outcomes,
+        "structuralDebtPositionDelta": int(
+            after.get("structuralDebtPositions", 0)
+        )
+        - int(before.get("structuralDebtPositions", 0)),
+        "immediateForcedCapturePositionDelta": int(
+            after.get("immediateForcedCapturePositions", 0)
+        )
+        - int(before.get("immediateForcedCapturePositions", 0)),
+    }
+
+
 def main() -> None:
     args = parse_args()
     report = analyze_summary(read_summary(args.base_url, args.generation))
+    if args.previous:
+        previous = json.loads(args.previous.read_text(encoding="utf-8"))
+        report["checkpointComparison"] = compare_checkpoint_reports(
+            previous, report
+        )
     rendered = json.dumps(report, indent=2) + "\n"
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
