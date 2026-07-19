@@ -110,6 +110,12 @@ interface GenerationSummary {
     effectiveTrainingGames: number;
     effectiveTrainingPositions: number;
   };
+  trainingReadiness?: {
+    qualityEligibleGames: number;
+    preAuditCompletePairs: number;
+    minimumAuditedPairs: number;
+    preAuditPairDeficit: number;
+  };
   provenance?: {
     codeVersions: string[];
     valueModelCheckpoints: string[];
@@ -527,16 +533,17 @@ export function SelfPlayRuns() {
                 generationSummary.activeProgressRuntime.decisions > 0 && (
                   <div className="mt-2 rounded bg-white/70 p-2 font-semibold text-slate-700">
                     Live: {generationSummary.activeProgressRuntime.decisions}{" "}
-                    decisions across {generationSummary.activeProgressRuntime.games}{" "}
-                    games · depth≥2{" "}
+                    decisions across{" "}
+                    {generationSummary.activeProgressRuntime.games} games ·
+                    depth≥2{" "}
                     {(
                       100 *
-                      generationSummary.activeProgressRuntime.depthAtLeastTwoRate
+                      generationSummary.activeProgressRuntime
+                        .depthAtLeastTwoRate
                     ).toFixed(1)}
                     % · fallback{" "}
                     {(
-                      100 *
-                      generationSummary.activeProgressRuntime.fallbackRate
+                      100 * generationSummary.activeProgressRuntime.fallbackRate
                     ).toFixed(1)}
                     % · unverified{" "}
                     {(
@@ -546,8 +553,7 @@ export function SelfPlayRuns() {
                     ).toFixed(1)}
                     % · timeout{" "}
                     {(
-                      100 *
-                      generationSummary.activeProgressRuntime.timedOutRate
+                      100 * generationSummary.activeProgressRuntime.timedOutRate
                     ).toFixed(1)}
                     %
                   </div>
@@ -592,6 +598,17 @@ export function SelfPlayRuns() {
                     generationSummary.trainingPolicy.effectiveTrainingPositions
                   }{" "}
                   usable positions
+                  {generationSummary.trainingReadiness && (
+                    <>
+                      {" · "}
+                      {
+                        generationSummary.trainingReadiness
+                          .preAuditCompletePairs
+                      }
+                      /{generationSummary.trainingReadiness.minimumAuditedPairs}{" "}
+                      pre-audit pairs
+                    </>
+                  )}
                   {generationSummary.trainingPolicy.quarantinedGames > 0 && (
                     <>
                       {" · "}

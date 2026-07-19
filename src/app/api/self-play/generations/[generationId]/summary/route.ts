@@ -4,6 +4,7 @@ import { summarizeValueModelArena } from "@/game/self-play/arena-results";
 import { summarizeSearchRuntime } from "@/game/self-play/search-runtime-summary";
 import { summarizeActiveProgressRuntime } from "@/game/self-play/progress-runtime-summary";
 import { auditParatrooperTrainingPolicy } from "@/game/self-play/training-policy";
+import { summarizeSelfPlayTrainingReadiness } from "@/game/self-play/training-readiness";
 import {
   readPersistedSelfPlayGames,
   readPersistedSelfPlayProgress,
@@ -82,6 +83,7 @@ export async function GET(
     let policyCleanTrainingPositions = 0;
     let policyUnverifiedFallbackGames = 0;
     let policyUnverifiedFallbackDecisions = 0;
+    const qualityEligibleGameIds = new Set<string>();
     const codeVersions = new Set<string>();
     const valueModelCheckpoints = new Set<string>();
     for (const game of games) {
@@ -103,8 +105,7 @@ export async function GET(
       unverifiedFallbackDecisions += gameUnverifiedFallbackDecisions;
       if (gameUnverifiedFallbackDecisions > 0) {
         policyUnverifiedFallbackGames++;
-        policyUnverifiedFallbackDecisions +=
-          gameUnverifiedFallbackDecisions;
+        policyUnverifiedFallbackDecisions += gameUnverifiedFallbackDecisions;
       }
       const policyAudit = auditParatrooperTrainingPolicy(game.decisions);
       const gameTrainingEligible =
@@ -114,6 +115,7 @@ export async function GET(
       if (gameTrainingEligible) {
         if (game.trainingPositions > 0) policyCleanTrainingGames++;
         policyCleanTrainingPositions += game.trainingPositions;
+        if (game.trainingPositions > 0) qualityEligibleGameIds.add(game.gameId);
       } else {
         policyQuarantinedGames++;
         policyViolationDecisions += policyAudit.violatingDecisions;
@@ -189,6 +191,9 @@ export async function GET(
         effectiveTrainingGames: policyCleanTrainingGames,
         effectiveTrainingPositions: policyCleanTrainingPositions,
       },
+      trainingReadiness: summarizeSelfPlayTrainingReadiness(
+        qualityEligibleGameIds
+      ),
       provenance: {
         codeVersions: [...codeVersions].sort(),
         valueModelCheckpoints: [...valueModelCheckpoints].sort(),
