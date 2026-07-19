@@ -71,6 +71,41 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def counterfactual_training_provenance(
+    records: Sequence[Dict[str, Any]],
+) -> Dict[str, List[str]]:
+    """Return the exact semantic identities consumed by this trainer."""
+    return {
+        "root_ids": sorted({str(record["root_id"]) for record in records}),
+        "root_fingerprints": sorted(
+            {str(record["root_fingerprint"]) for record in records}
+        ),
+        "source_game_ids": sorted(
+            {str(record["source_game_id"]) for record in records}
+        ),
+    }
+
+
+def counterfactual_artifact_metadata(
+    report: Dict[str, Any],
+    *,
+    training_report: Path,
+    approved: bool,
+) -> Dict[str, Any]:
+    """Persist every identity needed to prove a future holdout is disjoint."""
+    return {
+        "counterfactual_policy_report": str(training_report),
+        "counterfactual_pairs": report["pairs"],
+        "counterfactual_terminal_pairs": report["terminal_pairs"],
+        "counterfactual_approved_for_arena": approved,
+        "counterfactual_training_root_ids": report["root_ids"],
+        "counterfactual_training_root_fingerprints": report[
+            "root_fingerprints"
+        ],
+        "counterfactual_training_source_game_ids": report["source_game_ids"],
+    }
+
+
 def pair_arrays(
     records: Sequence[Dict[str, Any]], baseline: Dict[str, Any]
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -460,10 +495,10 @@ def main() -> None:
     )
 
     root_players = Counter(record["root_player"] for record in records)
-    root_ids = sorted({str(record["root_id"]) for record in records})
-    source_game_ids = sorted(
-        {str(record["source_game_id"]) for record in records}
-    )
+    training_provenance = counterfactual_training_provenance(records)
+    root_ids = training_provenance["root_ids"]
+    root_fingerprints = training_provenance["root_fingerprints"]
+    source_game_ids = training_provenance["source_game_ids"]
     phases = Counter(
         "early"
         if record["source_turn_number"] <= 24
@@ -480,6 +515,7 @@ def main() -> None:
         "source_games": len({record["source_game_id"] for record in records}),
         "source_game_ids": source_game_ids,
         "root_ids": root_ids,
+        "root_fingerprints": root_fingerprints,
         "terminal_pairs": sum(bool(record["terminal_pair"]) for record in records),
         "root_players": dict(root_players),
         "phases": dict(phases),
@@ -523,14 +559,11 @@ def main() -> None:
         final_trees,
         selected_candidate["learning_rate"],
         dataset_hash,
-        {
-            "counterfactual_policy_report": str(args.training_report),
-            "counterfactual_pairs": len(records),
-            "counterfactual_terminal_pairs": report["terminal_pairs"],
-            "counterfactual_approved_for_arena": approved,
-            "counterfactual_training_root_ids": root_ids,
-            "counterfactual_training_source_game_ids": source_game_ids,
-        },
+        counterfactual_artifact_metadata(
+            report,
+            training_report=args.training_report,
+            approved=approved,
+        ),
     )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.training_report.parent.mkdir(parents=True, exist_ok=True)

@@ -1,9 +1,12 @@
 import unittest
+from pathlib import Path
 
 import numpy as np
 from sklearn.tree import DecisionTreeRegressor
 
 from scripts.train_pairwise_tree_correction import (
+    counterfactual_artifact_metadata,
+    counterfactual_training_provenance,
     correction_scores,
     fit_pairwise_tree_boosting,
     grouped_folds,
@@ -14,6 +17,54 @@ from scripts.train_pairwise_tree_correction import (
 
 
 class PairwiseTreeCorrectionTests(unittest.TestCase):
+    def test_training_provenance_preserves_semantic_holdout_identity(self):
+        records = [
+            {
+                "root_id": "generation-b:turn-9",
+                "root_fingerprint": "BLUE:fen-b||fen-c",
+                "source_game_id": "game-b",
+            },
+            {
+                "root_id": "generation-a:turn-7",
+                "root_fingerprint": "RED:fen-a||fen-b",
+                "source_game_id": "game-a",
+            },
+            {
+                "root_id": "generation-b:turn-9",
+                "root_fingerprint": "BLUE:fen-b||fen-c",
+                "source_game_id": "game-b",
+            },
+        ]
+
+        self.assertEqual(
+            counterfactual_training_provenance(records),
+            {
+                "root_ids": ["generation-a:turn-7", "generation-b:turn-9"],
+                "root_fingerprints": [
+                    "BLUE:fen-b||fen-c",
+                    "RED:fen-a||fen-b",
+                ],
+                "source_game_ids": ["game-a", "game-b"],
+            },
+        )
+
+        metadata = counterfactual_artifact_metadata(
+            {
+                "pairs": 3,
+                "terminal_pairs": 2,
+                **counterfactual_training_provenance(records),
+            },
+            training_report=Path("training-report.json"),
+            approved=True,
+        )
+        self.assertEqual(
+            metadata["counterfactual_training_root_fingerprints"],
+            ["BLUE:fen-b||fen-c", "RED:fen-a||fen-b"],
+        )
+        self.assertEqual(metadata["counterfactual_pairs"], 3)
+        self.assertEqual(metadata["counterfactual_terminal_pairs"], 2)
+        self.assertTrue(metadata["counterfactual_approved_for_arena"])
+
     def test_feature_ranking_uses_pair_difference_residual(self):
         left = np.asarray([[2.0, 0.0], [-2.0, 0.0], [1.0, 0.0], [-1.0, 0.0]])
         right = -left
