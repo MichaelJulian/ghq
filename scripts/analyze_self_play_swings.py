@@ -236,8 +236,11 @@ def causal_collapse_metrics(
     """Separate newly caused exposure from an already-forced material loss.
 
     This is deliberately conservative: a loss covered by the forced-loss value
-    that existed before the selected turn is not called avoidable.  It remains
-    visible for audit, but is excluded from actionable collapse examples.
+    that existed before the selected turn is not called avoidable.  Likewise,
+    material spent while the selected turn has a clean forced HQ win is not a
+    collapse: training on that window would teach the model to preserve pieces
+    instead of converting the game.  Both remain visible for audit, but are
+    excluded from actionable collapse examples.
     """
     preexisting_forced_loss = float(before["own"]["forcedLossValue"])
     own_material_lost = float(exchange["ownMaterialLost"])
@@ -255,9 +258,22 @@ def causal_collapse_metrics(
     )
     unfavorable = exchange["assessment"] == "unfavorable"
     newly_exposed = new_forced > 0.0 or new_critical > 0.0
+    own_forced_after = float(
+        after_selected_turn["own"]["forcedLossValue"]
+    )
+    opponent_forced_after = float(
+        after_selected_turn["opponent"]["forcedLossValue"]
+    )
+    forced_hq_win = (
+        opponent_forced_after >= ghq_ai.PIECE_VALUES[engine.HQ]
+        and own_forced_after < ghq_ai.PIECE_VALUES[engine.HQ]
+    )
 
     if not unfavorable:
         category = "not-unfavorable"
+        actionable = False
+    elif forced_hq_win:
+        category = "forced-hq-win-tradeoff"
         actionable = False
     elif loss_beyond_preexisting <= 0.0 and not newly_exposed:
         category = "within-preexisting-forced-loss"
@@ -288,6 +304,7 @@ def causal_collapse_metrics(
         "selectedTurnNewTacticalRiskValue": round(new_risk, 4),
         "selectedTurnNewForcedLossValue": round(new_forced, 4),
         "selectedTurnNewCriticalExposureValue": round(new_critical, 4),
+        "selectedTurnForcedHqWin": forced_hq_win,
         "attributionWindowTurns": int(window_turns),
     }
 

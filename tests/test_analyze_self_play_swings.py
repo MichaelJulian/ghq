@@ -280,6 +280,48 @@ class SelfPlaySwingAnalysisTests(unittest.TestCase):
         self.assertEqual(later["category"], "unresolved-additional-loss")
         self.assertFalse(later["actionable"])
 
+    def test_material_spent_during_clean_forced_hq_win_is_not_actionable(self):
+        before = {
+            "own": {
+                "materialValue": 30.0,
+                "tacticalRiskValue": 3.0,
+                "forcedLossValue": 3.0,
+                "criticalExposureValue": 3.0,
+            },
+            "opponent": {
+                "materialValue": 30.0,
+                "tacticalRiskValue": 0.0,
+                "forcedLossValue": 0.0,
+                "criticalExposureValue": 0.0,
+            },
+            "materialBalance": 0.0,
+        }
+        after_selected = copy.deepcopy(before)
+        after_selected["own"].update(
+            tacticalRiskValue=3.0,
+            forcedLossValue=0.0,
+            criticalExposureValue=3.0,
+        )
+        after_selected["opponent"].update(
+            tacticalRiskValue=105.0,
+            forcedLossValue=100.0,
+            criticalExposureValue=105.0,
+        )
+        exchange = {
+            "ownMaterialLost": 3.0,
+            "opponentMaterialLost": 0.0,
+            "netMaterialExchange": -3.0,
+            "assessment": "unfavorable",
+        }
+
+        causal = swings.causal_collapse_metrics(
+            before, after_selected, exchange, 2
+        )
+
+        self.assertEqual(causal["category"], "forced-hq-win-tradeoff")
+        self.assertFalse(causal["actionable"])
+        self.assertTrue(causal["selectedTurnForcedHqWin"])
+
     def test_replay_fails_closed_on_a_resulting_fen_mismatch(self):
         game = collapse_game()
         game["decisions"][0]["resultingFen"] = TURN_34_FEN

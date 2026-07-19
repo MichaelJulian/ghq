@@ -300,6 +300,106 @@
         "noWorseThanBaselineCriticalExposure": true,
         "noWorseThanBaselineTwoTurnNetExchange": true
       }
+    },
+    {
+      "id": "dc3-clean-pair-game-0008-turn-75-capture-and-extract",
+      "source": "Frozen clean pair 0007/0008: RED must convert the exposed infantry while removing all four points of preexisting forced loss",
+      "fen": "5i2/3I2r↓q/4H→3/2P5/1I1F3r↙/1IT↑3R↑1/1R↑I1II1I/7Q - - r",
+      "turnNumber": 75,
+      "personality": "para_specialist",
+      "openingSeed": 2181822949,
+      "search": {
+        "timeMs": 20000,
+        "maxDepth": 2,
+        "beamWidth": 6,
+        "maxActions": 3
+      },
+      "acceptance": {
+        "requireFinalSafetyCertified": true,
+        "minimumCompletedDepth": 2,
+        "avoidImmediateHqLoss": true,
+        "maxCandidateForcedLoss": 0,
+        "maxCandidateCriticalExposure": 0,
+        "minimumTwoTurnNetExchange": 3,
+        "noWorseThanBaselineForcedLoss": true,
+        "noWorseThanBaselineCriticalExposure": true,
+        "noWorseThanBaselineTwoTurnNetExchange": true
+      }
+    },
+    {
+      "id": "dc3-clean-pair-game-0009-turn-91-preserve-risk-floor",
+      "source": "Frozen clean pair 0009/0010: RED must not increase the six-point critical exposure already present in the sparse late game",
+      "fen": "1q4p1/8/8/8/5i2/1R↑Ii2i1/8/2Q1H↑3 - - r",
+      "turnNumber": 91,
+      "personality": "para_specialist",
+      "openingSeed": 133678160,
+      "search": {
+        "timeMs": 20000,
+        "maxDepth": 2,
+        "beamWidth": 6,
+        "maxActions": 3
+      },
+      "acceptance": {
+        "requireFinalSafetyCertified": true,
+        "minimumCompletedDepth": 2,
+        "avoidImmediateHqLoss": true,
+        "maxCandidateForcedLoss": 0,
+        "maxCandidateCriticalExposure": 6,
+        "minimumTwoTurnNetExchange": 0,
+        "noWorseThanBaselineForcedLoss": true,
+        "noWorseThanBaselineCriticalExposure": true,
+        "noWorseThanBaselineTwoTurnNetExchange": true
+      }
+    },
+    {
+      "id": "dc3-clean-pair-game-0010-turn-61-latent-reply",
+      "source": "Frozen clean pair 0009/0010: RED must remove three points of existing danger without allowing the latent three-point reply capture",
+      "fen": "qp1i3i/4i1i1/i7/1fF5/2R↑1F3/3I4/8/7Q - - r",
+      "turnNumber": 61,
+      "personality": "tactical_gambler",
+      "openingSeed": 133678160,
+      "search": {
+        "timeMs": 20000,
+        "maxDepth": 2,
+        "beamWidth": 6,
+        "maxActions": 3
+      },
+      "acceptance": {
+        "requireFinalSafetyCertified": true,
+        "minimumCompletedDepth": 2,
+        "avoidImmediateHqLoss": true,
+        "maxCandidateForcedLoss": 0,
+        "maxCandidateCriticalExposure": 0,
+        "minimumTwoTurnNetExchange": 0,
+        "noWorseThanBaselineForcedLoss": true,
+        "noWorseThanBaselineCriticalExposure": true,
+        "noWorseThanBaselineTwoTurnNetExchange": true
+      }
+    },
+    {
+      "id": "dc3-clean-pair-game-0008-turn-41-certified-reply",
+      "source": "Frozen clean pair 0007/0008: retain a fully verified zero-exposure reply instead of the historical safe-fallback line that lost three material",
+      "fen": "p4i2/1iiir↓h↓t↓f/q3i1r↓1/2F5/II6/2T↑R↑2I1/IR↑IH↑IIR↑I/2PF2FQ - - r",
+      "turnNumber": 41,
+      "personality": "para_specialist",
+      "openingSeed": 2181822949,
+      "search": {
+        "timeMs": 20000,
+        "maxDepth": 2,
+        "beamWidth": 6,
+        "maxActions": 3
+      },
+      "acceptance": {
+        "requireFinalSafetyCertified": true,
+        "minimumCompletedDepth": 2,
+        "avoidImmediateHqLoss": true,
+        "maxCandidateForcedLoss": 0,
+        "maxCandidateCriticalExposure": 0,
+        "minimumTwoTurnNetExchange": 0,
+        "noWorseThanBaselineForcedLoss": true,
+        "noWorseThanBaselineCriticalExposure": true,
+        "noWorseThanBaselineTwoTurnNetExchange": true
+      }
     }
   ]
 }
