@@ -500,6 +500,13 @@ export function durableSelfPlayProgressSnapshot(input: {
   status: SelfPlayProgressSnapshot["status"];
   outcome?: DurableSelfPlayGameResult["outcome"];
 }): SelfPlayProgressSnapshot {
+  const latestUnverifiedFallback = [...input.decisions]
+    .reverse()
+    .find(
+      (decision) =>
+        decision.fallback === "seeded" ||
+        (decision.fallback !== "none" && decision.completedDepth < 2)
+    );
   return {
     format: "ghq-self-play-progress-v1",
     generationId: input.config.generationId,
@@ -526,6 +533,30 @@ export function durableSelfPlayProgressSnapshot(input: {
         decision.fallback === "seeded" ||
         (decision.fallback !== "none" && decision.completedDepth < 2)
     ).length,
+    latestUnverifiedFallback: latestUnverifiedFallback
+      ? {
+          turnNumber: latestUnverifiedFallback.turnNumber,
+          player: latestUnverifiedFallback.player,
+          fen: latestUnverifiedFallback.fen,
+          selectedMoves: [...latestUnverifiedFallback.selectedMoves],
+          completedDepth: latestUnverifiedFallback.completedDepth,
+          fallback: latestUnverifiedFallback.fallback as "safe" | "seeded",
+          timedOut: latestUnverifiedFallback.timedOut,
+          seedReplyVerified:
+            latestUnverifiedFallback.searchTelemetry?.seedReplyVerified === true,
+          seedSafetyRetryUsed:
+            latestUnverifiedFallback.searchTelemetry?.seedSafetyRetryUsed === true,
+          seedSafetyRetryVerified:
+            latestUnverifiedFallback.searchTelemetry?.seedSafetyRetryVerified ===
+            true,
+          safeFallbackReplyVerified:
+            latestUnverifiedFallback.searchTelemetry
+              ?.safeFallbackReplyVerified === true,
+          tacticalReturnGuardUsed:
+            latestUnverifiedFallback.searchTelemetry?.tacticalReturnGuardUsed ===
+            true,
+        }
+      : undefined,
     timedOutDecisions: input.decisions.filter((decision) => decision.timedOut)
       .length,
     status: input.status,

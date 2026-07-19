@@ -59,12 +59,20 @@ describe("self-play search runtime summary", () => {
     guarded.searchTelemetry!.seedReplyVerified = true;
     guarded.searchTelemetry!.seedSafetyRetryUsed = true;
     guarded.searchTelemetry!.seedSafetyRetryVerified = true;
+    const unverified = decision(0);
+    unverified.turnNumber = 9;
+    unverified.fallback = "seeded";
+    unverified.fen = "blind-position";
+    unverified.selectedMoves = ["a1a2", "skip"];
+    unverified.searchTelemetry!.seedReplyVerified = true;
+    unverified.searchTelemetry!.tacticalReturnGuardUsed = true;
     const summary = summarizeSearchRuntime([
       {
+        gameId: "game-1",
         decisions: [
           guarded,
           decision(1, "native-python"),
-          decision(0),
+          unverified,
         ],
       },
     ]);
@@ -84,15 +92,31 @@ describe("self-play search runtime summary", () => {
     expect(summary.averageNodes).toBe(10);
     expect(summary.averageCompleteTurnsGenerated).toBe(20);
     expect(summary.hqExactReturnProbeDecisions).toBe(1);
-    expect(summary.tacticalReturnGuardDecisions).toBe(1);
-    expect(summary.tacticalReturnGuardRate).toBeCloseTo(1 / 3);
+    expect(summary.tacticalReturnGuardDecisions).toBe(2);
+    expect(summary.tacticalReturnGuardRate).toBeCloseTo(2 / 3);
     expect(summary.safeFallbackReplyVerifiedDecisions).toBe(1);
     expect(summary.safeFallbackReplyVerifiedRate).toBeCloseTo(1 / 3);
-    expect(summary.seedReplyVerifiedDecisions).toBe(1);
-    expect(summary.seedReplyVerifiedRate).toBeCloseTo(1 / 3);
+    expect(summary.seedReplyVerifiedDecisions).toBe(2);
+    expect(summary.seedReplyVerifiedRate).toBeCloseTo(2 / 3);
     expect(summary.seedSafetyRetryDecisions).toBe(1);
     expect(summary.seedSafetyRetryVerifiedDecisions).toBe(1);
     expect(summary.seedSafetyRetryVerificationRate).toBe(1);
+    expect(summary.unverifiedFallbackSamples).toEqual([
+      {
+        gameId: "game-1",
+        turnNumber: 9,
+        player: "RED",
+        fen: "blind-position",
+        selectedMoves: ["a1a2", "skip"],
+        completedDepth: 0,
+        fallback: "seeded",
+        seedReplyVerified: true,
+        seedSafetyRetryUsed: false,
+        seedSafetyRetryVerified: false,
+        safeFallbackReplyVerified: false,
+        tacticalReturnGuardUsed: true,
+      },
+    ]);
   });
 
   it("returns finite zero rates for an empty generation", () => {
@@ -116,6 +140,7 @@ describe("self-play search runtime summary", () => {
       seedSafetyRetryDecisions: 0,
       seedSafetyRetryVerifiedDecisions: 0,
       seedSafetyRetryVerificationRate: 0,
+      unverifiedFallbackSamples: [],
     });
   });
 });

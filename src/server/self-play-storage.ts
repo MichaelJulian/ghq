@@ -26,6 +26,21 @@ export interface SelfPlayProgressSnapshot {
   depthAtLeastTwoDecisions: number;
   fallbackDecisions: number;
   unverifiedFallbackDecisions: number;
+  /** Bounded diagnostic context for the most recent tactically blind turn. */
+  latestUnverifiedFallback?: {
+    turnNumber: number;
+    player: "RED" | "BLUE";
+    fen: string;
+    selectedMoves: string[];
+    completedDepth: number;
+    fallback: "safe" | "seeded";
+    timedOut: boolean;
+    seedReplyVerified: boolean;
+    seedSafetyRetryUsed: boolean;
+    seedSafetyRetryVerified: boolean;
+    safeFallbackReplyVerified: boolean;
+    tacticalReturnGuardUsed: boolean;
+  };
   timedOutDecisions: number;
   status: "running" | "completed";
   outcome?: { winner?: "RED" | "BLUE"; termination: string };

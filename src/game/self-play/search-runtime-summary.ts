@@ -23,6 +23,20 @@ export interface SearchRuntimeSummary {
   seedSafetyRetryDecisions: number;
   seedSafetyRetryVerifiedDecisions: number;
   seedSafetyRetryVerificationRate: number;
+  unverifiedFallbackSamples: Array<{
+    gameId: string;
+    turnNumber: number;
+    player: "RED" | "BLUE";
+    fen: string;
+    selectedMoves: string[];
+    completedDepth: number;
+    fallback: "safe" | "seeded";
+    seedReplyVerified: boolean;
+    seedSafetyRetryUsed: boolean;
+    seedSafetyRetryVerified: boolean;
+    safeFallbackReplyVerified: boolean;
+    tacticalReturnGuardUsed: boolean;
+  }>;
 }
 
 function increment(counts: Record<string, number>, key: string): void {
@@ -31,7 +45,10 @@ function increment(counts: Record<string, number>, key: string): void {
 
 /** Aggregate the exact behavior-search runtime used to create a generation. */
 export function summarizeSearchRuntime(
-  games: Pick<DurableSelfPlayGameResult, "decisions">[]
+  games: Array<
+    Pick<DurableSelfPlayGameResult, "decisions"> &
+      Partial<Pick<DurableSelfPlayGameResult, "gameId">>
+  >
 ): SearchRuntimeSummary {
   const decisions = games.flatMap((game) => game.decisions);
   const backendCounts: Record<string, number> = {};
@@ -50,6 +67,35 @@ export function summarizeSearchRuntime(
   let seedReplyVerifiedDecisions = 0;
   let seedSafetyRetryDecisions = 0;
   let seedSafetyRetryVerifiedDecisions = 0;
+  const unverifiedFallbackSamples = games
+    .flatMap((game) =>
+      game.decisions
+        .filter(
+          (decision) =>
+            decision.fallback === "seeded" ||
+            (decision.fallback !== "none" && decision.completedDepth < 2)
+        )
+        .map((decision) => ({
+          gameId: game.gameId ?? "unknown",
+          turnNumber: decision.turnNumber,
+          player: decision.player,
+          fen: decision.fen,
+          selectedMoves: [...decision.selectedMoves],
+          completedDepth: decision.completedDepth,
+          fallback: decision.fallback as "safe" | "seeded",
+          seedReplyVerified:
+            decision.searchTelemetry?.seedReplyVerified === true,
+          seedSafetyRetryUsed:
+            decision.searchTelemetry?.seedSafetyRetryUsed === true,
+          seedSafetyRetryVerified:
+            decision.searchTelemetry?.seedSafetyRetryVerified === true,
+          safeFallbackReplyVerified:
+            decision.searchTelemetry?.safeFallbackReplyVerified === true,
+          tacticalReturnGuardUsed:
+            decision.searchTelemetry?.tacticalReturnGuardUsed === true,
+        }))
+    )
+    .slice(-12);
 
   for (const decision of decisions as DurableSelfPlayDecision[]) {
     increment(backendCounts, decision.searchBackend ?? "unknown");
@@ -114,5 +160,6 @@ export function summarizeSearchRuntime(
     seedSafetyRetryVerificationRate: seedSafetyRetryDecisions
       ? seedSafetyRetryVerifiedDecisions / seedSafetyRetryDecisions
       : 0,
+    unverifiedFallbackSamples,
   };
 }
