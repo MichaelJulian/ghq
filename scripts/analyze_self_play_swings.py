@@ -321,7 +321,9 @@ def decision_search_quality(decision: Dict[str, Any]) -> Dict[str, Any]:
         "completedTurn": bool(decision.get("completedTurn")),
         "selectedRank": int(decision.get("selectedRank") or 1),
         "hasCompleteOpponentReply": depth >= 2,
-        "unverifiedFallback": final_safety_certified is False
+        # Match the durable training gate: absence of an explicit proof is
+        # unverified, not a backward-compatible success.
+        "unverifiedFallback": final_safety_certified is not True
         or fallback == "seeded"
         or (fallback not in ("none", "unknown") and depth < 2),
         "finalSafetyCertified": final_safety_certified,

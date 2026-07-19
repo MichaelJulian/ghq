@@ -119,6 +119,7 @@ def validate_self_play_dataset_boundary(
         "zero_unverified_fallbacks_required",
         "color_swap_integrity_verified",
         "behavior_quality_telemetry_required",
+        "final_safety_certification_required",
     ):
         if schema.get(field) is not True:
             raise ValueError(f"self-play dataset has not verified {field}")
@@ -190,6 +191,10 @@ def validate_self_play_dataset_boundary(
         if not isinstance(row.get("behavior_timed_out"), bool):
             raise ValueError(
                 f"self-play row {game_id} is missing behavior_timed_out"
+            )
+        if row.get("behavior_final_safety_certified") is not True:
+            raise ValueError(
+                f"self-play row {game_id} lacks explicit final-safety certification"
             )
         prior_pair = pair_by_game.setdefault(game_id, pair_id)
         if prior_pair != pair_id:

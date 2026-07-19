@@ -67,6 +67,7 @@ def validate_schema(
         "zero_unverified_fallbacks_required",
         "color_swap_integrity_verified",
         "behavior_quality_telemetry_required",
+        "final_safety_certification_required",
     ):
         if self_play_schema.get(field) is not True:
             raise ValueError(f"self-play dataset has not verified {field}")
@@ -170,6 +171,10 @@ def validate_self_play_samples(
             raise ValueError("self-play sample has an unverified behavior fallback")
         if not isinstance(sample.get("behavior_timed_out"), bool):
             raise ValueError("self-play sample is missing behavior_timed_out")
+        if sample.get("behavior_final_safety_certified") is not True:
+            raise ValueError(
+                "self-play sample lacks explicit final-safety certification"
+            )
         game_id = str(sample.get("game_id") or "").strip()
         pair_id = str(sample.get("pair_id") or "").strip()
         generation_id = str(sample.get("generation_id") or "").strip()
@@ -256,6 +261,7 @@ def merge_datasets(
         "zero_unverified_fallbacks_required": True,
         "color_swap_integrity_verified": True,
         "behavior_quality_telemetry_required": True,
+        "final_safety_certification_required": True,
         "exact_hq_audit_sha256": self_play_schema[
             "exact_hq_audit_sha256"
         ],

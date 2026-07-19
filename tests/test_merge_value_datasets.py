@@ -16,6 +16,7 @@ RUNTIME_SCHEMA = {
     "zero_unverified_fallbacks_required": True,
     "color_swap_integrity_verified": True,
     "behavior_quality_telemetry_required": True,
+    "final_safety_certification_required": True,
     "exact_hq_audit_sha256": "audit-sha256",
     "exact_hq_audit_max_nodes": 2_000_000,
 }
@@ -59,6 +60,7 @@ def self_play_sample(game_id: str, **overrides):
         "behavior_completed_depth": 2,
         "behavior_fallback": "none",
         "behavior_timed_out": False,
+        "behavior_final_safety_certified": True,
         **overrides,
     }
     return sample(game_id, **behavior)
@@ -308,6 +310,21 @@ class MergeValueDatasetsTests(unittest.TestCase):
             **RUNTIME_SCHEMA,
         )
         with self.assertRaisesRegex(ValueError, "unverified behavior fallback"):
+            merge_datasets(human, self_play, output, "commit-a", "checkpoint-a")
+
+        write_dataset(
+            self_play,
+            [
+                self_play_sample(
+                    "generation-0001",
+                    behavior_final_safety_certified=None,
+                    **common,
+                ),
+                self_play_sample("generation-0002", **common),
+            ],
+            **RUNTIME_SCHEMA,
+        )
+        with self.assertRaisesRegex(ValueError, "final-safety certification"):
             merge_datasets(human, self_play, output, "commit-a", "checkpoint-a")
 
 

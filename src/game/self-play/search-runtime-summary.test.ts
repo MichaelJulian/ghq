@@ -37,6 +37,7 @@ function decision(
       valueModelEvaluations: 0,
       turnCacheHits: 0,
       transpositionHits: 0,
+      finalSafetyCertified: true,
     },
     timedOut: false,
     fallback: "none",
@@ -66,6 +67,7 @@ describe("self-play search runtime summary", () => {
     unverified.selectedMoves = ["a1a2", "skip"];
     unverified.searchTelemetry!.seedReplyVerified = true;
     unverified.searchTelemetry!.tacticalReturnGuardUsed = true;
+    unverified.searchTelemetry!.finalSafetyCertified = false;
     const summary = summarizeSearchRuntime([
       {
         gameId: "game-1",

@@ -37,6 +37,9 @@ function decision(
     searchBackend: "native-python",
     searchValueModelBackend: "native-gbdt",
     searchCodeVersion: "test-code-version",
+    searchTelemetry: {
+      finalSafetyCertified: true,
+    } as NonNullable<DurableSelfPlayDecision["searchTelemetry"]>,
     explorationSeed: 1,
     explorationTemperature: 0,
     features: [],
@@ -267,6 +270,44 @@ describe("durable self-play training quality", () => {
     expect(
       durableGameTrainingRejectionReasons([uncertified], outcome)
     ).toContain("unverified-fallback-decision");
+  });
+
+  it("fails closed when final-safety certification telemetry is missing", () => {
+    const outcome = { winner: "RED" as const, termination: "hq-capture" };
+    const missingCertification = decision({ searchTelemetry: undefined });
+
+    expect(
+      isDurableTrainingDecisionEligible(missingCertification, outcome)
+    ).toBe(false);
+    expect(
+      durableGameTrainingRejectionReasons([missingCertification], outcome)
+    ).toContain("unverified-fallback-decision");
+    expect(() =>
+      durableTrainingSample(
+        missingCertification,
+        {
+          generationId: "generation-1",
+          gameId: "game-1",
+          red: {
+            id: "red",
+            personality: "balanced",
+            timeMs: 20_000,
+            maxDepth: 2,
+            beamWidth: 6,
+            explorationTemperature: 0,
+          },
+          blue: {
+            id: "blue",
+            personality: "fortress",
+            timeMs: 20_000,
+            maxDepth: 2,
+            beamWidth: 6,
+            explorationTemperature: 0,
+          },
+        },
+        "RED"
+      )
+    ).toThrow("without final-safety certification");
   });
 
   it("rejects labels and games containing a paratrooper policy violation", () => {

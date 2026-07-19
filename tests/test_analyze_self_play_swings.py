@@ -380,7 +380,7 @@ class SelfPlaySwingAnalysisTests(unittest.TestCase):
         )
         self.assertEqual(
             collapse["windowSearchQuality"]["unverifiedFallbackDecisions"],
-            1,
+            2,
         )
         self.assertEqual(
             collapse["windowSearchQuality"][
@@ -400,6 +400,14 @@ class SelfPlaySwingAnalysisTests(unittest.TestCase):
             ],
             1,
         )
+
+    def test_missing_final_safety_proof_is_unverified_even_at_depth_two(self):
+        game = collapse_game()
+        quality = swings.decision_search_quality(game["decisions"][0])
+
+        self.assertEqual(quality["completedDepth"], 2)
+        self.assertIsNone(quality["finalSafetyCertified"])
+        self.assertTrue(quality["unverifiedFallback"])
 
     def test_rejects_incomplete_and_duplicate_games(self):
         max_turns = collapse_game("max-turns-game")

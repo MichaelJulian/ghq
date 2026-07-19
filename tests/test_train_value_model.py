@@ -214,6 +214,7 @@ class ValueModelWeightTests(unittest.TestCase):
                     "zero_unverified_fallbacks_required": True,
                     "color_swap_integrity_verified": True,
                     "behavior_quality_telemetry_required": True,
+                    "final_safety_certification_required": True,
                     "exact_hq_audit_sha256": "a" * 64,
                     "exact_hq_audit_max_nodes": 2_000_000,
                 }
@@ -252,6 +253,7 @@ class ValueModelWeightTests(unittest.TestCase):
                             "behavior_completed_depth": 2,
                             "behavior_fallback": "none",
                             "behavior_timed_out": False,
+                            "behavior_final_safety_certified": True,
                             "game_id": f"self-{unit:02d}-{member}",
                             "created_at": created_at,
                             "outcome_reason": "hq-capture",
@@ -341,6 +343,7 @@ class ValueModelWeightTests(unittest.TestCase):
                 "zero_unverified_fallbacks_required": True,
                 "color_swap_integrity_verified": True,
                 "behavior_quality_telemetry_required": True,
+                "final_safety_certification_required": True,
                 "exact_hq_audit_sha256": "a" * 64,
                 "exact_hq_audit_max_nodes": 2_000_000,
             }
@@ -361,11 +364,23 @@ class ValueModelWeightTests(unittest.TestCase):
                 "behavior_completed_depth": 2,
                 "behavior_fallback": "none",
                 "behavior_timed_out": False,
+                "behavior_final_safety_certified": True,
                 "turn": 1,
                 "perspective": "RED",
                 "label": 1,
                 "features": [1],
             }
+            uncertified = dict(sample)
+            uncertified.pop("behavior_final_safety_certified")
+            dataset.write_text(
+                json.dumps(schema) + "\n" + json.dumps(uncertified) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                ValueError, "final-safety certification"
+            ):
+                load_dataset(dataset)
+
             dataset.write_text(
                 json.dumps(schema) + "\n" + json.dumps(sample) + "\n",
                 encoding="utf-8",
@@ -390,6 +405,7 @@ class ValueModelWeightTests(unittest.TestCase):
                 "zero_unverified_fallbacks_required": True,
                 "color_swap_integrity_verified": True,
                 "behavior_quality_telemetry_required": True,
+                "final_safety_certification_required": True,
                 "exact_hq_audit_sha256": "a" * 64,
                 "exact_hq_audit_max_nodes": 2_000_000,
             }
@@ -414,6 +430,7 @@ class ValueModelWeightTests(unittest.TestCase):
                             "behavior_completed_depth": 2,
                             "behavior_fallback": "none",
                             "behavior_timed_out": False,
+                            "behavior_final_safety_certified": True,
                             "created_at": f"2026-07-{pair + 1:02d}T00:00:00Z",
                             "turn": 5,
                             "perspective": perspective,

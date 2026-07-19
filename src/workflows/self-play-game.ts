@@ -215,6 +215,7 @@ export interface DurableTrainingSample {
   completedDepth: number;
   fallback: DurableSelfPlayDecision["fallback"];
   timedOut: boolean;
+  finalSafetyCertified: true;
   valueModel: ValueModelVersion;
   valueModelCheckpoint: string;
   codeVersion: string;
@@ -233,6 +234,11 @@ export function durableTrainingSample(
   >,
   winner: Player
 ): DurableTrainingSample {
+  if (decision.searchTelemetry?.finalSafetyCertified !== true) {
+    throw new Error(
+      "Cannot create a training sample without final-safety certification"
+    );
+  }
   return {
     generationId: config.generationId,
     gameId: config.gameId,
@@ -249,6 +255,7 @@ export function durableTrainingSample(
     completedDepth: decision.completedDepth,
     fallback: decision.fallback,
     timedOut: decision.timedOut,
+    finalSafetyCertified: true,
     valueModel: decision.valueModel ?? "incumbent",
     valueModelCheckpoint:
       decision.player === "RED"
@@ -451,7 +458,10 @@ export function isDurableTrainingDecisionEligible(
       (decision.selfActionLimit ?? 3) === 3 &&
       (decision.opponentActionLimit ?? 3) === 3 &&
       decision.fallback !== "seeded" &&
-      decision.searchTelemetry?.finalSafetyCertified !== false &&
+      // Training labels are fail-closed.  A missing proof is not equivalent
+      // to a successful final-return safety check, even when depth two and a
+      // complete reply were otherwise reported.
+      decision.searchTelemetry?.finalSafetyCertified === true &&
       decision.searchBackend !== undefined &&
       decision.searchValueModelBackend !== undefined &&
       decision.searchCodeVersion !== undefined &&
@@ -467,7 +477,7 @@ export function isUnverifiedDurableDecision(
   decision: DurableSelfPlayDecision
 ): boolean {
   return (
-    decision.searchTelemetry?.finalSafetyCertified === false ||
+    decision.searchTelemetry?.finalSafetyCertified !== true ||
     decision.fallback === "seeded" ||
     (decision.fallback !== "none" && decision.completedDepth < 2)
   );

@@ -44,6 +44,7 @@ interface DurableTrainingSample {
   completedDepth?: number;
   fallback?: "none" | "safe" | "seeded";
   timedOut?: boolean;
+  finalSafetyCertified?: boolean;
 }
 
 function requireBehaviorQualityTelemetry(sample: DurableTrainingSample) {
@@ -54,7 +55,8 @@ function requireBehaviorQualityTelemetry(sample: DurableTrainingSample) {
     !Array.isArray(sample.selectedMoves) ||
     !Number.isSafeInteger(sample.completedDepth) ||
     !["none", "safe", "seeded"].includes(sample.fallback ?? "") ||
-    typeof sample.timedOut !== "boolean"
+    typeof sample.timedOut !== "boolean" ||
+    sample.finalSafetyCertified !== true
   ) {
     throw new Error(
       `Missing behavior-quality telemetry in ${sample.gameId} turn ${sample.turnNumber}`
@@ -169,6 +171,8 @@ function persistedTrainingSamples(
       completedDepth: decision.completedDepth,
       fallback: decision.fallback,
       timedOut: decision.timedOut,
+      finalSafetyCertified:
+        decision.searchTelemetry?.finalSafetyCertified === true,
     }));
 }
 
@@ -567,6 +571,7 @@ async function main() {
       zero_unverified_fallbacks_required: true,
       color_swap_integrity_verified: true,
       behavior_quality_telemetry_required: featureSchema === "v3",
+      final_safety_certification_required: featureSchema === "v3",
       exact_hq_audit_sha256: hqAuditSha256,
       exact_hq_audit_max_nodes: hqAudit.maxNodesPerAudit,
     })}\n`
@@ -637,6 +642,7 @@ async function main() {
           behavior_completed_depth: sample.completedDepth,
           behavior_fallback: sample.fallback,
           behavior_timed_out: sample.timedOut,
+          behavior_final_safety_certified: sample.finalSafetyCertified,
           created_at: record.createdAt,
           outcome_reason: "hq-capture",
           turn: sample.turnNumber,
