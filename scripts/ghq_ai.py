@@ -2797,6 +2797,8 @@ class Searcher:
         frontier = [board.copy()]
         seen: set[str] = set()
         while frontier:
+            if time.monotonic() >= self.deadline:
+                return None
             if remaining_nodes[0] <= 0:
                 return None
             remaining_nodes[0] -= 1
@@ -3090,6 +3092,8 @@ class Searcher:
         completed: Dict[BoardKey, Tuple[engine.BaseBoard, List[engine.Move]]] = {}
         probe_nodes = 0
         while frontier and probe_nodes < max_probe_nodes:
+            if time.monotonic() >= self.deadline:
+                return None
             board, line = frontier.pop()
             probe_nodes += 1
             self.hq_survival_probe_nodes += 1
@@ -3204,6 +3208,8 @@ class Searcher:
             else -math.inf
         )
         for board, line in ranked:
+            if time.monotonic() >= self.deadline:
+                return certified_minimal
             if (
                 certified_minimal_key is not None
                 and board_key(board) == certified_minimal_key
@@ -5504,6 +5510,24 @@ def search(
     policy_function: Optional[Any] = None,
 ) -> Dict[str, Any]:
     started = time.monotonic()
+    # The Vercel Python function has a 60-second outer limit. Search used to
+    # reset its main budget after seed construction and then start fresh
+    # post-search verifiers, allowing a nominal 20-second request to run past
+    # the platform ceiling and return an HTML 504. Preserve a generous
+    # tactical reserve while leaving time for response construction and the
+    # caller's network overhead.
+    hard_budget_ms = min(
+        50_000,
+        max(time_ms + 3_000, int(time_ms * 2.25)),
+    )
+    overall_deadline = started + hard_budget_ms / 1000.0
+
+    def remaining_overall_ms(maximum: int) -> int:
+        return max(
+            0,
+            min(maximum, int((overall_deadline - time.monotonic()) * 1000.0)),
+        )
+
     searcher = Searcher(
         personality,
         time_ms,
@@ -5660,7 +5684,10 @@ def search(
         # this reset the separate seed searcher could consume most of the
         # absolute deadline, leaving zero time to generate root alternatives.
         main_search_started = time.monotonic()
-        final_deadline = main_search_started + max(1, time_ms) / 1000.0
+        final_deadline = min(
+            overall_deadline,
+            main_search_started + max(1, time_ms) / 1000.0,
+        )
         searcher.deadline = final_deadline
         if requested_depth >= 2:
             # First verify the purposeful emergency turn against one complete
@@ -5790,6 +5817,12 @@ def search(
                 completed_depth = 1
             except SearchTimeout:
                 timed_out = True
+
+    # Every remaining exact probe, recovery, and fallback verifier shares one
+    # absolute request deadline. Individual helpers may finish earlier, but no
+    # later replacement path receives a fresh clock that can cross Vercel's
+    # hard function limit.
+    searcher.deadline = overall_deadline
 
     if best is None:
         if verified_seed is not None:
@@ -5999,15 +6032,20 @@ def search(
     if selected_candidate is not None:
         selected_is_tactically_safe = selected_candidate.tactically_safe
     else:
-        selected_safety = bounded_seed_safety(
-            board,
-            resulting_board,
-            personality,
-            turn_number,
-            beam_width,
-            max_actions,
-            seed_time_ms,
-            check_hq_combinations=False,
+        selected_safety_budget = remaining_overall_ms(seed_time_ms)
+        selected_safety = (
+            bounded_seed_safety(
+                board,
+                resulting_board,
+                personality,
+                turn_number,
+                beam_width,
+                max_actions,
+                selected_safety_budget,
+                check_hq_combinations=False,
+            )
+            if selected_safety_budget >= 50
+            else None
         )
         selected_is_tactically_safe = bool(
             selected_safety is not None and selected_safety.tactically_safe
@@ -6074,13 +6112,20 @@ def search(
                 break
 
         if not tactical_return_guard_used:
-            recovery = material_safe_recovery_turn(
-                board,
-                personality,
-                turn_number,
-                beam_width,
-                max_actions,
-                max(500, min(5_000, int(time_ms * 0.25))),
+            recovery_budget = remaining_overall_ms(
+                min(5_000, max(500, int(time_ms * 0.25)))
+            )
+            recovery = (
+                material_safe_recovery_turn(
+                    board,
+                    personality,
+                    turn_number,
+                    beam_width,
+                    max_actions,
+                    recovery_budget,
+                )
+                if recovery_budget >= 50
+                else None
             )
             if recovery is not None:
                 first_turn = list(recovery.moves)
@@ -6114,35 +6159,40 @@ def search(
             completed_depth = 0
             fallback_kind = "safe"
         else:
-            clean_seed = purposeful_complete_turn_seed(
-                board,
-                personality,
-                turn_number,
-                max_actions=max_actions,
-                time_ms=seed_time_ms,
-                stagnation_turns=stagnation_turns,
-            )
-            clean_moves, clean_board = first_turn_from_pv(board, clean_seed.pv)
-            clean_purpose = searcher.deadline_safe_turn_purpose_breakdown(
-                board,
-                clean_board,
-                clean_moves,
-                board.turn,
-                retrospective=False,
-            )
-            if clean_purpose["paratrooper_mission_penalty"] <= 0.0:
-                first_turn = clean_moves
-                resulting_board = clean_board
-                best = clean_seed
-                completed_depth = 0
-                fallback_kind = "seeded"
+            clean_seed_budget = remaining_overall_ms(seed_time_ms)
+            if clean_seed_budget >= 50:
+                clean_seed = purposeful_complete_turn_seed(
+                    board,
+                    personality,
+                    turn_number,
+                    max_actions=max_actions,
+                    time_ms=clean_seed_budget,
+                    stagnation_turns=stagnation_turns,
+                )
+                clean_moves, clean_board = first_turn_from_pv(
+                    board, clean_seed.pv
+                )
+                clean_purpose = searcher.deadline_safe_turn_purpose_breakdown(
+                    board,
+                    clean_board,
+                    clean_moves,
+                    board.turn,
+                    retrospective=False,
+                )
+                if clean_purpose["paratrooper_mission_penalty"] <= 0.0:
+                    first_turn = clean_moves
+                    resulting_board = clean_board
+                    best = clean_seed
+                    completed_depth = 0
+                    fallback_kind = "seeded"
     if not first_turn and not board.is_game_over():
+        empty_pv_seed_budget = remaining_overall_ms(seed_time_ms)
         fallback = purposeful_complete_turn_seed(
             board,
             personality,
             turn_number,
             max_actions=max_actions,
-            time_ms=seed_time_ms,
+            time_ms=max(1, empty_pv_seed_budget),
             stagnation_turns=stagnation_turns,
         )
         first_turn, resulting_board = first_turn_from_pv(board, fallback.pv)
@@ -6196,16 +6246,12 @@ def search(
         and not resulting_board.is_game_over()
         and resulting_board.turn != board.turn
     ):
+        verifier_budget = remaining_overall_ms(
+            min(30_000, max(2_000, int(time_ms * 1.50)))
+        )
         verifier = Searcher(
             personality,
-            # Native GBDT policy scoring makes dense artillery replies take
-            # slightly more than 25 seconds on Vercel in the densest measured
-            # position. The route owns a 60-second budget and the ordinary
-            # search releases this verifier after about 27 seconds, so use the
-            # final 30 seconds to finish the complete reply. Returning after
-            # eleven of the required twelve verifier nodes would discard all
-            # of that work and contaminate the self-play game anyway.
-            time_ms=max(2_000, min(30_000, int(time_ms * 1.50))),
+            time_ms=max(1, verifier_budget),
             beam_width=max(4, min(6, beam_width)),
             turn_number=turn_number,
             value_function=value_function,
@@ -6221,6 +6267,8 @@ def search(
         verifier.verification_mode = True
         verifier.hq_leaf_extension_enabled = False
         try:
+            if verifier_budget < 50:
+                raise SearchTimeout
             reply = verifier.alphabeta(
                 resulting_board, 1, -math.inf, math.inf
             )
@@ -6453,6 +6501,8 @@ def search(
             "nodes": searcher.nodes,
             "elapsed_ms": round(elapsed_ms, 2),
             "timed_out": timed_out,
+            "hard_deadline_ms": hard_budget_ms,
+            "hard_deadline_reached": time.monotonic() >= overall_deadline,
             "fallback_used": fallback_kind,
             "opening_book_used": opening_book_used,
             "early_game_focus": turn_number <= EARLY_GAME_LAST_TURN,

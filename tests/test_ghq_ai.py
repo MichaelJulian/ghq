@@ -1108,6 +1108,39 @@ class SearchTests(unittest.TestCase):
         self.assertLess(searcher.hq_survival_reply_nodes, 20_000)
         self.assertGreater(remaining_nodes[0], 0)
 
+    def test_exact_hq_probes_fail_incomplete_after_shared_deadline(self):
+        board = engine.BaseBoard(
+            "1I2p3/2I2r↓2/8/8/2q5/5I2/"
+            "1R↑T↑1H→R↑I1/1P5Q - - b"
+        )
+        searcher = ghq_ai.Searcher(
+            "para_specialist",
+            time_ms=60_000,
+            beam_width=6,
+            turn_number=158,
+        )
+        searcher.deadline = 0.0
+
+        self.assertIsNone(
+            searcher.exact_same_turn_hq_capture(
+                board, board.turn, [100_000]
+            )
+        )
+        self.assertIsNone(searcher.find_hq_survival_turn(board))
+
+    def test_search_reports_one_absolute_post_search_deadline(self):
+        result = ghq_ai.search(
+            engine.BaseBoard(),
+            "balanced",
+            time_ms=1_000,
+            max_depth=2,
+            beam_width=6,
+            turn_number=1,
+        )
+
+        self.assertEqual(result["search"]["hard_deadline_ms"], 4_000)
+        self.assertFalse(result["search"]["hard_deadline_reached"])
+
     def test_sparse_orientation_proof_reclassifies_old_turn_107_escape(self):
         root = engine.BaseBoard(
             "q5pr↓/i1i5/1i6/8/3f4/t↓1r↓1i3/"
