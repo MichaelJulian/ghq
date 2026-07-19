@@ -92,7 +92,126 @@ def align_append_only_baseline_schema(
     return aligned
 
 
-def load_dataset(path: Path) -> Tuple[List[str], List[Dict[str, Any]], np.ndarray, np.ndarray]:
+def data_source(row: Dict[str, Any]) -> str:
+    return str(
+        row.get("source")
+        or ("vercel_self_play" if row.get("generation_id") else "human")
+    )
+
+
+def validate_self_play_dataset_boundary(
+    schema: Dict[str, Any], rows: List[Dict[str, Any]]
+) -> None:
+    """Fail closed when audited self-play provenance is missing or inconsistent.
+
+    The exporter and merger perform richer source-specific checks, but the
+    trainer is the final trust boundary. It must not silently accept a hand-
+    assembled JSONL file that bypassed either upstream verifier.
+    """
+    self_play = [row for row in rows if data_source(row) == "vercel_self_play"]
+    if not self_play:
+        return
+
+    for field in (
+        "paired_complete_only",
+        "exact_hq_audit_required",
+        "paratrooper_policy_audit_required",
+        "zero_unverified_fallbacks_required",
+        "color_swap_integrity_verified",
+    ):
+        if schema.get(field) is not True:
+            raise ValueError(f"self-play dataset has not verified {field}")
+
+    audit_sha256 = str(schema.get("exact_hq_audit_sha256") or "").strip()
+    if len(audit_sha256) != 64 or any(
+        character not in "0123456789abcdefABCDEF" for character in audit_sha256
+    ):
+        raise ValueError("self-play dataset requires an exact HQ audit SHA-256")
+    try:
+        audit_max_nodes = int(schema.get("exact_hq_audit_max_nodes") or 0)
+    except (TypeError, ValueError) as error:
+        raise ValueError("self-play dataset has an invalid exact HQ audit limit") from error
+    if audit_max_nodes < 100_000:
+        raise ValueError("self-play dataset has an insufficient exact HQ audit")
+
+    expected = {
+        "code_version": str(
+            schema.get("self_play_code_version") or schema.get("code_version") or ""
+        ).strip(),
+        "behavior_value_model_checkpoint": str(
+            schema.get("self_play_behavior_value_model_checkpoint")
+            or schema.get("behavior_value_model_checkpoint")
+            or ""
+        ).strip(),
+        "behavior_search_backend": str(
+            schema.get("self_play_search_backend") or ""
+        ).strip(),
+        "behavior_value_model_backend": str(
+            schema.get("self_play_value_model_backend") or ""
+        ).strip(),
+    }
+    for field, value in expected.items():
+        if not value or value == "unknown":
+            raise ValueError(f"self-play dataset is missing exact {field} provenance")
+
+    games_by_pair: Dict[str, set[str]] = {}
+    generations_by_pair: Dict[str, set[str]] = {}
+    pair_by_game: Dict[str, str] = {}
+    seen_samples: set[Tuple[str, int, str]] = set()
+    for row in self_play:
+        game_id = str(row.get("game_id") or "").strip()
+        pair_id = str(row.get("pair_id") or "").strip()
+        generation_id = str(row.get("generation_id") or "").strip()
+        if not game_id or not pair_id or not generation_id:
+            raise ValueError(
+                "self-play rows require game, pair, and generation provenance"
+            )
+        prior_pair = pair_by_game.setdefault(game_id, pair_id)
+        if prior_pair != pair_id:
+            raise ValueError(f"self-play game {game_id} belongs to multiple pairs")
+        games_by_pair.setdefault(pair_id, set()).add(game_id)
+        generations_by_pair.setdefault(pair_id, set()).add(generation_id)
+
+        for field, value in expected.items():
+            if str(row.get(field) or "").strip() != value:
+                raise ValueError(
+                    f"self-play row {game_id} does not match schema {field}"
+                )
+
+        try:
+            sample_key = (game_id, int(row["turn"]), str(row["perspective"]))
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(
+                f"self-play row {game_id} has invalid sample identity"
+            ) from error
+        if sample_key in seen_samples:
+            raise ValueError(f"duplicate self-play value sample {sample_key}")
+        seen_samples.add(sample_key)
+
+    incomplete_pairs = sorted(
+        pair_id for pair_id, games in games_by_pair.items() if len(games) != 2
+    )
+    if incomplete_pairs:
+        raise ValueError(
+            "self-play dataset contains incomplete color-swapped pairs: "
+            + ", ".join(incomplete_pairs[:5])
+        )
+    mixed_generations = sorted(
+        pair_id
+        for pair_id, generations in generations_by_pair.items()
+        if len(generations) != 1
+    )
+    if mixed_generations:
+        raise ValueError(
+            "self-play pairs cross generation boundaries: "
+            + ", ".join(mixed_generations[:5])
+        )
+
+
+def load_dataset(
+    path: Path,
+) -> Tuple[List[str], List[Dict[str, Any]], np.ndarray, np.ndarray]:
+    schema: Dict[str, Any] | None = None
     feature_names: List[str] | None = None
     rows: List[Dict[str, Any]] = []
     vectors: List[List[float]] = []
@@ -101,6 +220,11 @@ def load_dataset(path: Path) -> Tuple[List[str], List[Dict[str, Any]], np.ndarra
         for line in handle:
             item = json.loads(line)
             if item.get("type") == "schema":
+                if schema is not None:
+                    raise ValueError(
+                        "value-model dataset must contain exactly one schema"
+                    )
+                schema = dict(item)
                 feature_names = list(item["feature_names"])
                 continue
             if item.get("type") != "sample":
@@ -116,11 +240,15 @@ def load_dataset(path: Path) -> Tuple[List[str], List[Dict[str, Any]], np.ndarra
             labels.append(label)
     if not feature_names or not rows:
         raise ValueError("empty value-model dataset")
-    return feature_names, rows, np.asarray(vectors, dtype=np.float64), np.asarray(labels, dtype=np.float64)
-
-
-def data_source(row: Dict[str, Any]) -> str:
-    return str(row.get("source") or ("vercel_self_play" if row.get("generation_id") else "human"))
+    if schema is None:
+        raise ValueError("value-model dataset is missing its schema")
+    validate_self_play_dataset_boundary(schema, rows)
+    return (
+        feature_names,
+        rows,
+        np.asarray(vectors, dtype=np.float64),
+        np.asarray(labels, dtype=np.float64),
+    )
 
 
 def evaluation_unit(row: Dict[str, Any]) -> Tuple[str, str]:

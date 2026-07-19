@@ -16,6 +16,7 @@ from scripts.train_value_model import (
     exported_probabilities,
     exported_raw_scores,
     game_balanced_weights,
+    load_dataset,
     requested_self_play_shares,
     select_validation_candidate,
     main as train_main,
@@ -175,6 +176,17 @@ class ValueModelWeightTests(unittest.TestCase):
                     "type": "schema",
                     "format": "ghq-value-features-v1",
                     "feature_names": ["signal", "progress"],
+                    "self_play_code_version": "commit-a",
+                    "self_play_behavior_value_model_checkpoint": "checkpoint-a",
+                    "self_play_search_backend": "native-python",
+                    "self_play_value_model_backend": "native-gbdt",
+                    "paired_complete_only": True,
+                    "exact_hq_audit_required": True,
+                    "paratrooper_policy_audit_required": True,
+                    "zero_unverified_fallbacks_required": True,
+                    "color_swap_integrity_verified": True,
+                    "exact_hq_audit_sha256": "a" * 64,
+                    "exact_hq_audit_max_nodes": 2_000_000,
                 }
             ]
             for unit in range(30):
@@ -202,6 +214,8 @@ class ValueModelWeightTests(unittest.TestCase):
                             "pair_id": f"pair-{unit:02d}",
                             "code_version": "commit-a",
                             "behavior_value_model_checkpoint": "checkpoint-a",
+                            "behavior_search_backend": "native-python",
+                            "behavior_value_model_backend": "native-gbdt",
                             "game_id": f"self-{unit:02d}-{member}",
                             "created_at": created_at,
                             "outcome_reason": "hq-capture",
@@ -241,6 +255,75 @@ class ValueModelWeightTests(unittest.TestCase):
                 artifact["metadata"]["self_play_train_share"],
                 evidence["self_play_train_share"],
             )
+
+    def test_dataset_loader_rejects_self_play_without_audit_attestations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dataset = Path(directory) / "dataset.jsonl"
+            records = [
+                {
+                    "type": "schema",
+                    "format": "ghq-value-features-v1",
+                    "feature_names": ["signal"],
+                },
+                {
+                    "type": "sample",
+                    "source": "vercel_self_play",
+                    "game_id": "game-1",
+                    "generation_id": "generation",
+                    "pair_id": "pair-1",
+                    "turn": 1,
+                    "perspective": "RED",
+                    "label": 1,
+                    "features": [1],
+                },
+            ]
+            dataset.write_text(
+                "\n".join(json.dumps(record) for record in records) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "paired_complete_only"):
+                load_dataset(dataset)
+
+    def test_dataset_loader_rejects_incomplete_attested_pairs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dataset = Path(directory) / "dataset.jsonl"
+            schema = {
+                "type": "schema",
+                "format": "ghq-value-features-v1",
+                "feature_names": ["signal"],
+                "code_version": "commit-a",
+                "behavior_value_model_checkpoint": "checkpoint-a",
+                "self_play_search_backend": "native-python",
+                "self_play_value_model_backend": "native-gbdt",
+                "paired_complete_only": True,
+                "exact_hq_audit_required": True,
+                "paratrooper_policy_audit_required": True,
+                "zero_unverified_fallbacks_required": True,
+                "color_swap_integrity_verified": True,
+                "exact_hq_audit_sha256": "a" * 64,
+                "exact_hq_audit_max_nodes": 2_000_000,
+            }
+            sample = {
+                "type": "sample",
+                "source": "vercel_self_play",
+                "game_id": "game-1",
+                "generation_id": "generation",
+                "pair_id": "pair-1",
+                "code_version": "commit-a",
+                "behavior_value_model_checkpoint": "checkpoint-a",
+                "behavior_search_backend": "native-python",
+                "behavior_value_model_backend": "native-gbdt",
+                "turn": 1,
+                "perspective": "RED",
+                "label": 1,
+                "features": [1],
+            }
+            dataset.write_text(
+                json.dumps(schema) + "\n" + json.dumps(sample) + "\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "incomplete color-swapped"):
+                load_dataset(dataset)
 
     def test_parses_a_validation_selected_self_play_share_grid(self):
         self.assertEqual(
