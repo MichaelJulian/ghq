@@ -109,6 +109,11 @@ export interface DurableSelfPlayDecision {
     seedReplyRetryUsed?: boolean;
     seedSafetyRetryUsed?: boolean;
     seedSafetyRetryVerified?: boolean;
+    finalSafetyCertified?: boolean;
+    finalSafetyGuardUsed?: boolean;
+    finalSafetyProbeUsed?: boolean;
+    finalSafetyFloorRestored?: boolean;
+    finalSafetyFloorSource?: string;
   };
   persistentCacheHit?: boolean;
   timedOut: boolean;
@@ -349,6 +354,18 @@ async function playDurableTurn(
         analysis.search.search.seed_safety_retry_used === true,
       seedSafetyRetryVerified:
         analysis.search.search.seed_safety_retry_verified === true,
+      finalSafetyCertified:
+        typeof analysis.search.search.final_safety_certified === "boolean"
+          ? analysis.search.search.final_safety_certified
+          : undefined,
+      finalSafetyGuardUsed:
+        analysis.search.search.final_safety_guard_used === true,
+      finalSafetyProbeUsed:
+        analysis.search.search.final_safety_probe_used === true,
+      finalSafetyFloorRestored:
+        analysis.search.search.final_safety_floor_restored === true,
+      finalSafetyFloorSource:
+        analysis.search.search.final_safety_floor_source ?? undefined,
     },
     persistentCacheHit: analysis.search.search.persistent_cache_hit === true,
     timedOut: analysis.search.search.timed_out,
@@ -434,6 +451,7 @@ export function isDurableTrainingDecisionEligible(
       (decision.selfActionLimit ?? 3) === 3 &&
       (decision.opponentActionLimit ?? 3) === 3 &&
       decision.fallback !== "seeded" &&
+      decision.searchTelemetry?.finalSafetyCertified !== false &&
       decision.searchBackend !== undefined &&
       decision.searchValueModelBackend !== undefined &&
       decision.searchCodeVersion !== undefined &&
@@ -442,6 +460,16 @@ export function isDurableTrainingDecisionEligible(
       // complete opponent reply and is the minimum tactically verified label
       // admitted to the value-model dataset.
       decision.completedDepth >= 2
+  );
+}
+
+export function isUnverifiedDurableDecision(
+  decision: DurableSelfPlayDecision
+): boolean {
+  return (
+    decision.searchTelemetry?.finalSafetyCertified === false ||
+    decision.fallback === "seeded" ||
+    (decision.fallback !== "none" && decision.completedDepth < 2)
   );
 }
 
@@ -510,9 +538,7 @@ export function durableGameTrainingRejectionReasons(
     reasons.push("mismatched-search-code-version");
   }
   const unverifiedFallbackDecisions = decisions.filter(
-    (decision) =>
-      decision.fallback === "seeded" ||
-      (decision.fallback !== "none" && decision.completedDepth < 2)
+    isUnverifiedDurableDecision
   ).length;
   // One blind turn changes the position, the eventual result, and therefore
   // every later value label in the game.  A low aggregate rate cannot make
@@ -574,11 +600,7 @@ export function durableSelfPlayProgressSnapshot(input: {
 }): SelfPlayProgressSnapshot {
   const latestUnverifiedFallback = [...input.decisions]
     .reverse()
-    .find(
-      (decision) =>
-        decision.fallback === "seeded" ||
-        (decision.fallback !== "none" && decision.completedDepth < 2)
-    );
+    .find(isUnverifiedDurableDecision);
   return {
     format: "ghq-self-play-progress-v1",
     generationId: input.config.generationId,
@@ -601,9 +623,7 @@ export function durableSelfPlayProgressSnapshot(input: {
       (decision) => decision.fallback !== "none"
     ).length,
     unverifiedFallbackDecisions: input.decisions.filter(
-      (decision) =>
-        decision.fallback === "seeded" ||
-        (decision.fallback !== "none" && decision.completedDepth < 2)
+      isUnverifiedDurableDecision
     ).length,
     latestUnverifiedFallback: latestUnverifiedFallback
       ? {
@@ -612,7 +632,7 @@ export function durableSelfPlayProgressSnapshot(input: {
           fen: latestUnverifiedFallback.fen,
           selectedMoves: [...latestUnverifiedFallback.selectedMoves],
           completedDepth: latestUnverifiedFallback.completedDepth,
-          fallback: latestUnverifiedFallback.fallback as "safe" | "seeded",
+          fallback: latestUnverifiedFallback.fallback,
           timedOut: latestUnverifiedFallback.timedOut,
           seedReplyVerified:
             latestUnverifiedFallback.searchTelemetry?.seedReplyVerified ===
@@ -629,6 +649,9 @@ export function durableSelfPlayProgressSnapshot(input: {
           tacticalReturnGuardUsed:
             latestUnverifiedFallback.searchTelemetry
               ?.tacticalReturnGuardUsed === true,
+          finalSafetyCertified:
+            latestUnverifiedFallback.searchTelemetry?.finalSafetyCertified ===
+            true,
         }
       : undefined,
     timedOutDecisions: input.decisions.filter((decision) => decision.timedOut)
@@ -820,11 +843,8 @@ export async function playDurableSelfPlayGame(
         (decision) =>
           decision.fallback === "safe" && decision.completedDepth >= 2
       ).length,
-      unverifiedFallbackDecisions: decisions.filter(
-        (decision) =>
-          decision.fallback === "seeded" ||
-          (decision.fallback !== "none" && decision.completedDepth < 2)
-      ).length,
+      unverifiedFallbackDecisions: decisions.filter(isUnverifiedDurableDecision)
+        .length,
       timedOutDecisions: decisions.filter((decision) => decision.timedOut)
         .length,
       decisive: outcome.winner !== undefined,

@@ -175,6 +175,16 @@ export interface GhqSearchResult {
     seed_safety_retry_used?: boolean;
     /** The retried material probe certified the reply-verified seed. */
     seed_safety_retry_verified?: boolean;
+    /** The final serialized turn passed or restored an objective safety proof. */
+    final_safety_certified?: boolean;
+    /** The post-mutation final safety invariant replaced the selected turn. */
+    final_safety_guard_used?: boolean;
+    /** The final invariant spent time on a fresh objective safety probe. */
+    final_safety_probe_used?: boolean;
+    /** The final invariant restored an immutable pre-certified root turn. */
+    final_safety_floor_restored?: boolean;
+    /** Provenance for the immutable safety floor, when one existed. */
+    final_safety_floor_source?: string | null;
     /** True when a shared reply-verified early search was reused. */
     persistent_cache_hit?: boolean;
     /** Runtime provenance for training and production diagnostics. */

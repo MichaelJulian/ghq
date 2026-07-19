@@ -10,7 +10,10 @@ import {
   readPersistedSelfPlayProgress,
   readSelfPlayGenerationManifest,
 } from "@/server/self-play-storage";
-import type { DurableSelfPlayGameResult } from "@/workflows/self-play-game";
+import {
+  isUnverifiedDurableDecision,
+  type DurableSelfPlayGameResult,
+} from "@/workflows/self-play-game";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -97,11 +100,7 @@ export async function GET(
       ).length;
       const gameUnverifiedFallbackDecisions =
         game.quality.unverifiedFallbackDecisions ??
-        game.decisions.filter(
-          (decision) =>
-            decision.fallback === "seeded" ||
-            (decision.fallback !== "none" && decision.completedDepth < 2)
-        ).length;
+        game.decisions.filter(isUnverifiedDurableDecision).length;
       unverifiedFallbackDecisions += gameUnverifiedFallbackDecisions;
       if (gameUnverifiedFallbackDecisions > 0) {
         policyUnverifiedFallbackGames++;

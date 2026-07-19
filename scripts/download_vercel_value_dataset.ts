@@ -20,6 +20,7 @@ import { auditParatrooperTrainingPolicy } from "../src/game/self-play/training-p
 import { colorSwapPairIntegrityRejectionReasons } from "../src/game/self-play/color-pairs";
 import {
   isDurableTrainingDecisionEligible,
+  isUnverifiedDurableDecision,
   type DurableSelfPlayGameResult,
 } from "../src/workflows/self-play-game";
 
@@ -338,11 +339,7 @@ async function main() {
       game.gameId,
       game.quality.trainingEligible &&
         (game.quality.unverifiedFallbackDecisions ??
-          game.decisions.filter(
-            (decision) =>
-              decision.fallback === "seeded" ||
-              (decision.fallback !== "none" && decision.completedDepth < 2)
-          ).length) === 0,
+          game.decisions.filter(isUnverifiedDurableDecision).length) === 0,
     ])
   );
   const blobs = inputPaths.length ? [] : await selectedBlobs(generationPrefix);

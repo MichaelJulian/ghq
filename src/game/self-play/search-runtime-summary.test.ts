@@ -69,11 +69,7 @@ describe("self-play search runtime summary", () => {
     const summary = summarizeSearchRuntime([
       {
         gameId: "game-1",
-        decisions: [
-          guarded,
-          decision(1, "native-python"),
-          unverified,
-        ],
+        decisions: [guarded, decision(1, "native-python"), unverified],
       },
     ]);
 
@@ -115,6 +111,7 @@ describe("self-play search runtime summary", () => {
         seedSafetyRetryVerified: false,
         safeFallbackReplyVerified: false,
         tacticalReturnGuardUsed: true,
+        finalSafetyCertified: false,
       },
     ]);
   });

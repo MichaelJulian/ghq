@@ -255,6 +255,20 @@ describe("durable self-play training quality", () => {
     ).toBe(false);
   });
 
+  it("quarantines a depth-two decision whose final turn was not certified", () => {
+    const outcome = { winner: "RED" as const, termination: "hq-capture" };
+    const uncertified = decision({
+      searchTelemetry: {
+        finalSafetyCertified: false,
+      } as NonNullable<DurableSelfPlayDecision["searchTelemetry"]>,
+    });
+
+    expect(isDurableTrainingDecisionEligible(uncertified, outcome)).toBe(false);
+    expect(
+      durableGameTrainingRejectionReasons([uncertified], outcome)
+    ).toContain("unverified-fallback-decision");
+  });
+
   it("rejects labels and games containing a paratrooper policy violation", () => {
     const outcome = { winner: "RED" as const, termination: "hq-capture" };
     const violating = decision({

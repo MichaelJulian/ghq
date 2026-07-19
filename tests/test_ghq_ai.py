@@ -2253,6 +2253,324 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(result["search"]["completed_depth_in_turns"], 2)
         self.assertEqual(result["search"]["fallback_used"], "safe")
 
+    def test_final_gate_restores_immutable_floor_after_late_policy_replacement(self):
+        root = engine.BaseBoard()
+        seed = ghq_ai.purposeful_complete_turn_seed(
+            root,
+            "balanced",
+            turn_number=8,
+            max_actions=3,
+            time_ms=80,
+        )
+        seed_moves, _ = ghq_ai.first_turn_from_pv(root, seed.pv)
+        alternate = root.copy()
+        alternate_moves = []
+        for uci in ("rib1", "ric1", "ria1"):
+            move = next(
+                move for move in alternate.generate_legal_moves() if move.uci() == uci
+            )
+            alternate_moves.append(move)
+            alternate.push(move)
+
+        safe = ghq_ai.TacticalSafety(0, 0, 0, 0, 0, True)
+        calls = []
+        original_purpose = ghq_ai.Searcher.deadline_safe_turn_purpose_breakdown
+
+        def staged_alphabeta(searcher, board, depth, alpha, beta):
+            calls.append((board.turn, depth))
+            if len(calls) == 1:
+                return ghq_ai.SearchResult(0.0, [])
+            if len(calls) == 2:
+                candidate = ghq_ai.TurnCandidate(
+                    list(alternate_moves),
+                    alternate,
+                    0.0,
+                    static_score=1.0,
+                    tactically_safe=True,
+                )
+                searcher.root_ranked_turns = [(1.0, candidate)]
+                # Model a late refactor replacing the mutable search fallback.
+                # The immutable pre-search floor must remain available.
+                searcher.root_fallback = None
+                return ghq_ai.SearchResult(1.0, list(alternate_moves))
+            raise ghq_ai.SearchTimeout
+
+        def late_policy_rejection(
+            searcher,
+            before,
+            after,
+            moves,
+            mover,
+            retrospective=True,
+        ):
+            purpose = original_purpose(
+                searcher,
+                before,
+                after,
+                moves,
+                mover,
+                retrospective=retrospective,
+            )
+            if tuple(move.uci() for move in moves) == tuple(
+                move.uci() for move in alternate_moves
+            ):
+                purpose = dict(purpose)
+                purpose["paratrooper_mission_penalty"] = (
+                    ghq_ai.MISSIONLESS_PARATROOPER_PENALTY
+                )
+                purpose["total_penalty"] += (
+                    ghq_ai.MISSIONLESS_PARATROOPER_PENALTY
+                )
+            return purpose
+
+        with patch.object(
+            ghq_ai,
+            "purposeful_complete_turn_seed",
+            return_value=ghq_ai.SearchResult(seed.score, list(seed.pv)),
+        ), patch.object(
+            ghq_ai,
+            "bounded_seed_safety",
+            side_effect=[
+                safe,
+                ghq_ai.TacticalSafety(4, 4, 0, 4, 4, False),
+                ghq_ai.TacticalSafety(4, 4, 0, 4, 4, False),
+            ],
+        ) as safety_probe, patch.object(
+            ghq_ai.Searcher,
+            "alphabeta",
+            staged_alphabeta,
+        ), patch.object(
+            ghq_ai.Searcher,
+            "deadline_safe_turn_purpose_breakdown",
+            late_policy_rejection,
+        ):
+            result = ghq_ai.search(
+                root,
+                "balanced",
+                time_ms=1_000,
+                max_depth=2,
+                beam_width=6,
+                turn_number=8,
+            )
+
+        self.assertTrue(result["search"]["policy_return_guard_used"])
+        self.assertTrue(result["search"]["final_safety_guard_used"])
+        self.assertTrue(result["search"]["final_safety_floor_restored"])
+        self.assertTrue(result["search"]["final_safety_certified"])
+        self.assertTrue(result["search"]["final_safety_probe_used"])
+        self.assertEqual(result["search"]["final_safety_floor_source"], "emergency_seed")
+        self.assertEqual(safety_probe.call_count, 3)
+        self.assertEqual(
+            result["best_turn"]["all_moves"],
+            [move.uci() for move in seed_moves],
+        )
+
+    def test_exhausted_final_budget_restores_floor_without_skipping_safety(self):
+        root = engine.BaseBoard()
+        seed = ghq_ai.purposeful_complete_turn_seed(
+            root,
+            "balanced",
+            turn_number=8,
+            max_actions=3,
+            time_ms=80,
+        )
+        seed_moves, _ = ghq_ai.first_turn_from_pv(root, seed.pv)
+        alternate = root.copy()
+        alternate_moves = []
+        for uci in ("rib1", "ric1", "ria1"):
+            move = next(
+                move for move in alternate.generate_legal_moves() if move.uci() == uci
+            )
+            alternate_moves.append(move)
+            alternate.push(move)
+
+        safe = ghq_ai.TacticalSafety(0, 0, 0, 0, 0, True)
+        calls = []
+        exhausted = {"value": False}
+        original_remaining = ghq_ai.remaining_deadline_ms
+        original_purpose = ghq_ai.Searcher.deadline_safe_turn_purpose_breakdown
+
+        def staged_alphabeta(searcher, board, depth, alpha, beta):
+            calls.append((board.turn, depth))
+            if len(calls) == 1:
+                return ghq_ai.SearchResult(0.0, [])
+            if len(calls) == 2:
+                candidate = ghq_ai.TurnCandidate(
+                    list(alternate_moves),
+                    alternate,
+                    0.0,
+                    static_score=1.0,
+                    tactically_safe=True,
+                )
+                searcher.root_ranked_turns = [(1.0, candidate)]
+                searcher.root_fallback = None
+                exhausted["value"] = True
+                return ghq_ai.SearchResult(1.0, list(alternate_moves))
+            raise ghq_ai.SearchTimeout
+
+        def remaining(deadline, maximum):
+            if exhausted["value"]:
+                return 0
+            return original_remaining(deadline, maximum)
+
+        def late_policy_rejection(
+            searcher,
+            before,
+            after,
+            moves,
+            mover,
+            retrospective=True,
+        ):
+            purpose = original_purpose(
+                searcher,
+                before,
+                after,
+                moves,
+                mover,
+                retrospective=retrospective,
+            )
+            if tuple(move.uci() for move in moves) == tuple(
+                move.uci() for move in alternate_moves
+            ):
+                purpose = dict(purpose)
+                purpose["paratrooper_mission_penalty"] = (
+                    ghq_ai.MISSIONLESS_PARATROOPER_PENALTY
+                )
+                purpose["total_penalty"] += (
+                    ghq_ai.MISSIONLESS_PARATROOPER_PENALTY
+                )
+            return purpose
+
+        with patch.object(
+            ghq_ai,
+            "purposeful_complete_turn_seed",
+            return_value=ghq_ai.SearchResult(seed.score, list(seed.pv)),
+        ), patch.object(
+            ghq_ai,
+            "bounded_seed_safety",
+            return_value=safe,
+        ) as safety_probe, patch.object(
+            ghq_ai,
+            "remaining_deadline_ms",
+            remaining,
+        ), patch.object(
+            ghq_ai.Searcher,
+            "alphabeta",
+            staged_alphabeta,
+        ), patch.object(
+            ghq_ai.Searcher,
+            "deadline_safe_turn_purpose_breakdown",
+            late_policy_rejection,
+        ):
+            result = ghq_ai.search(
+                root,
+                "balanced",
+                time_ms=1_000,
+                max_depth=2,
+                beam_width=6,
+                turn_number=8,
+            )
+
+        # Only the pre-search proof ran. The zero-millisecond final budget did
+        # not silently bless the policy floor; it restored that completed proof.
+        self.assertEqual(safety_probe.call_count, 1)
+        self.assertFalse(result["search"]["final_safety_probe_used"])
+        self.assertTrue(result["search"]["final_safety_guard_used"])
+        self.assertTrue(result["search"]["final_safety_floor_restored"])
+        self.assertTrue(result["search"]["final_safety_certified"])
+        self.assertEqual(
+            result["best_turn"]["all_moves"],
+            [move.uci() for move in seed_moves],
+        )
+
+    def test_unprovable_forced_loss_returns_least_exposed_unverified_line(self):
+        root = engine.BaseBoard()
+        seed = ghq_ai.purposeful_complete_turn_seed(
+            root,
+            "balanced",
+            turn_number=8,
+            max_actions=3,
+            time_ms=80,
+        )
+        low_loss_moves, low_loss_board = ghq_ai.first_turn_from_pv(root, seed.pv)
+        high_loss_board = root.copy()
+        high_loss_moves = []
+        for uci in ("rib1", "ric1", "ria1"):
+            move = next(
+                move
+                for move in high_loss_board.generate_legal_moves()
+                if move.uci() == uci
+            )
+            high_loss_moves.append(move)
+            high_loss_board.push(move)
+
+        calls = []
+
+        def staged_alphabeta(searcher, board, depth, alpha, beta):
+            calls.append((board.turn, depth))
+            if len(calls) == 1:
+                return ghq_ai.SearchResult(0.0, [])
+            if len(calls) == 2:
+                high_loss = ghq_ai.TurnCandidate(
+                    list(high_loss_moves),
+                    high_loss_board,
+                    0.0,
+                    static_score=2.0,
+                    safety_penalty=6.0,
+                    tactically_safe=False,
+                )
+                low_loss = ghq_ai.TurnCandidate(
+                    list(low_loss_moves),
+                    low_loss_board,
+                    0.0,
+                    static_score=1.0,
+                    safety_penalty=3.0,
+                    tactically_safe=False,
+                )
+                searcher.root_ranked_turns = [
+                    (2.0, high_loss),
+                    (1.0, low_loss),
+                ]
+                searcher.root_fallback = None
+                return ghq_ai.SearchResult(2.0, list(high_loss_moves))
+            raise ghq_ai.SearchTimeout
+
+        with patch.object(
+            ghq_ai,
+            "purposeful_complete_turn_seed",
+            return_value=ghq_ai.SearchResult(seed.score, list(seed.pv)),
+        ), patch.object(
+            ghq_ai,
+            "bounded_seed_safety",
+            return_value=None,
+        ), patch.object(
+            ghq_ai,
+            "material_safe_recovery_turn",
+            return_value=None,
+        ), patch.object(
+            ghq_ai.Searcher,
+            "alphabeta",
+            staged_alphabeta,
+        ):
+            result = ghq_ai.search(
+                root,
+                "balanced",
+                time_ms=1_000,
+                max_depth=2,
+                beam_width=6,
+                turn_number=8,
+            )
+
+        self.assertEqual(
+            result["best_turn"]["all_moves"],
+            [move.uci() for move in low_loss_moves],
+        )
+        self.assertTrue(result["search"]["final_safety_guard_used"])
+        self.assertFalse(result["search"]["final_safety_certified"])
+        self.assertFalse(result["search"]["final_safety_floor_restored"])
+        self.assertEqual(result["search"]["fallback_used"], "seeded")
+        self.assertEqual(result["search"]["completed_depth_in_turns"], 0)
+
     def test_timeout_keeps_verified_root_development_instead_of_seed_backfill(self):
         result = ghq_ai.search(
             engine.BaseBoard(TURN_FIVE_DEVELOPMENT_FEN),

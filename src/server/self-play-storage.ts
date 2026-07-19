@@ -33,13 +33,14 @@ export interface SelfPlayProgressSnapshot {
     fen: string;
     selectedMoves: string[];
     completedDepth: number;
-    fallback: "safe" | "seeded";
+    fallback: "none" | "safe" | "seeded";
     timedOut: boolean;
     seedReplyVerified: boolean;
     seedSafetyRetryUsed: boolean;
     seedSafetyRetryVerified: boolean;
     safeFallbackReplyVerified: boolean;
     tacticalReturnGuardUsed: boolean;
+    finalSafetyCertified: boolean;
   };
   timedOutDecisions: number;
   status: "running" | "completed";

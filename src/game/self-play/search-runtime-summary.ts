@@ -1,6 +1,7 @@
-import type {
-  DurableSelfPlayDecision,
-  DurableSelfPlayGameResult,
+import {
+  isUnverifiedDurableDecision,
+  type DurableSelfPlayDecision,
+  type DurableSelfPlayGameResult,
 } from "@/workflows/self-play-game";
 
 export interface SearchRuntimeSummary {
@@ -30,12 +31,13 @@ export interface SearchRuntimeSummary {
     fen: string;
     selectedMoves: string[];
     completedDepth: number;
-    fallback: "safe" | "seeded";
+    fallback: "none" | "safe" | "seeded";
     seedReplyVerified: boolean;
     seedSafetyRetryUsed: boolean;
     seedSafetyRetryVerified: boolean;
     safeFallbackReplyVerified: boolean;
     tacticalReturnGuardUsed: boolean;
+    finalSafetyCertified: boolean;
   }>;
 }
 
@@ -69,31 +71,26 @@ export function summarizeSearchRuntime(
   let seedSafetyRetryVerifiedDecisions = 0;
   const unverifiedFallbackSamples = games
     .flatMap((game) =>
-      game.decisions
-        .filter(
-          (decision) =>
-            decision.fallback === "seeded" ||
-            (decision.fallback !== "none" && decision.completedDepth < 2)
-        )
-        .map((decision) => ({
-          gameId: game.gameId ?? "unknown",
-          turnNumber: decision.turnNumber,
-          player: decision.player,
-          fen: decision.fen,
-          selectedMoves: [...decision.selectedMoves],
-          completedDepth: decision.completedDepth,
-          fallback: decision.fallback as "safe" | "seeded",
-          seedReplyVerified:
-            decision.searchTelemetry?.seedReplyVerified === true,
-          seedSafetyRetryUsed:
-            decision.searchTelemetry?.seedSafetyRetryUsed === true,
-          seedSafetyRetryVerified:
-            decision.searchTelemetry?.seedSafetyRetryVerified === true,
-          safeFallbackReplyVerified:
-            decision.searchTelemetry?.safeFallbackReplyVerified === true,
-          tacticalReturnGuardUsed:
-            decision.searchTelemetry?.tacticalReturnGuardUsed === true,
-        }))
+      game.decisions.filter(isUnverifiedDurableDecision).map((decision) => ({
+        gameId: game.gameId ?? "unknown",
+        turnNumber: decision.turnNumber,
+        player: decision.player,
+        fen: decision.fen,
+        selectedMoves: [...decision.selectedMoves],
+        completedDepth: decision.completedDepth,
+        fallback: decision.fallback,
+        seedReplyVerified: decision.searchTelemetry?.seedReplyVerified === true,
+        seedSafetyRetryUsed:
+          decision.searchTelemetry?.seedSafetyRetryUsed === true,
+        seedSafetyRetryVerified:
+          decision.searchTelemetry?.seedSafetyRetryVerified === true,
+        safeFallbackReplyVerified:
+          decision.searchTelemetry?.safeFallbackReplyVerified === true,
+        tacticalReturnGuardUsed:
+          decision.searchTelemetry?.tacticalReturnGuardUsed === true,
+        finalSafetyCertified:
+          decision.searchTelemetry?.finalSafetyCertified === true,
+      }))
     )
     .slice(-12);
 

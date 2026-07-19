@@ -886,6 +886,21 @@ class TacticalSafety:
     tactically_safe: bool
 
 
+@dataclass(frozen=True)
+class CertifiedSafetyFloor:
+    """Immutable root turn that already passed objective return guards.
+
+    Late HQ, policy, and empty-PV recovery paths are allowed to replace the
+    selected turn after minimax.  Storing UCIs rather than a mutable Board or
+    TurnCandidate keeps the pre-search proof independent from those later
+    mutations and lets the final return gate replay it from the real root.
+    """
+
+    move_ucis: Tuple[str, ...]
+    red_score: float
+    source: str
+
+
 class Searcher:
     def __init__(
         self,
@@ -5145,6 +5160,26 @@ def first_turn_from_pv(board: engine.BaseBoard, pv: Sequence[engine.Move]) -> Tu
     return selected, working
 
 
+def replay_certified_safety_floor(
+    board: engine.BaseBoard,
+    floor: CertifiedSafetyFloor,
+) -> Tuple[List[engine.Move], engine.BaseBoard]:
+    """Replay an immutable certified root turn using canonical legal moves."""
+    working = board.copy()
+    mover = working.turn
+    moves: List[engine.Move] = []
+    for uci in floor.move_ucis:
+        legal = {move.uci(): move for move in working.generate_legal_moves()}
+        move = legal.get(uci)
+        if move is None:
+            raise RuntimeError(f"certified safety floor is no longer legal: {uci}")
+        moves.append(move)
+        working.push(move)
+    if not working.is_game_over() and working.turn == mover:
+        raise RuntimeError("certified safety floor does not complete the root turn")
+    return moves, working
+
+
 def deterministic_skip_turn(
     board: engine.BaseBoard,
 ) -> Tuple[List[engine.Move], engine.BaseBoard]:
@@ -5496,6 +5531,14 @@ def material_safe_recovery_turn(
     return candidates[0][1]
 
 
+def remaining_deadline_ms(deadline: float, maximum: int) -> int:
+    """Return a bounded whole-millisecond budget for a shared deadline."""
+    return max(
+        0,
+        min(maximum, int((deadline - time.monotonic()) * 1000.0)),
+    )
+
+
 def search(
     board: engine.BaseBoard,
     personality: str,
@@ -5535,10 +5578,7 @@ def search(
     )
 
     def remaining_overall_ms(maximum: int) -> int:
-        return max(
-            0,
-            min(maximum, int((overall_deadline - time.monotonic()) * 1000.0)),
-        )
+        return remaining_deadline_ms(overall_deadline, maximum)
 
     searcher = Searcher(
         personality,
@@ -5567,6 +5607,13 @@ def search(
     seed_reply_retry_used = False
     seed_safety_retry_used = False
     seed_safety_retry_verified = False
+    final_safety_guard_used = False
+    final_safety_probe_used = False
+    final_safety_certified = False
+    final_safety_floor_restored = False
+    final_safety_floor_source: Optional[str] = None
+    certified_safety_floor: Optional[CertifiedSafetyFloor] = None
+    certified_hq_survival_floor: Optional[CertifiedSafetyFloor] = None
     seed_moves: List[engine.Move] = []
     seed_board = board
     verified_seed: Optional[SearchResult] = None
@@ -5593,6 +5640,14 @@ def search(
             else book_turn.static_score - turn_quality
         )
         best = SearchResult(score, list(book_turn.moves))
+        # opening_book_turn admits a line only after complete material/HQ
+        # safety and paratrooper-policy checks. Freeze that proof before any
+        # later return-path mutation can replace Searcher.root_fallback.
+        certified_safety_floor = CertifiedSafetyFloor(
+            tuple(move.uci() for move in book_turn.moves),
+            score,
+            "opening_book",
+        )
     else:
         # Establish a legal, purposeful full turn before spending the budget on
         # minimax. If iterative search expires, we still return three counted
@@ -5659,6 +5714,7 @@ def search(
             nonlocal emergency_seed_safe
             nonlocal seed_safety_retry_used
             nonlocal seed_safety_retry_verified
+            nonlocal certified_safety_floor
             if (
                 verified_seed is None
                 or emergency_seed_safe
@@ -5687,6 +5743,16 @@ def search(
             if retry is not None and retry.tactically_safe:
                 emergency_seed_safe = True
                 seed_safety_retry_verified = True
+                if certified_safety_floor is None:
+                    certified_safety_floor = CertifiedSafetyFloor(
+                        tuple(move.uci() for move in seed_moves),
+                        (
+                            verified_seed.score
+                            if verified_seed is not None
+                            else emergency_seed.score
+                        ),
+                        "verified_emergency_seed",
+                    )
 
         if seed_board.is_game_over() or seed_counted_actions >= searcher.max_actions:
             # Seed construction and safety are a bounded pre-search floor.
@@ -5695,6 +5761,9 @@ def search(
             # reserved opponent-reply verification could even begin. Keep it
             # isolated so a timeout can only forfeit seed certification, not
             # the actual search budget.
+            # Spend the protected safety slice *before* minimax. Expensive HQ
+            # and policy recovery later in the request may consume the outer
+            # deadline, but they cannot erase this already completed proof.
             seed_safety = bounded_seed_safety(
                 board,
                 seed_board,
@@ -5702,7 +5771,7 @@ def search(
                 turn_number,
                 beam_width,
                 max_actions,
-                seed_time_ms,
+                max(seed_time_ms, final_safety_reserve_ms),
             )
             if (
                 seed_safety is not None
@@ -5731,6 +5800,11 @@ def search(
                     seed_purpose["paratrooper_mission_penalty"],
                     seed_action_purposes,
                     searcher.early_plan_score(seed_action_purposes),
+                )
+                certified_safety_floor = CertifiedSafetyFloor(
+                    tuple(move.uci() for move in seed_moves),
+                    emergency_seed.score,
+                    "emergency_seed",
                 )
         requested_depth = max(1, max_depth)
         # Seed construction and its isolated safety probe are a prerequisite,
@@ -6055,6 +6129,15 @@ def search(
             finally:
                 searcher.verification_mode = previous_verification_mode
             fallback_kind = "safe"
+            # find_hq_survival_turn has exhaustively rejected an immediate HQ
+            # capture for this exact line (and filters para-policy violations).
+            # Preserve that lexicographic survival proof in case a later policy
+            # fallback replaces it with an unverified turn.
+            certified_hq_survival_floor = CertifiedSafetyFloor(
+                tuple(move.uci() for move in first_turn),
+                best.score,
+                "exact_hq_survival",
+            )
 
     # Release the protected slice only after every potentially expensive HQ
     # proof has finished. Material safety and its recovery pass can now fail
@@ -6216,6 +6299,17 @@ def search(
             if recovery is not None:
                 first_turn = list(recovery.moves)
                 resulting_board = recovery.board
+                if certified_safety_floor is None:
+                    # material_safe_recovery_turn returns only after complete
+                    # material, HQ, and paratrooper-policy checks. Preserve
+                    # that proof so the final gate cannot downgrade an already
+                    # reply-verified seed merely because the earlier seed probe
+                    # was inconclusive.
+                    certified_safety_floor = CertifiedSafetyFloor(
+                        tuple(move.uci() for move in recovery.moves),
+                        recovery.static_score,
+                        "material_recovery",
+                    )
                 recovery_move_key = tuple(move.uci() for move in recovery.moves)
                 if (
                     verified_seed is not None
@@ -6385,6 +6479,148 @@ def search(
             ):
                 seed_safety_retry_verified = True
                 fallback_kind = "safe"
+                if certified_safety_floor is None:
+                    certified_safety_floor = CertifiedSafetyFloor(
+                        tuple(move.uci() for move in first_turn),
+                        best.score,
+                        "final_emergency_seed",
+                    )
+
+    # Final fail-closed invariant. This intentionally runs after the HQ
+    # override, tactical recovery, paratrooper-policy replacement, empty-PV
+    # seed, and deterministic policy floor: no later block may mutate the
+    # serialized turn. Reuse completed candidate proofs where possible. If an
+    # unknown late replacement cannot be proved inside the remaining clock,
+    # restore the immutable pre-search floor rather than returning it blindly.
+    # A forced-mate PV is game-theoretic evidence, not a positional preference.
+    # If every return line remains uncertified, do not replace that completed
+    # proof with a heuristic-only "least loss" turn below.
+    proven_forced_mate_score = (
+        best.score if abs(best.score) >= MATE_SCORE else None
+    )
+    final_move_key = tuple(move.uci() for move in first_turn)
+    final_policy = searcher.deadline_safe_turn_purpose_breakdown(
+        board,
+        resulting_board,
+        first_turn,
+        board.turn,
+        retrospective=False,
+    )
+    final_policy_clean = final_policy["paratrooper_mission_penalty"] <= 0.0
+    final_outcome = resulting_board.outcome()
+    final_known_safe = final_policy_clean and (
+        (
+            final_outcome is not None
+            and final_outcome.winner != (not board.turn)
+        )
+        or (
+            certified_safety_floor is not None
+            and final_move_key == certified_safety_floor.move_ucis
+        )
+        or (
+            certified_hq_survival_floor is not None
+            and final_move_key == certified_hq_survival_floor.move_ucis
+        )
+        or any(
+            candidate.tactically_safe
+            and candidate.paratrooper_mission_penalty <= 0.0
+            and tuple(move.uci() for move in candidate.moves) == final_move_key
+            for candidate in known_root_candidates
+        )
+    )
+    if not final_known_safe and final_policy_clean:
+        final_probe_budget = remaining_overall_ms(final_safety_reserve_ms)
+        if final_probe_budget >= 50:
+            final_safety_probe_used = True
+            final_safety = bounded_seed_safety(
+                board,
+                resulting_board,
+                personality,
+                turn_number,
+                beam_width,
+                max_actions,
+                final_probe_budget,
+                check_hq_combinations=True,
+            )
+            final_known_safe = bool(
+                final_safety is not None and final_safety.tactically_safe
+            )
+
+    if not final_known_safe:
+        restore_floor = certified_hq_survival_floor or certified_safety_floor
+        if restore_floor is None:
+            # Root candidates exist only after assess_turn_safety completed.
+            # Prefer the least exposed, strongest policy-clean proof when the
+            # early seed itself could not be certified.
+            certified_candidates = [
+                candidate
+                for candidate in known_root_candidates
+                if candidate.tactically_safe
+                and candidate.paratrooper_mission_penalty <= 0.0
+            ]
+            if certified_candidates:
+                certified_candidates.sort(
+                    key=lambda candidate: (
+                        candidate.safety_penalty,
+                        candidate.purpose_penalty,
+                        -(
+                            candidate.static_score
+                            if board.turn == engine.RED
+                            else -candidate.static_score
+                        ),
+                        normalized_turn_key(candidate.moves, board.turn),
+                    )
+                )
+                replacement = certified_candidates[0]
+                restore_floor = CertifiedSafetyFloor(
+                    tuple(move.uci() for move in replacement.moves),
+                    replacement.static_score,
+                    "checked_root_candidate",
+                )
+        if restore_floor is not None:
+            first_turn, resulting_board = replay_certified_safety_floor(
+                board, restore_floor
+            )
+            best = SearchResult(restore_floor.red_score, list(first_turn))
+            completed_depth = 0
+            fallback_kind = "safe"
+            final_safety_guard_used = True
+            final_safety_floor_restored = True
+            final_safety_floor_source = restore_floor.source
+            final_known_safe = True
+            tactical_return_guard_used = True
+        else:
+            # No completed proof exists (for example, every bounded probe
+            # expired in a forced-loss position). Preserve playability but do
+            # not smuggle the line through as a searched/safe training sample.
+            # Among assessed root losses, retain the smallest new exposure;
+            # exact HQ survival above already outranks this material ordering.
+            least_loss_candidates = [
+                candidate
+                for candidate in known_root_candidates
+                if candidate.paratrooper_mission_penalty <= 0.0
+            ]
+            if least_loss_candidates and proven_forced_mate_score is None:
+                least_loss_candidates.sort(
+                    key=lambda candidate: (
+                        candidate.safety_penalty,
+                        -(
+                            candidate.static_score
+                            if board.turn == engine.RED
+                            else -candidate.static_score
+                        ),
+                        normalized_turn_key(candidate.moves, board.turn),
+                    )
+                )
+                least_loss = least_loss_candidates[0]
+                first_turn = list(least_loss.moves)
+                resulting_board = least_loss.board
+                best = SearchResult(least_loss.static_score, list(first_turn))
+            completed_depth = 0
+            fallback_kind = "seeded"
+            final_safety_guard_used = True
+            timed_out = True
+    final_safety_certified = final_known_safe
 
     # Safety and policy guards run after the main minimax deadline. Returning
     # their replacement at depth zero made otherwise useful self-play games
@@ -6664,6 +6900,11 @@ def search(
             "hard_deadline_ms": hard_budget_ms,
             "hard_deadline_reached": time.monotonic() >= overall_deadline,
             "final_safety_reserve_ms": final_safety_reserve_ms,
+            "final_safety_guard_used": final_safety_guard_used,
+            "final_safety_probe_used": final_safety_probe_used,
+            "final_safety_certified": final_safety_certified,
+            "final_safety_floor_restored": final_safety_floor_restored,
+            "final_safety_floor_source": final_safety_floor_source,
             "fallback_used": fallback_kind,
             "opening_book_used": opening_book_used,
             "early_game_focus": turn_number <= EARLY_GAME_LAST_TURN,
