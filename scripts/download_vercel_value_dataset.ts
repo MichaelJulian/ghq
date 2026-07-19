@@ -17,6 +17,7 @@ import {
   VALUE_FEATURE_NAMES_V3,
 } from "../src/game/value-model/features";
 import { auditParatrooperTrainingPolicy } from "../src/game/self-play/training-policy";
+import { colorSwapPairIntegrityRejectionReasons } from "../src/game/self-play/color-pairs";
 import {
   isDurableTrainingDecisionEligible,
   type DurableSelfPlayGameResult,
@@ -296,6 +297,12 @@ async function main() {
       auditParatrooperTrainingPolicy(game.decisions),
     ])
   );
+  const persistedGamesById = new Map(
+    persistedGames.map((game) => [game.gameId, game] as const)
+  );
+  if (persistedGamesById.size !== persistedGames.length) {
+    throw new Error("Downloaded game inputs contain duplicate game IDs");
+  }
   const searchQualityEligibleByGame = new Map(
     persistedGames.map((game) => [
       game.gameId,
@@ -480,11 +487,28 @@ async function main() {
     games.push(gameId);
     gamesByPair.set(record.pairId, games);
   }
-  const completePairs = new Set(
-    [...gamesByPair]
-      .filter(([, gameIds]) => isCompleteColorSwap(gameIds))
-      .map(([pairId]) => pairId)
-  );
+  const invalidColorSwapPairs: Array<{
+    pairId: string;
+    reasons: string[];
+  }> = [];
+  const completePairs = new Set<string>();
+  for (const [pairId, gameIds] of gamesByPair) {
+    if (!isCompleteColorSwap(gameIds)) continue;
+    const [firstId, secondId] = [...gameIds].sort((left, right) =>
+      left.localeCompare(right)
+    );
+    const first = persistedGamesById.get(firstId);
+    const second = persistedGamesById.get(secondId);
+    const reasons =
+      first && second
+        ? colorSwapPairIntegrityRejectionReasons(first, second)
+        : ["missing-persisted-game"];
+    if (reasons.length) {
+      invalidColorSwapPairs.push({ pairId, reasons });
+    } else {
+      completePairs.add(pairId);
+    }
+  }
   if (!completePairs.size) {
     throw new Error("No complete quality-eligible color-swapped pairs found");
   }
@@ -619,7 +643,11 @@ async function main() {
         ...recordsByGame.keys(),
       ].filter((gameId) => !policyAuditsByGame.get(gameId)?.telemetryComplete)
         .length,
-      excludedIncompletePairs: gamesByPair.size - completePairs.size,
+      excludedIncompletePairs: [...gamesByPair.values()].filter(
+        (gameIds) => !isCompleteColorSwap(gameIds)
+      ).length,
+      excludedInvalidColorSwapPairs: invalidColorSwapPairs.length,
+      invalidColorSwapPairs,
       samples,
       featureSchema,
       hqAuditPath,

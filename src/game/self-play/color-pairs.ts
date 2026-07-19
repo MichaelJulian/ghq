@@ -3,6 +3,19 @@ export interface ColorSwapGame {
   gameId: string;
 }
 
+export interface ColorSwapIntegrityGame extends ColorSwapGame {
+  seed: number;
+  redAgentId: string;
+  blueAgentId: string;
+  redMaxActions: number;
+  blueMaxActions: number;
+  redValueModelCheckpoint: string;
+  blueValueModelCheckpoint: string;
+  initialFen: string;
+  initialTurnNumber: number;
+  dataRole: string;
+}
+
 export function colorSwapGameNumber(gameId: string): number | undefined {
   const suffix = /-(\d+)$/.exec(gameId);
   if (!suffix) return undefined;
@@ -10,7 +23,9 @@ export function colorSwapGameNumber(gameId: string): number | undefined {
   return Number.isSafeInteger(number) && number >= 1 ? number : undefined;
 }
 
-export function partitionColorSwapPairs<T extends ColorSwapGame>(games: T[]): {
+export function partitionColorSwapPairs<T extends ColorSwapGame>(
+  games: T[]
+): {
   pairs: Array<[T, T]>;
   orphans: T[];
 } {
@@ -54,4 +69,49 @@ export function partitionColorSwapPairs<T extends ColorSwapGame>(games: T[]): {
   pairs.sort((left, right) => left[0].gameId.localeCompare(right[0].gameId));
   orphans.sort((left, right) => left.gameId.localeCompare(right.gameId));
   return { pairs, orphans };
+}
+
+export function colorSwapPairIntegrityRejectionReasons(
+  first: ColorSwapIntegrityGame,
+  second: ColorSwapIntegrityGame
+): string[] {
+  const reasons: string[] = [];
+  const firstNumber = colorSwapGameNumber(first.gameId);
+  const secondNumber = colorSwapGameNumber(second.gameId);
+  if (
+    first.generationId !== second.generationId ||
+    firstNumber === undefined ||
+    secondNumber === undefined ||
+    firstNumber % 2 !== 1 ||
+    secondNumber !== firstNumber + 1
+  ) {
+    reasons.push("invalid-pair-identity");
+  }
+  if (first.seed !== second.seed) reasons.push("mismatched-seed");
+  if (
+    first.redAgentId !== second.blueAgentId ||
+    first.blueAgentId !== second.redAgentId
+  ) {
+    reasons.push("agents-not-swapped");
+  }
+  if (
+    first.redMaxActions !== second.blueMaxActions ||
+    first.blueMaxActions !== second.redMaxActions
+  ) {
+    reasons.push("action-limits-not-swapped");
+  }
+  if (
+    first.redValueModelCheckpoint !== second.blueValueModelCheckpoint ||
+    first.blueValueModelCheckpoint !== second.redValueModelCheckpoint
+  ) {
+    reasons.push("value-checkpoints-not-swapped");
+  }
+  if (
+    first.initialFen !== second.initialFen ||
+    first.initialTurnNumber !== second.initialTurnNumber ||
+    first.dataRole !== second.dataRole
+  ) {
+    reasons.push("initial-state-mismatch");
+  }
+  return reasons;
 }
