@@ -25,10 +25,13 @@ const key: SearchCacheKey = {
 
 function result(overrides: Partial<GhqSearchResult["search"]> = {}) {
   return {
-    candidate_turns: [{}],
+    candidate_turns: [
+      { final_safety_certified: true, reply_verified: true },
+    ],
     search: {
       completed_depth_in_turns: 2,
       fallback_used: "none",
+      final_safety_certified: true,
       ...overrides,
     },
   } as GhqSearchResult;
@@ -64,6 +67,13 @@ describe("persistent early search cache", () => {
     expect(shouldPersistSearch(key, result({ fallback_used: "safe" }))).toBe(
       false
     );
+    expect(
+      shouldPersistSearch(key, result({ final_safety_certified: false }))
+    ).toBe(false);
+    const legacyProoflessCandidate = result();
+    legacyProoflessCandidate.candidate_turns[0].reply_verified =
+      undefined as never;
+    expect(shouldPersistSearch(key, legacyProoflessCandidate)).toBe(false);
     expect(shouldPersistSearch({ ...key, turnNumber: 17 }, result())).toBe(
       false
     );

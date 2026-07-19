@@ -145,15 +145,28 @@ export function applyExploration(
   seed: number
 ): GhqSearchResult {
   const candidates = result.candidate_turns ?? [];
-  let selected = candidates[0];
+  let selected =
+    candidates.find(
+      (candidate) =>
+        candidate.resulting_fen === result.best_turn.resulting_fen &&
+        candidate.all_moves.join(" ") === result.best_turn.all_moves.join(" ")
+    ) ?? candidates[0];
+  const certifiedReplyCandidates = candidates.filter(
+    (candidate) =>
+      candidate.final_safety_certified === true &&
+      candidate.reply_verified === true
+  );
   if (
     temperature > 0 &&
-    candidates.length > 1 &&
-    !result.search.opening_book_used
+    certifiedReplyCandidates.length > 1 &&
+    !result.search.opening_book_used &&
+    result.search.fallback_used === "none" &&
+    result.search.completed_depth_in_turns >= 2 &&
+    result.search.final_safety_certified === true
   ) {
-    const bestScore = candidates[0].score;
+    const bestScore = certifiedReplyCandidates[0].score;
     const qualityWindow = Math.max(0.35, Math.min(2.5, temperature * 3));
-    const eligible = candidates.filter(
+    const eligible = certifiedReplyCandidates.filter(
       (candidate) => candidate.score >= bestScore - qualityWindow
     );
     const scale = Math.max(0.05, temperature);
@@ -250,10 +263,18 @@ export function applyHistoryAvoidance(
   turnsWithoutProgress: number
 ): GhqSearchResult {
   const candidates = result.candidate_turns ?? [];
+  const certifiedReplyCandidates = candidates.filter(
+    (candidate) =>
+      candidate.final_safety_certified === true &&
+      candidate.reply_verified === true
+  );
   if (
-    candidates.length < 2 ||
+    certifiedReplyCandidates.length < 2 ||
     result.search.opening_book_used ||
     result.search.fallback_used === "safe" ||
+    result.search.fallback_used === "seeded" ||
+    result.search.completed_depth_in_turns < 2 ||
+    result.search.final_safety_certified !== true ||
     result.search.hq_survival_override_used === true ||
     result.search.hq_survival_reply_verified === true
   ) {
@@ -298,15 +319,17 @@ export function applyHistoryAvoidance(
 
   const selectedRank = result.exploration?.selectedRank ?? 1;
   const selected =
-    candidates.find((candidate) => candidate.rank === selectedRank) ??
-    candidates.find(
+    certifiedReplyCandidates.find(
+      (candidate) => candidate.rank === selectedRank
+    ) ??
+    certifiedReplyCandidates.find(
       (candidate) => candidate.resulting_fen === result.best_turn.resulting_fen
     ) ??
-    candidates[0];
+    certifiedReplyCandidates[0];
   const selectedPenalty = penalty(selected);
   if (selectedPenalty <= 0) return result;
 
-  const bestScore = candidates[0].score;
+  const bestScore = certifiedReplyCandidates[0].score;
   // Early in a quiet spell, preserve normal search quality. As the draw clock
   // grows, permit a larger controlled score sacrifice to break a proven loop.
   // A three-action undo cycle is already strong evidence on its first repeat,
@@ -318,7 +341,7 @@ export function applyHistoryAvoidance(
     Math.max(0, selectedPenalty - 1) * 0.5
   );
   const qualityWindow = 1.25 + 4.75 * stagnation + cyclePressureWindow;
-  const replacement = candidates
+  const replacement = certifiedReplyCandidates
     .filter((candidate) => candidate.score >= bestScore - qualityWindow)
     .sort(
       (left, right) =>

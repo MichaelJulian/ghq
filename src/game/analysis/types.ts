@@ -88,6 +88,10 @@ export interface GhqCandidateTurn {
   all_moves: string[];
   resulting_fen: string;
   score: number;
+  /** This exact candidate passed the final objective material/HQ policy gate. */
+  final_safety_certified: boolean;
+  /** Search completed at least one full opponent reply for this candidate. */
+  reply_verified: boolean;
   action_purposes: Array<{ move: string; roles: string[] }>;
   purpose: GhqTurnPurpose;
 }

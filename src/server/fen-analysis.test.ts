@@ -5,6 +5,7 @@ import { GHQ_STARTING_FEN } from "@/game/analysis/types";
 import type { GhqCandidateTurn, GhqSearchResult } from "@/game/analysis/types";
 import {
   analyzeFen,
+  applyExploration,
   applyHistoryAvoidance,
   cycleAdjustedStagnationTurns,
 } from "./fen-analysis";
@@ -47,6 +48,8 @@ describe("production FEN analysis", () => {
         automatic_captures: [],
         resulting_fen,
         score,
+        final_safety_certified: true,
+        reply_verified: true,
         action_purposes: [],
         purpose: {},
       } as unknown as GhqCandidateTurn);
@@ -58,7 +61,12 @@ describe("production FEN analysis", () => {
       principal_variation: repeating.all_moves,
       candidate_turns: [repeating, novel],
       score: { current_player: 4, red: 4 },
-      search: { opening_book_used: false },
+      search: {
+        opening_book_used: false,
+        fallback_used: "none",
+        completed_depth_in_turns: 2,
+        final_safety_certified: true,
+      },
       exploration: {
         temperature: 0,
         seed: 1,
@@ -75,6 +83,47 @@ describe("production FEN analysis", () => {
     expect(result.exploration?.selectedRank).toBe(2);
   });
 
+  it("never explores into a candidate without exact reply and safety proof", () => {
+    const best = {
+      rank: 1,
+      actions: ["a1a2", "b1b2", "c1c2"],
+      all_moves: ["a1a2", "b1b2", "c1c2"],
+      automatic_captures: [],
+      resulting_fen: "certified-best",
+      score: 4,
+      final_safety_certified: true,
+      reply_verified: true,
+      action_purposes: [],
+      purpose: {},
+    } as unknown as GhqCandidateTurn;
+    const unverified = {
+      ...best,
+      rank: 2,
+      resulting_fen: "unverified-alternative",
+      score: 3.99,
+      final_safety_certified: false,
+      reply_verified: false,
+    };
+    const result = {
+      recommendation_label: "best found",
+      best_turn: best,
+      principal_variation: best.all_moves,
+      candidate_turns: [best, unverified],
+      score: { current_player: 4, red: 4 },
+      search: {
+        opening_book_used: false,
+        fallback_used: "none",
+        completed_depth_in_turns: 2,
+        final_safety_certified: true,
+      },
+    } as unknown as GhqSearchResult;
+
+    applyExploration(result, "RED", 2, 0xffff_ffff);
+
+    expect(result.best_turn.resulting_fen).toBe("certified-best");
+    expect(result.exploration?.selectedRank).toBe(1);
+  });
+
   it("never replaces a reply-verified HQ survival turn to avoid history", () => {
     const safe = {
       rank: 1,
@@ -83,6 +132,8 @@ describe("production FEN analysis", () => {
       automatic_captures: [],
       resulting_fen: "safe-repeated-position",
       score: -1_000_005.7049,
+      final_safety_certified: true,
+      reply_verified: true,
       action_purposes: [],
       purpose: { stagnation_progress: 0 },
     } as unknown as GhqCandidateTurn;
@@ -130,6 +181,8 @@ describe("production FEN analysis", () => {
       automatic_captures: [],
       resulting_fen: "stalled",
       score: 10,
+      final_safety_certified: true,
+      reply_verified: true,
       action_purposes: [],
       purpose: {
         backfills: 2,
@@ -158,7 +211,12 @@ describe("production FEN analysis", () => {
       principal_variation: stalled.all_moves,
       candidate_turns: [stalled, breaker],
       score: { current_player: 10, red: 10 },
-      search: { opening_book_used: false },
+      search: {
+        opening_book_used: false,
+        fallback_used: "none",
+        completed_depth_in_turns: 2,
+        final_safety_certified: true,
+      },
       exploration: {
         temperature: 0,
         seed: 1,
@@ -190,6 +248,8 @@ describe("production FEN analysis", () => {
       automatic_captures: [],
       resulting_fen: "cycled-position",
       score: 18.3915,
+      final_safety_certified: true,
+      reply_verified: true,
       action_purposes: [],
       purpose: {
         backfills: 0,
@@ -220,7 +280,12 @@ describe("production FEN analysis", () => {
       principal_variation: cycling.all_moves,
       candidate_turns: [cycling, breaker],
       score: { current_player: cycling.score, red: -cycling.score },
-      search: { opening_book_used: false, fallback_used: "none" },
+      search: {
+        opening_book_used: false,
+        fallback_used: "none",
+        completed_depth_in_turns: 2,
+        final_safety_certified: true,
+      },
       exploration: {
         temperature: 0,
         seed: 1,
@@ -243,6 +308,8 @@ describe("production FEN analysis", () => {
       automatic_captures: [],
       resulting_fen: "new-shuffle-square",
       score: 8,
+      final_safety_certified: true,
+      reply_verified: true,
       action_purposes: [],
       purpose: {
         backfills: 0,
@@ -270,7 +337,12 @@ describe("production FEN analysis", () => {
       principal_variation: shuffle.all_moves,
       candidate_turns: [shuffle, contactBreak],
       score: { current_player: 8, red: 8 },
-      search: { opening_book_used: false },
+      search: {
+        opening_book_used: false,
+        fallback_used: "none",
+        completed_depth_in_turns: 2,
+        final_safety_certified: true,
+      },
       exploration: {
         temperature: 0,
         seed: 1,

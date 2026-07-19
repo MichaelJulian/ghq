@@ -55,6 +55,8 @@ function nativeSearchResult(): GhqSearchResult {
     all_moves: ["rhd1", "rte1", "rpb1"],
     resulting_fen: RESULTING_FEN,
     score: 1,
+    final_safety_certified: true,
+    reply_verified: false,
     action_purposes: [],
     purpose: purpose(),
   } as GhqCandidateTurn;
@@ -75,6 +77,7 @@ function nativeSearchResult(): GhqSearchResult {
       elapsed_ms: 1,
       timed_out: false,
       fallback_used: "none",
+      final_safety_certified: true,
       opening_book_used: true,
       early_game_focus: true,
       approximate: false,

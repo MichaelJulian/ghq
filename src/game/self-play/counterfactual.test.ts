@@ -21,6 +21,8 @@ function candidate(rank: number, score: number): GhqCandidateTurn {
     all_moves: [`a${rank}a${rank + 1}`],
     resulting_fen: `8/8/8/8/8/8/8/8 - - ${rank % 2 ? "b" : "r"}`,
     score,
+    final_safety_certified: true,
+    reply_verified: true,
     action_purposes: [],
     purpose: {} as GhqCandidateTurn["purpose"],
   };

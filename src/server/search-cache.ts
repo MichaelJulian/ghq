@@ -4,7 +4,9 @@ import type { GhqSearchResult, PersonalityId } from "@/game/analysis/types";
 import type { ValueModelVersion } from "@/game/value-model/inference";
 import { selfPlayStorageConfigured } from "@/server/self-play-storage";
 
-const SEARCH_CACHE_VERSION = "early-depth-v3";
+// v4 adds candidate-level reply and final-safety certificates. Reusing a v3
+// payload would let post-search exploration inherit the best line's proof.
+const SEARCH_CACHE_VERSION = "early-depth-v4";
 const SEARCH_CACHE_PREFIX = `self-play/search-cache/${SEARCH_CACHE_VERSION}/`;
 
 export interface SearchCacheKey {
@@ -38,6 +40,12 @@ export function shouldPersistSearch(
       key.turnNumber <= 16 &&
       result.search.completed_depth_in_turns >= key.maxDepth &&
       result.search.fallback_used === "none" &&
+      result.search.final_safety_certified === true &&
+      result.candidate_turns.every(
+        (candidate) =>
+          typeof candidate.final_safety_certified === "boolean" &&
+          typeof candidate.reply_verified === "boolean"
+      ) &&
       result.candidate_turns.length > 0
   );
 }

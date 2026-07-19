@@ -2623,6 +2623,12 @@ class SearchTests(unittest.TestCase):
             result["best_turn"]["all_moves"],
             [turn["all_moves"] for turn in candidates],
         )
+        self.assertTrue(candidates)
+        self.assertTrue(
+            all(candidate["final_safety_certified"] for candidate in candidates)
+        )
+        self.assertTrue(all(candidate["reply_verified"] for candidate in candidates))
+
 
     def test_verification_finishes_reply_before_spending_budget_on_breadth(self):
         result = ghq_ai.search(

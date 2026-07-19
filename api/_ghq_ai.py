@@ -20,7 +20,7 @@ from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tupl
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "public"))
 
-import _engine as engine  # noqa: E402
+import engine  # noqa: E402
 
 
 PIECE_VALUES = {
@@ -7336,6 +7336,26 @@ def search(
 
     candidate_turns = []
     seen_candidate_moves = set()
+    reply_verified_move_keys = (
+        {
+            tuple(move.uci() for move in turn.moves)
+            for _, turn, _ in searcher.root_verified_lines
+        }
+        if completed_depth >= 2
+        else set()
+    )
+    certified_candidate_move_keys = {
+        tuple(move.uci() for move in candidate.moves)
+        for candidate in known_root_candidates
+        if candidate.tactically_safe
+        and candidate.paratrooper_mission_penalty <= 0.0
+    }
+    if certified_safety_floor is not None:
+        certified_candidate_move_keys.add(certified_safety_floor.move_ucis)
+    if certified_hq_survival_floor is not None:
+        certified_candidate_move_keys.add(certified_hq_survival_floor.move_ucis)
+    if final_safety_certified:
+        certified_candidate_move_keys.add(selected_move_key)
     for red_score, candidate_turn in ranked_root_turns[:8]:
         all_moves = tuple(move.uci() for move in candidate_turn.moves)
         if all_moves in seen_candidate_moves:
@@ -7359,6 +7379,14 @@ def search(
                 "score": round(
                     red_score if board.turn == engine.RED else -red_score, 4
                 ),
+                # These proofs belong to the exact serialized candidate. The
+                # TypeScript exploration/history layer may replace best_turn,
+                # so it must not inherit the original line's top-level proof.
+                "final_safety_certified": (
+                    all_moves in certified_candidate_move_keys
+                    and candidate_turn.paratrooper_mission_penalty <= 0.0
+                ),
+                "reply_verified": all_moves in reply_verified_move_keys,
                 "action_purposes": candidate_turn.action_purposes,
                 "purpose": {
                     key: round(value, 4)
