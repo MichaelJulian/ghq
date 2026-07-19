@@ -2058,6 +2058,84 @@ class SearchTests(unittest.TestCase):
             [move.uci() for move in seed_moves],
         )
 
+    def test_recovery_rediscovery_keeps_completed_seed_reply(self):
+        root = engine.BaseBoard()
+        seed = ghq_ai.purposeful_complete_turn_seed(
+            root,
+            "balanced",
+            turn_number=8,
+            max_actions=3,
+            time_ms=80,
+        )
+        seed_moves, seed_board = ghq_ai.first_turn_from_pv(root, seed.pv)
+        recovery = ghq_ai.TurnCandidate(
+            list(seed_moves),
+            seed_board,
+            0.0,
+            tactically_safe=True,
+        )
+        calls = []
+
+        def staged_alphabeta(searcher, board, depth, alpha, beta):
+            calls.append((board.turn, depth))
+            if len(calls) == 1:
+                # The emergency seed's opponent reply completes, while its
+                # separate bounded material probe remains inconclusive.
+                return ghq_ai.SearchResult(0.0, [])
+            if len(calls) == 2:
+                unsafe_moves, unsafe_board = ghq_ai.deterministic_skip_turn(
+                    board
+                )
+                unsafe = ghq_ai.TurnCandidate(
+                    unsafe_moves,
+                    unsafe_board,
+                    1.0,
+                    tactically_safe=False,
+                )
+                searcher.root_ranked_turns = [(1.0, unsafe)]
+                return ghq_ai.SearchResult(1.0, list(unsafe.moves))
+            # The widening pass expires. A late reply verifier must not run:
+            # recovery rediscovers the exact seed whose reply is cached above.
+            raise ghq_ai.SearchTimeout
+
+        with patch.object(
+            ghq_ai,
+            "purposeful_complete_turn_seed",
+            return_value=ghq_ai.SearchResult(seed.score, list(seed.pv)),
+        ), patch.object(
+            ghq_ai,
+            "bounded_seed_safety",
+            return_value=None,
+        ), patch.object(
+            ghq_ai,
+            "material_safe_recovery_turn",
+            return_value=recovery,
+        ) as recovery_probe, patch.object(
+            ghq_ai.Searcher,
+            "alphabeta",
+            staged_alphabeta,
+        ):
+            result = ghq_ai.search(
+                root,
+                "balanced",
+                time_ms=1_000,
+                max_depth=2,
+                beam_width=6,
+                turn_number=8,
+            )
+
+        self.assertEqual(len(calls), 3)
+        recovery_probe.assert_called_once()
+        self.assertTrue(result["search"]["seed_reply_verified"])
+        self.assertTrue(result["search"]["tactical_return_guard_used"])
+        self.assertFalse(result["search"]["safe_fallback_reply_verified"])
+        self.assertEqual(result["search"]["completed_depth_in_turns"], 2)
+        self.assertEqual(result["search"]["fallback_used"], "safe")
+        self.assertEqual(
+            result["best_turn"]["all_moves"],
+            [move.uci() for move in seed_moves],
+        )
+
     def test_timeout_keeps_verified_root_development_instead_of_seed_backfill(self):
         result = ghq_ai.search(
             engine.BaseBoard(TURN_FIVE_DEVELOPMENT_FEN),

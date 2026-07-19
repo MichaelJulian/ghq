@@ -6172,8 +6172,27 @@ def search(
             for replacement in replacement_options[:8]:
                 first_turn = list(replacement.moves)
                 resulting_board = replacement.board
-                best = SearchResult(replacement.static_score, list(first_turn))
-                completed_depth = 0
+                replacement_move_key = tuple(
+                    move.uci() for move in replacement.moves
+                )
+                if (
+                    verified_seed is not None
+                    and replacement_move_key == verified_seed_move_key
+                ):
+                    # Root ordering can initially select an unsafe line and
+                    # reach the already reply-verified emergency seed only in
+                    # the tactical replacement pass.  The replacement
+                    # candidate is objectively safety-screened, so retain the
+                    # completed reply instead of discarding it and asking a
+                    # late verifier to repeat the same work at the hard
+                    # deadline.
+                    best = verified_seed
+                    completed_depth = 2
+                else:
+                    best = SearchResult(
+                        replacement.static_score, list(first_turn)
+                    )
+                    completed_depth = 0
                 fallback_kind = "safe"
                 tactical_return_guard_used = True
                 break
@@ -6197,8 +6216,20 @@ def search(
             if recovery is not None:
                 first_turn = list(recovery.moves)
                 resulting_board = recovery.board
-                best = SearchResult(recovery.static_score, list(first_turn))
-                completed_depth = 0
+                recovery_move_key = tuple(move.uci() for move in recovery.moves)
+                if (
+                    verified_seed is not None
+                    and recovery_move_key == verified_seed_move_key
+                ):
+                    # The recovery generator may independently rediscover the
+                    # emergency seed after its reply was already completed.
+                    # Couple those two proofs rather than timing out while
+                    # verifying the identical child a second time.
+                    best = verified_seed
+                    completed_depth = 2
+                else:
+                    best = SearchResult(recovery.static_score, list(first_turn))
+                    completed_depth = 0
                 fallback_kind = "safe"
                 tactical_return_guard_used = True
 
