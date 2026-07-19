@@ -108,7 +108,10 @@ weaken that gate or train on a collection of unrelated search revisions. The
 trainer independently revalidates the audit attestations, exact search/model
 backends, revision and checkpoint binding, pair completeness, generation
 boundaries, and duplicate sample identities; hand-assembled self-play JSONL
-cannot bypass those gates by skipping the exporter or merger.
+cannot bypass those gates by skipping the exporter or merger. It also hashes
+each pair's canonical feature trajectory: repeated trajectories stay in the
+same split and count only once toward the 30-unit minimum, even when they have
+different pair IDs, seeds, or generation IDs.
 
 ## Personalities
 

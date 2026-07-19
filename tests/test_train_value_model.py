@@ -255,6 +255,10 @@ class ValueModelWeightTests(unittest.TestCase):
                 artifact["metadata"]["self_play_train_share"],
                 evidence["self_play_train_share"],
             )
+            self.assertEqual(
+                evidence["evaluation_units"],
+                {"human": 30, "vercel_self_play": 30},
+            )
 
     def test_dataset_loader_rejects_self_play_without_audit_attestations(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -324,6 +328,55 @@ class ValueModelWeightTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "incomplete color-swapped"):
                 load_dataset(dataset)
+
+    def test_dataset_loader_groups_duplicate_trajectories_for_splits(self):
+        with tempfile.TemporaryDirectory() as directory:
+            dataset = Path(directory) / "dataset.jsonl"
+            schema = {
+                "type": "schema",
+                "format": "ghq-value-features-v1",
+                "feature_names": ["signal"],
+                "code_version": "commit-a",
+                "behavior_value_model_checkpoint": "checkpoint-a",
+                "self_play_search_backend": "native-python",
+                "self_play_value_model_backend": "native-gbdt",
+                "paired_complete_only": True,
+                "exact_hq_audit_required": True,
+                "paratrooper_policy_audit_required": True,
+                "zero_unverified_fallbacks_required": True,
+                "color_swap_integrity_verified": True,
+                "exact_hq_audit_sha256": "a" * 64,
+                "exact_hq_audit_max_nodes": 2_000_000,
+            }
+            records = [schema]
+            for pair in range(2):
+                for member, perspective in enumerate(("RED", "BLUE")):
+                    records.append(
+                        {
+                            "type": "sample",
+                            "source": "vercel_self_play",
+                            "game_id": f"game-{pair}-{member}",
+                            "generation_id": f"generation-{pair}",
+                            "pair_id": f"pair-{pair}",
+                            "code_version": "commit-a",
+                            "behavior_value_model_checkpoint": "checkpoint-a",
+                            "behavior_search_backend": "native-python",
+                            "behavior_value_model_backend": "native-gbdt",
+                            "created_at": f"2026-07-{pair + 1:02d}T00:00:00Z",
+                            "turn": 5,
+                            "perspective": perspective,
+                            "label": 1 if perspective == "RED" else 0,
+                            "features": [0.25 if perspective == "RED" else -0.25],
+                        }
+                    )
+            dataset.write_text(
+                "\n".join(json.dumps(record) for record in records) + "\n",
+                encoding="utf-8",
+            )
+            _, rows, _, _ = load_dataset(dataset)
+            units = {evaluation_unit(row) for row in rows}
+            self.assertEqual(len(units), 1)
+            self.assertEqual({row["pair_id"] for row in rows}, {"pair-0", "pair-1"})
 
     def test_parses_a_validation_selected_self_play_share_grid(self):
         self.assertEqual(

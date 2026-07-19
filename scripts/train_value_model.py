@@ -208,6 +208,43 @@ def validate_self_play_dataset_boundary(
         )
 
 
+def attach_self_play_trajectory_ids(
+    rows: List[Dict[str, Any]], vectors: List[List[float]]
+) -> None:
+    """Cluster duplicate color-swapped trajectories into one split unit.
+
+    Pair IDs prove color-swap integrity, but they do not prove statistical
+    independence. Repeated deterministic games must remain in one split and
+    count once toward the minimum-data gate, even when they came from distinct
+    seeds or generations.
+    """
+    pair_games: Dict[str, Dict[str, List[Tuple[int, str, List[float]]]]] = {}
+    pair_rows: Dict[str, List[int]] = {}
+    for index, (row, vector) in enumerate(zip(rows, vectors)):
+        if data_source(row) != "vercel_self_play":
+            continue
+        pair_id = str(row["pair_id"])
+        game_id = str(row["game_id"])
+        pair_games.setdefault(pair_id, {}).setdefault(game_id, []).append(
+            (int(row["turn"]), str(row["perspective"]), list(vector))
+        )
+        pair_rows.setdefault(pair_id, []).append(index)
+
+    for pair_id, games in pair_games.items():
+        canonical_games = []
+        for samples in games.values():
+            canonical_games.append(
+                json.dumps(
+                    sorted(samples, key=lambda sample: (sample[0], sample[1])),
+                    separators=(",", ":"),
+                )
+            )
+        payload = json.dumps(sorted(canonical_games), separators=(",", ":"))
+        trajectory_id = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        for row_index in pair_rows[pair_id]:
+            rows[row_index]["_trajectory_id"] = trajectory_id
+
+
 def load_dataset(
     path: Path,
 ) -> Tuple[List[str], List[Dict[str, Any]], np.ndarray, np.ndarray]:
@@ -243,6 +280,7 @@ def load_dataset(
     if schema is None:
         raise ValueError("value-model dataset is missing its schema")
     validate_self_play_dataset_boundary(schema, rows)
+    attach_self_play_trajectory_ids(rows, vectors)
     return (
         feature_names,
         rows,
@@ -260,7 +298,8 @@ def evaluation_unit(row: Dict[str, Any]) -> Tuple[str, str]:
             raise ValueError(
                 f"self-play row {row.get('game_id', '<missing>')} requires pair_id"
             )
-        return source, pair_id
+        trajectory_id = str(row.get("_trajectory_id") or "").strip()
+        return source, trajectory_id or pair_id
     return source, str(row["game_id"])
 
 
@@ -343,7 +382,8 @@ def chronological_split(rows: List[Dict[str, Any]]) -> Dict[str, np.ndarray]:
         )
         if len(units) < 30:
             raise ValueError(
-                f"source {source} requires at least 30 independent evaluation units for splits"
+                f"source {source} requires at least 30 independent evaluation "
+                f"units for splits; received {len(units)}"
             )
         train_end = max(1, int(len(units) * 0.60))
         calibration_end = max(train_end + 1, int(len(units) * 0.70))
@@ -843,6 +883,9 @@ def main() -> None:
     self_play_behavior_checkpoint = validate_self_play_behavior_checkpoint(
         rows, args.self_play_behavior_checkpoint
     )
+    evaluation_units = dict(
+        Counter(source for source, _ in {evaluation_unit(row) for row in rows})
+    )
     splits = chronological_split(rows)
     weights = {name: game_balanced_weights(rows, indices) for name, indices in splits.items()}
     fit_weights_by_share = {
@@ -1075,6 +1118,7 @@ def main() -> None:
             "candidate_validation": candidate_validation,
             "self_play_code_version": self_play_code_version,
             "self_play_behavior_value_model_checkpoint": self_play_behavior_checkpoint,
+            "evaluation_units": evaluation_units,
             "metrics": split_metrics,
             "feature_importance": [
                 {"feature": name, "importance": round(float(importance), 8)}
@@ -1114,6 +1158,7 @@ def main() -> None:
         "validation_constraints_passed": validation_constraints_passed,
         "self_play_code_version": self_play_code_version,
         "self_play_behavior_value_model_checkpoint": self_play_behavior_checkpoint,
+        "evaluation_units": evaluation_units,
         "sources": dict(Counter(data_source(row) for row in rows)),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
