@@ -52,6 +52,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--generation", required=True)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--previous", type=Path)
+    parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--base-url", default="https://ghq-one.vercel.app")
     return parser.parse_args()
 
@@ -396,7 +397,36 @@ def main() -> None:
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(rendered, encoding="utf-8")
-    print(rendered, end="")
+    if args.quiet:
+        print(
+            json.dumps(
+                {
+                    "generationId": report["generationId"],
+                    "completedTurns": report["completedTurns"],
+                    "snapshotGames": report["snapshotGames"],
+                    "activeProgressRuntime": report[
+                        "activeProgressRuntime"
+                    ],
+                    "pairDiversity": report["pairDiversity"],
+                    "structuralDebtPositions": report[
+                        "structuralDebtPositions"
+                    ],
+                    "repairRequiredPositions": report[
+                        "repairRequiredPositions"
+                    ],
+                    "immediateForcedCapturePositions": report[
+                        "immediateForcedCapturePositions"
+                    ],
+                    "checkpointComparison": report.get(
+                        "checkpointComparison"
+                    ),
+                    "output": str(args.output) if args.output else None,
+                },
+                indent=2,
+            )
+        )
+    else:
+        print(rendered, end="")
 
 
 if __name__ == "__main__":
