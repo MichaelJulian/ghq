@@ -18,6 +18,7 @@ from scripts.train_value_model import (
     exported_raw_scores,
     game_balanced_weights,
     load_dataset,
+    metrics_by_source,
     requested_self_play_shares,
     select_validation_candidate,
     main as train_main,
@@ -28,6 +29,32 @@ from scripts.train_value_model import (
 
 
 class ValueModelWeightTests(unittest.TestCase):
+    def test_self_play_metrics_are_stratified_by_search_quality(self):
+        rows = [
+            {
+                "source": "vercel_self_play",
+                "game_id": f"game-{index}",
+                "perspective": "RED" if index % 2 == 0 else "BLUE",
+                "behavior_fallback": "safe" if index >= 2 else "none",
+                "behavior_timed_out": index in (1, 2),
+                "behavior_completed_depth": 3 if index == 3 else 2,
+            }
+            for index in range(4)
+        ]
+        report = metrics_by_source(
+            rows,
+            np.arange(4),
+            np.asarray([1.0, 0.0, 1.0, 0.0]),
+            np.asarray([0.8, 0.2, 0.7, 0.3]),
+        )["vercel_self_play"]["by_behavior_quality"]
+
+        self.assertEqual(report["fallback"]["none"]["samples"], 2)
+        self.assertEqual(report["fallback"]["safe"]["samples"], 2)
+        self.assertEqual(report["deadline"]["timed_out"]["samples"], 2)
+        self.assertEqual(report["deadline"]["within_budget"]["samples"], 2)
+        self.assertEqual(report["completed_depth"]["2"]["samples"], 3)
+        self.assertEqual(report["completed_depth"]["3+"]["samples"], 1)
+
     def test_append_only_schema_can_score_the_exact_incumbent_trees(self):
         baseline = {
             "feature_names": ["a", "b"],

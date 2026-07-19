@@ -128,6 +128,10 @@ missing, a reply was not completed to depth two, or the move came from a seeded
 or otherwise unverified fallback. New compact Blob training artifacts preserve
 the same behavior-quality fields as full-game downloads; historical artifacts
 without those fields must be re-exported from their full persisted games.
+Once the admission gate is met, validation and test reports stratify self-play
+accuracy by fallback class, deadline status, and completed depth. Use those
+results—not timeout frequency alone—to decide whether a behavior class should
+be downweighted or excluded from a later experiment.
 
 ## Personalities
 

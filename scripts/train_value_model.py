@@ -689,6 +689,50 @@ def metrics_by_source(
                 perspective_probabilities,
                 game_balanced_weights(rows, perspective_indices),
             )
+        if source == "vercel_self_play":
+            behavior_dimensions = {
+                "fallback": lambda row: str(row["behavior_fallback"]),
+                "deadline": lambda row: (
+                    "timed_out"
+                    if row["behavior_timed_out"]
+                    else "within_budget"
+                ),
+                "completed_depth": lambda row: (
+                    "3+"
+                    if int(row["behavior_completed_depth"]) >= 3
+                    else str(row["behavior_completed_depth"])
+                ),
+            }
+            result[source]["by_behavior_quality"] = {}
+            for dimension, key_for in behavior_dimensions.items():
+                groups: Dict[str, List[int]] = {}
+                for index in source_indices:
+                    groups.setdefault(key_for(rows[int(index)]), []).append(
+                        int(index)
+                    )
+                result[source]["by_behavior_quality"][dimension] = {}
+                for group, group_indices_list in sorted(groups.items()):
+                    group_indices = np.asarray(
+                        group_indices_list, dtype=np.int64
+                    )
+                    group_probabilities = np.asarray(
+                        [
+                            probability_by_index[int(index)]
+                            for index in group_indices
+                        ]
+                    )
+                    record = metrics(
+                        labels[group_indices],
+                        group_probabilities,
+                        game_balanced_weights(rows, group_indices),
+                    )
+                    record["games"] = len(
+                        {rows[index]["game_id"] for index in group_indices}
+                    )
+                    record["samples"] = len(group_indices)
+                    result[source]["by_behavior_quality"][dimension][
+                        group
+                    ] = record
     return result
 
 
