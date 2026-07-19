@@ -959,8 +959,16 @@ class Searcher:
             Tuple[BoardKey, bool], Tuple[float, float]
         ] = {}
         self.immediate_capture_targets_cache: Dict[Tuple[BoardKey, bool], int] = {}
+        self.capture_risk_protection_move_cache: Dict[
+            Tuple[BoardKey, str], bool
+        ] = {}
         self.root_key: Optional[BoardKey] = None
         self.root_fallback: Optional[TurnCandidate] = None
+        # Preserve the objectively safest clean root turn across verification
+        # and improvement passes. Later beam/cache replacement must not erase
+        # a zero-exposure option that an earlier complete safety assessment
+        # already found.
+        self.root_objective_safety_floor: Optional[TurnCandidate] = None
         self.root_ranked_turns: List[Tuple[float, TurnCandidate]] = []
         # Each entry has completed the opponent reply at the requested root
         # horizon. Keep it incrementally: a later timeout must not erase root
@@ -2061,6 +2069,56 @@ class Searcher:
                 targets |= engine.BB_SQUARES[target]
         self.immediate_capture_targets_cache[cache_key] = targets
         return targets
+
+    def protects_immediate_high_value_target(
+        self, board: engine.BaseBoard, move: engine.Move
+    ) -> bool:
+        """Whether a quiet infantry move makes exposed material untakeable.
+
+        Moving the victim is already a forcing action. This covers the other
+        half of the same defense: an infantry can step beside a loose armored
+        infantry or paratrooper and remove the opponent's capture. Artillery
+        support remains extension-sensitive and is deliberately not promoted
+        by this shortcut.
+        """
+        cache_key = (board_key(board), move.uci())
+        cached = self.capture_risk_protection_move_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        piece_type = self.move_piece_type(board, move)
+        if (
+            piece_type not in INFANTRY_TYPES
+            or move.capture_preference is not None
+            or move.from_square is None
+            or move.to_square is None
+            or move.from_square == move.to_square
+        ):
+            self.capture_risk_protection_move_cache[cache_key] = False
+            return False
+        threatened = self.immediate_capture_targets(board, board.turn)
+        high_value_targets = engine.BB_EMPTY
+        for square in squares(threatened):
+            if board.piece_type_at(square) in (
+                engine.ARMORED_INFANTRY,
+                engine.AIRBORNE_INFANTRY,
+            ):
+                high_value_targets |= engine.BB_SQUARES[square]
+        if (
+            not high_value_targets
+            or engine.BB_SQUARES[move.from_square] & high_value_targets
+        ):
+            self.capture_risk_protection_move_cache[cache_key] = False
+            return False
+        child = board.copy()
+        child.push(move)
+        remaining_targets = self.immediate_capture_targets(child, board.turn)
+        protected = bool(
+            high_value_targets
+            & child.occupied_co[board.turn]
+            & ~remaining_targets
+        )
+        self.capture_risk_protection_move_cache[cache_key] = protected
+        return protected
 
     def tactical_risk(
         self,
@@ -3505,6 +3563,11 @@ class Searcher:
             # capture is a forcing candidate. The complete-turn safety score
             # remains responsible for rejecting fake or inferior escapes.
             priority += 4200.0
+        if self.protects_immediate_high_value_target(board, move):
+            # A quiet supporting move can be as urgent as evacuating the
+            # victim. Preserve it through the atomic verification beam, but
+            # do not stack two rescue labels above an actual capture.
+            priority = max(priority, 4400.0)
         if (
             piece_type == engine.HQ
             and move.from_square is not None
@@ -3698,7 +3761,13 @@ class Searcher:
             (self.move_priority(board, move), normalized_move_uci(move, board.turn), move)
             for move in moves
         ]
-        scored.sort(key=lambda item: (-item[0], item[1]))
+        scored.sort(
+            key=lambda item: (
+                0 if item[2].capture_preference is not None else 1,
+                -item[0],
+                item[1],
+            )
+        )
 
         # Collapse orientation clones before applying the beam. The strongest
         # facing for each artillery source/destination survives, so a single
@@ -4200,7 +4269,7 @@ class Searcher:
                 partial.board,
                 partial.priority,
                 self.quick_score(partial.board),
-                0.0,
+                self.uncompensated_safety_penalty(safety),
                 True,
                 purpose["net_purpose_penalty"],
                 purpose["paratrooper_mission_penalty"],
@@ -4663,7 +4732,7 @@ class Searcher:
                             partial.board,
                             partial.priority,
                             self.quick_score(partial.board),
-                            0.0,
+                            self.uncompensated_safety_penalty(safety),
                             True,
                             purpose["net_purpose_penalty"],
                             purpose["paratrooper_mission_penalty"],
@@ -4681,6 +4750,7 @@ class Searcher:
                 # merely because that one action lacked an immediate label.
                 fallback_options.sort(
                     key=lambda candidate: (
+                        candidate.safety_penalty,
                         candidate.purpose_penalty
                         + candidate.paratrooper_mission_penalty,
                         sum(
@@ -4989,6 +5059,36 @@ class Searcher:
         if len(selected) != len(candidates):
             self.exhaustive_within_horizon = False
             self.complete_turns_pruned += len(candidates) - len(selected)
+        if is_root_generation and selected:
+            safe_floor_options = [
+                candidate
+                for candidate in selected
+                if candidate.tactically_safe
+                and candidate.paratrooper_mission_penalty <= 0.0
+            ]
+            if safe_floor_options:
+                objective_floor = min(
+                    safe_floor_options,
+                    key=lambda candidate: (
+                        candidate.safety_penalty,
+                        candidate.purpose_penalty,
+                        -(
+                            candidate.static_score
+                            if original_turn == engine.RED
+                            else -candidate.static_score
+                        ),
+                        normalized_turn_key(candidate.moves, original_turn),
+                    ),
+                )
+                incumbent_floor = self.root_objective_safety_floor
+                if incumbent_floor is None or (
+                    objective_floor.safety_penalty,
+                    objective_floor.purpose_penalty,
+                ) < (
+                    incumbent_floor.safety_penalty,
+                    incumbent_floor.purpose_penalty,
+                ):
+                    self.root_objective_safety_floor = objective_floor
         self.turn_cache[cache_key] = selected
         if self.root_key == cache_key and selected:
             self.root_fallback = selected[0]
@@ -6495,6 +6595,8 @@ def search(
     )
     if searcher.root_fallback is not None:
         known_root_candidates.append(searcher.root_fallback)
+    if searcher.root_objective_safety_floor is not None:
+        known_root_candidates.append(searcher.root_objective_safety_floor)
     known_root_candidates.extend(
         searcher.turn_cache.get(searcher.root_key or "", [])
     )

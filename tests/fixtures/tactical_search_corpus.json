@@ -225,6 +225,31 @@
         "noWorseThanBaselineCriticalExposure": true,
         "noWorseThanBaselineTwoTurnNetExchange": true
       }
+    },
+    {
+      "id": "dc3-game-0012-turn-46-quiet-high-value-protection",
+      "source": "Frozen self-play: BLUE's quiet turn allowed RED to take six points; h7h6 instead protects the exposed armored infantry",
+      "fen": "qf1i2p1/it↓ih↓iir↓i/1r↓r↓2f2/2i1iFf1/I3I1I1/1R↑IH↑FT↑1I/1F1I1IR↑1/1PI3R↑Q - - b",
+      "turnNumber": 46,
+      "personality": "tactical_gambler",
+      "openingSeed": 2380500667,
+      "search": {
+        "timeMs": 20000,
+        "maxDepth": 2,
+        "beamWidth": 6,
+        "maxActions": 3
+      },
+      "acceptance": {
+        "requireFinalSafetyCertified": true,
+        "minimumCompletedDepth": 2,
+        "avoidImmediateHqLoss": true,
+        "maxCandidateForcedLoss": 0,
+        "maxCandidateCriticalExposure": 0,
+        "minimumTwoTurnNetExchange": 0,
+        "noWorseThanBaselineForcedLoss": true,
+        "noWorseThanBaselineCriticalExposure": true,
+        "noWorseThanBaselineTwoTurnNetExchange": true
+      }
     }
   ]
 }

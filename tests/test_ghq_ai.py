@@ -3584,6 +3584,53 @@ class SearchTests(unittest.TestCase):
         self.assertTrue(engine.BB_SQUARES[engine.parse_square("d3")] & threatened)
         self.assertGreaterEqual(searcher.move_priority(board, escape), 4200.0)
 
+    def test_quiet_support_of_exposed_armored_infantry_is_forcing(self):
+        board = engine.BaseBoard(
+            "qf1i2p1/it↓ih↓iir↓i/1r↓r↓2f2/2i1iFf1/"
+            "I3I1I1/1R↑IH↑FT↑1I/1F1I1IR↑1/1PI3R↑Q - - b"
+        )
+        searcher = ghq_ai.Searcher(
+            "tactical_gambler", time_ms=60_000, beam_width=6, turn_number=46
+        )
+        support = next(
+            move for move in board.generate_legal_moves() if move.uci() == "h7h6"
+        )
+
+        self.assertTrue(
+            searcher.protects_immediate_high_value_target(board, support)
+        )
+        self.assertGreaterEqual(searcher.move_priority(board, support), 4400.0)
+        child = board.copy()
+        child.push(support)
+        self.assertFalse(
+            engine.BB_SQUARES[engine.parse_square("g5")]
+            & searcher.immediate_capture_targets(child, engine.BLUE)
+        )
+
+    def test_root_fallback_keeps_absolute_exposure_penalty(self):
+        board = engine.BaseBoard(
+            "qf1i2p1/it↓ih↓iir↓i/1r↓r↓2f2/2i1iFf1/"
+            "I3I1I1/1R↑IH↑FT↑1I/1F1I1IR↑1/1PI3R↑Q - - b"
+        )
+        searcher = ghq_ai.Searcher(
+            "tactical_gambler", time_ms=60_000, beam_width=6, turn_number=46
+        )
+        searcher.root_key = ghq_ai.board_key(board)
+        searcher.verification_mode = True
+
+        candidates = searcher.generate_turn_candidates(board)
+
+        self.assertIsNotNone(searcher.root_fallback)
+        self.assertEqual(searcher.root_fallback.safety_penalty, 0.0)
+        self.assertEqual(searcher.root_fallback.moves[0].uci(), "h7h6")
+        self.assertTrue(
+            any(
+                candidate.moves[0].uci() == "h7h6"
+                and candidate.safety_penalty == 0.0
+                for candidate in candidates
+            )
+        )
+
     def test_purpose_filter_cannot_delete_a_quiet_hq_escape(self):
         board = engine.BaseBoard(
             "q2i1i2/3ii3/4f3/8/8/1F6/IF1I1f2/1P2f1Q1 II i r"
