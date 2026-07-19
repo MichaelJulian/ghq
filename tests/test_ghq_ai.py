@@ -2136,6 +2136,51 @@ class SearchTests(unittest.TestCase):
             [move.uci() for move in seed_moves],
         )
 
+    def test_final_reserve_certifies_raw_seed_before_reply_verification(self):
+        root = engine.BaseBoard()
+        safe = ghq_ai.TacticalSafety(0, 0, 0, 0, 0, True)
+        alphabeta_calls = []
+
+        def staged_alphabeta(searcher, board, depth, alpha, beta):
+            alphabeta_calls.append((board.turn, depth))
+            if len(alphabeta_calls) <= 4:
+                # Initial seed reply, root verification, reserved seed retry,
+                # and shallow root search all expire under load.
+                raise ghq_ai.SearchTimeout
+            # The isolated final verifier receives the remaining hard budget.
+            return ghq_ai.SearchResult(0.0, [])
+
+        with patch.object(
+            ghq_ai,
+            "bounded_seed_safety",
+            side_effect=[None, None, safe],
+        ) as safety_probe, patch.object(
+            ghq_ai,
+            "material_safe_recovery_turn",
+            return_value=None,
+        ), patch.object(
+            ghq_ai.Searcher,
+            "alphabeta",
+            staged_alphabeta,
+        ):
+            result = ghq_ai.search(
+                root,
+                "balanced",
+                time_ms=1_000,
+                max_depth=2,
+                beam_width=6,
+                turn_number=8,
+            )
+
+        self.assertEqual(len(alphabeta_calls), 5)
+        self.assertEqual(safety_probe.call_count, 3)
+        self.assertFalse(result["search"]["seed_reply_verified"])
+        self.assertTrue(result["search"]["seed_safety_retry_used"])
+        self.assertTrue(result["search"]["seed_safety_retry_verified"])
+        self.assertTrue(result["search"]["safe_fallback_reply_verified"])
+        self.assertEqual(result["search"]["completed_depth_in_turns"], 2)
+        self.assertEqual(result["search"]["fallback_used"], "safe")
+
     def test_timeout_keeps_verified_root_development_instead_of_seed_backfill(self):
         result = ghq_ai.search(
             engine.BaseBoard(TURN_FIVE_DEVELOPMENT_FEN),

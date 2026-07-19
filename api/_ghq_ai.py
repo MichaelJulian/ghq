@@ -6353,6 +6353,39 @@ def search(
         completed_depth = 0
         fallback_kind = "safe"
 
+    # A raw emergency seed used to return as soon as the main minimax clock
+    # expired, even though the request still had a large protected tactical
+    # reserve.  Under concurrent Vercel load this left sparse late-game turns
+    # unverified at depth zero.  Spend a bounded part of the *overall* budget
+    # proving objective material and HQ safety first; only a completed proof
+    # may promote the seed into the safe-fallback reply verifier below.
+    if (
+        fallback_kind == "seeded"
+        and not resulting_board.is_game_over()
+        and resulting_board.turn != board.turn
+    ):
+        final_seed_safety_budget = remaining_overall_ms(
+            min(5_000, max(1_000, int(time_ms * 0.25)))
+        )
+        if final_seed_safety_budget >= 50:
+            seed_safety_retry_used = True
+            final_seed_safety = bounded_seed_safety(
+                board,
+                resulting_board,
+                personality,
+                turn_number,
+                beam_width,
+                max_actions,
+                final_seed_safety_budget,
+                check_hq_combinations=True,
+            )
+            if (
+                final_seed_safety is not None
+                and final_seed_safety.tactically_safe
+            ):
+                seed_safety_retry_verified = True
+                fallback_kind = "safe"
+
     # Safety and policy guards run after the main minimax deadline. Returning
     # their replacement at depth zero made otherwise useful self-play games
     # ineligible for training even when Vercel still had enough function time
