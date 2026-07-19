@@ -41,6 +41,16 @@ class GameConfig:
     max_turns: int
     repetition_limit: int
     no_progress_turns: int
+    initial_fen: str = engine.STARTING_FEN
+    initial_turn_number: int = 1
+    source_position_id: str = "starting-position"
+
+
+@dataclass(frozen=True)
+class ArenaPosition:
+    position_id: str
+    fen: str
+    turn_number: int
 
 
 @dataclass(frozen=True)
@@ -67,6 +77,8 @@ class GameResult:
     fallback_counts: Dict[str, int]
     completed_depth_counts: Dict[str, int]
     move_turns: list[list[str]]
+    source_position_id: str = "starting-position"
+    initial_turn_number: int = 1
 
 
 def parse_args() -> argparse.Namespace:
@@ -82,6 +94,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-progress-turns", type=int, default=24)
     parser.add_argument("--seed", type=int, default=0x474851)
     parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument(
+        "--positions",
+        type=Path,
+        help="JSONL full games or position records used as paired arena starts",
+    )
+    parser.add_argument(
+        "--hq-audit-report",
+        type=Path,
+        help="optional exact HQ audit whose approved games may supply starts",
+    )
+    parser.add_argument("--position-min-turn", type=int, default=20)
+    parser.add_argument("--position-max-turn", type=int, default=100)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if args.games < 2 or args.games % 2:
@@ -98,7 +122,69 @@ def parse_args() -> argparse.Namespace:
         parser.error("--no-progress-turns must be from 4 through 100")
     if args.workers < 1:
         parser.error("--workers must be positive")
+    if args.hq_audit_report and not args.positions:
+        parser.error("--hq-audit-report requires --positions")
+    if not 1 <= args.position_min_turn <= args.position_max_turn:
+        parser.error("arena position turn bounds are invalid")
     return args
+
+
+def load_arena_positions(
+    path: Path,
+    minimum_turn: int,
+    maximum_turn: int,
+    approved_game_ids: Optional[set[str]] = None,
+) -> list[ArenaPosition]:
+    positions: Dict[tuple[str, int], ArenaPosition] = {}
+    with path.open(encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, 1):
+            if not line.strip():
+                continue
+            record = json.loads(line)
+            candidates = record.get("decisions")
+            if not isinstance(candidates, list):
+                candidates = [record]
+            for offset, candidate in enumerate(candidates):
+                if not isinstance(candidate, dict):
+                    continue
+                fen = candidate.get("fen") or candidate.get("currentFen")
+                turn_number = candidate.get("turnNumber")
+                if turn_number is None and candidate.get("completedTurns") is not None:
+                    turn_number = int(candidate["completedTurns"]) + 1
+                if not isinstance(fen, str) or not isinstance(turn_number, int):
+                    continue
+                if not minimum_turn <= turn_number <= maximum_turn:
+                    continue
+                board = engine.BaseBoard(fen)
+                if board.outcome() is not None:
+                    continue
+                game_id = str(
+                    candidate.get("gameId")
+                    or record.get("gameId")
+                    or f"line-{line_number}"
+                )
+                if (
+                    approved_game_ids is not None
+                    and game_id not in approved_game_ids
+                ):
+                    continue
+                position_id = str(
+                    candidate.get("positionId")
+                    or f"{game_id}:turn-{turn_number}:item-{offset}"
+                )
+                positions[(fen, turn_number)] = ArenaPosition(
+                    position_id=position_id,
+                    fen=fen,
+                    turn_number=turn_number,
+                )
+    if not positions:
+        raise ValueError("arena position input contains no eligible positions")
+    return sorted(
+        positions.values(),
+        key=lambda position: hashlib.sha256(
+            position.position_id.encode("utf-8")
+        ).hexdigest(),
+    )
 
 
 def load_artifact(path: str) -> Dict[str, Any]:
@@ -259,7 +345,7 @@ def play_game(config: GameConfig) -> GameResult:
         challenger_color: policy_function(challenger),
         not challenger_color: policy_function(baseline),
     }
-    board = engine.BaseBoard(engine.STARTING_FEN)
+    board = engine.BaseBoard(config.initial_fen)
     occurrences = Counter({board.board_fen(): 1})
     strategic_best = {
         engine.RED: strategic_progress(board, engine.RED),
@@ -275,9 +361,10 @@ def play_game(config: GameConfig) -> GameResult:
     termination = "max-turns"
     winner: Optional[str] = None
     game_over = False
-    turn_number = 1
+    turn_number = config.initial_turn_number
+    final_turn_number = turn_number + config.max_turns - 1
 
-    while turn_number <= config.max_turns:
+    while turn_number <= final_turn_number:
         mover = board.turn
         result = ghq_ai.search(
             board,
@@ -368,6 +455,8 @@ def play_game(config: GameConfig) -> GameResult:
         fallback_counts=dict(fallbacks),
         completed_depth_counts=dict(depths),
         move_turns=move_turns,
+        source_position_id=config.source_position_id,
+        initial_turn_number=config.initial_turn_number,
     )
 
 
@@ -380,7 +469,12 @@ def summarize(args: argparse.Namespace, games: list[GameResult]) -> Dict[str, An
     policy_pairs = []
     for index in range(0, len(games), 2):
         left, right = games[index : index + 2]
-        if left.pair != right.pair or left.seed != right.seed:
+        if (
+            left.pair != right.pair
+            or left.seed != right.seed
+            or left.source_position_id != right.source_position_id
+            or left.initial_turn_number != right.initial_turn_number
+        ):
             raise RuntimeError("native arena produced a broken color pair")
         pairs.append((left.challenger_score + right.challenger_score) / 2)
         common_turns = 0
@@ -396,6 +490,8 @@ def summarize(args: argparse.Namespace, games: list[GameResult]) -> Dict[str, An
         policy_pairs.append(
             {
                 "pair": left.pair,
+                "sourcePositionId": left.source_position_id,
+                "initialTurnNumber": left.initial_turn_number,
                 "commonPrefixTurns": common_turns,
                 "comparedTurns": compared_turns,
                 "diverged": common_turns < compared_turns
@@ -448,6 +544,18 @@ def summarize(args: argparse.Namespace, games: list[GameResult]) -> Dict[str, An
             "baselineSha256": artifact_fingerprint(args.baseline),
             "challengerPath": str(args.challenger),
             "challengerSha256": artifact_fingerprint(args.challenger),
+            "positionsPath": str(args.positions) if args.positions else None,
+            "positionsSha256": (
+                artifact_fingerprint(args.positions) if args.positions else None
+            ),
+            "hqAuditReport": (
+                str(args.hq_audit_report) if args.hq_audit_report else None
+            ),
+            "hqAuditSha256": (
+                artifact_fingerprint(args.hq_audit_report)
+                if args.hq_audit_report
+                else None
+            ),
         },
         "challenger": {
             "points": points,
@@ -483,6 +591,22 @@ def summarize(args: argparse.Namespace, games: list[GameResult]) -> Dict[str, An
 
 def main() -> None:
     args = parse_args()
+    approved_game_ids = None
+    if args.hq_audit_report:
+        audit = json.loads(args.hq_audit_report.read_text(encoding="utf-8"))
+        approved_game_ids = {
+            str(game_id) for game_id in audit["approvedTrainingGameIds"]
+        }
+    positions = (
+        load_arena_positions(
+            args.positions,
+            args.position_min_turn,
+            args.position_max_turn,
+            approved_game_ids,
+        )
+        if args.positions
+        else [ArenaPosition("starting-position", engine.STARTING_FEN, 1)]
+    )
     configs = [
         GameConfig(
             index=index,
@@ -495,6 +619,13 @@ def main() -> None:
             max_turns=args.max_turns,
             repetition_limit=args.repetition_limit,
             no_progress_turns=args.no_progress_turns,
+            initial_fen=positions[(index // 2) % len(positions)].fen,
+            initial_turn_number=positions[
+                (index // 2) % len(positions)
+            ].turn_number,
+            source_position_id=positions[
+                (index // 2) % len(positions)
+            ].position_id,
         )
         for index in range(args.games)
     ]

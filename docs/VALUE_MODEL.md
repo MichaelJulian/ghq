@@ -229,3 +229,33 @@ The response includes `serializedState`; send that value instead of `fen` for
 the next arena turn so draw offers and other state not represented by FEN are
 preserved. Recommendations are labeled `best found` unless the requested search
 horizon was exhaustive.
+
+## Native candidate screening
+
+Before spending a durable Vercel arena on a value-model challenger, screen it
+with paired production-Python searches. The arena can begin from exact-audited
+midgame positions in a downloaded generation, avoiding repeated opening-book
+turns and exposing whether a small value correction actually changes play:
+
+```bash
+.venv/bin/python scripts/run_native_value_arena.py \
+  --baseline src/game/value-model/model.generated.json \
+  --challenger .data/value-challenger.json \
+  --games 8 \
+  --time-ms 5000 \
+  --max-depth 2 \
+  --beam-width 6 \
+  --max-turns 40 \
+  --workers 4 \
+  --positions .data/<generation-id>.jsonl \
+  --hq-audit-report .data/<generation-id>-hq-audit.json \
+  --position-min-turn 25 \
+  --position-max-turn 80 \
+  --output .data/value-challenger-midgame-screen.json
+```
+
+Each adjacent game pair uses the same FEN, absolute turn, seed, and personality
+while swapping which color receives the challenger. `--max-turns` is the number
+of rollout turns after that starting position. This remains a screening tool:
+its quality gate rejects seeded or poorly verified searches, and a favorable
+result still requires a larger untouched promotion arena.

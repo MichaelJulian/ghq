@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -20,6 +21,7 @@ import run_native_value_arena as arena  # noqa: E402
 from run_native_value_arena import (  # noqa: E402
     GameConfig,
     GameResult,
+    load_arena_positions,
     extends_strategic_best,
     merge_strategic_best,
     policy_function,
@@ -48,6 +50,10 @@ class NativeValueArenaTest(unittest.TestCase):
             seed=1,
             workers=1,
             output=None,
+            positions=None,
+            hq_audit_report=None,
+            position_min_turn=20,
+            position_max_turn=100,
         )
 
     def game(
@@ -84,6 +90,38 @@ class NativeValueArenaTest(unittest.TestCase):
         mirrored_red = evaluate(rotated, 1)
         self.assertAlmostEqual(red + mirrored_red, 1.0, places=12)
 
+    def test_loads_paired_midgame_starts_from_full_game_jsonl(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "games.jsonl"
+            path.write_text(
+                json.dumps(
+                    {
+                        "gameId": "game-1",
+                        "decisions": [
+                            {
+                                "turnNumber": 12,
+                                "fen": engine.STARTING_FEN,
+                            },
+                            {
+                                "turnNumber": 27,
+                                "fen": "q7/8/8/8/8/8/8/7Q - - r",
+                            },
+                        ],
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            positions = load_arena_positions(path, 20, 40, {"game-1"})
+
+            with self.assertRaisesRegex(ValueError, "no eligible positions"):
+                load_arena_positions(path, 20, 40, {"different-game"})
+
+        self.assertEqual(len(positions), 1)
+        self.assertEqual(positions[0].turn_number, 27)
+        self.assertIn("game-1:turn-27", positions[0].position_id)
+
     def test_external_policy_head_is_visible_to_arena_search(self) -> None:
         artifact = {
             **self.incumbent,
@@ -112,8 +150,10 @@ class NativeValueArenaTest(unittest.TestCase):
             },
         }
         seen_policy_scores = []
+        seen_turns = []
 
         def fake_search(board, *args, **kwargs):
+            seen_turns.append(args[4])
             seen_policy_scores.append(
                 kwargs["policy_function"](
                     board.board_fen(), 1, board.turn
@@ -139,6 +179,9 @@ class NativeValueArenaTest(unittest.TestCase):
             max_turns=1,
             repetition_limit=3,
             no_progress_turns=24,
+            initial_fen="q7/8/8/8/8/8/8/7Q - - r",
+            initial_turn_number=27,
+            source_position_id="audited-game:turn-27",
         )
         with patch.object(
             arena,
@@ -148,6 +191,7 @@ class NativeValueArenaTest(unittest.TestCase):
             arena.play_game(config)
 
         self.assertEqual(seen_policy_scores, [0.5])
+        self.assertEqual(seen_turns, [27])
 
     def test_quality_gate_rejects_one_seeded_fallback(self) -> None:
         report = summarize(
