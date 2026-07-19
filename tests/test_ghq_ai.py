@@ -53,6 +53,10 @@ TURN_12_SLOW_REPLY_FEN = (
     "q1ir↓fffp/iir↙h↓r→3/2it→4/8/5R↖2/4R←I2/3II1II/"
     "FR↑IH↑PIT↑Q IFF iiii b"
 )
+TURN_20_ARMORED_ARTILLERY_SAVE_FEN = (
+    "qf1i2p1/i1ir↓if2/1ir↓t↓1h↓r↓f/8/7I/I4T↑I1/"
+    "1FIIH↑R↑IQ/IP2IF1F RR iii r"
+)
 TURN_6_FEN = (
     "qr↓1r↓1i2/iiiii3/8/8/8/5T↑2/4H↑III/"
     "PFR↑FF1R↑Q IIIIIR iifffprth b"
@@ -1514,6 +1518,39 @@ class SearchTests(unittest.TestCase):
         safety = searcher.assess_turn_safety(before, after, engine.BLUE)
         self.assertFalse(safety.tactically_safe)
         self.assertGreaterEqual(safety.forced_loss_value, 6.0)
+
+    def test_live_turn_twenty_recovers_bombarded_armored_artillery(self):
+        board = engine.BaseBoard(TURN_20_ARMORED_ARTILLERY_SAVE_FEN)
+        verifier = ghq_ai.Searcher(
+            "balanced", time_ms=10_000, beam_width=6, turn_number=21
+        )
+        self.assertEqual(
+            verifier.tactical_risk(board, engine.RED)[1], 5.0
+        )
+
+        for personality in ("para_specialist", "tactical_gambler"):
+            with self.subTest(personality=personality):
+                recovery = ghq_ai.material_safe_recovery_turn(
+                    board,
+                    personality,
+                    turn_number=21,
+                    beam_width=6,
+                    max_actions=3,
+                    time_ms=2_000,
+                )
+                self.assertIsNotNone(recovery)
+                assert recovery is not None
+                self.assertTrue(
+                    any(
+                        move.from_square == engine.parse_square("f3")
+                        for move in recovery.moves
+                    )
+                )
+                safety = verifier.assess_turn_safety(
+                    board, recovery.board, engine.RED
+                )
+                self.assertTrue(safety.tactically_safe)
+                self.assertEqual(safety.forced_loss_value, 0.0)
 
     def test_value_model_is_used_in_leaf_score(self):
         searcher = ghq_ai.Searcher(
