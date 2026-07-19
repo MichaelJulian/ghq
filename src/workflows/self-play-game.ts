@@ -194,7 +194,7 @@ export interface DurableSelfPlayQuality {
   trainingRejectionReasons: string[];
 }
 
-interface DurableTrainingSample {
+export interface DurableTrainingSample {
   generationId: string;
   gameId: string;
   turnNumber: number;
@@ -208,6 +208,8 @@ interface DurableTrainingSample {
   winner: Player;
   selectedMoves: string[];
   completedDepth: number;
+  fallback: DurableSelfPlayDecision["fallback"];
+  timedOut: boolean;
   valueModel: ValueModelVersion;
   valueModelCheckpoint: string;
   codeVersion: string;
@@ -216,6 +218,42 @@ interface DurableTrainingSample {
     DurableSelfPlayDecision["searchValueModelBackend"]
   >;
   searchCodeVersion: string;
+}
+
+export function durableTrainingSample(
+  decision: DurableSelfPlayDecision,
+  config: Pick<
+    DurableSelfPlayGameConfig,
+    "generationId" | "gameId" | "red" | "blue"
+  >,
+  winner: Player
+): DurableTrainingSample {
+  return {
+    generationId: config.generationId,
+    gameId: config.gameId,
+    turnNumber: decision.turnNumber,
+    player: decision.player,
+    agentId: decision.agentId,
+    opponentId: decision.opponentId,
+    personality: decision.personality,
+    fen: decision.fen,
+    features: decision.features,
+    outcomeValue: decision.player === winner ? 1 : 0,
+    winner,
+    selectedMoves: decision.selectedMoves,
+    completedDepth: decision.completedDepth,
+    fallback: decision.fallback,
+    timedOut: decision.timedOut,
+    valueModel: decision.valueModel ?? "incumbent",
+    valueModelCheckpoint:
+      decision.player === "RED"
+        ? config.red.valueModelCheckpoint ?? "unknown"
+        : config.blue.valueModelCheckpoint ?? "unknown",
+    codeVersion: decision.searchCodeVersion!,
+    searchBackend: decision.searchBackend!,
+    searchValueModelBackend: decision.searchValueModelBackend!,
+    searchCodeVersion: decision.searchCodeVersion!,
+  };
 }
 
 async function playDurableTurn(
@@ -743,30 +781,9 @@ export async function playDurableSelfPlayGame(
       )
     : [];
   const trainingSamples: DurableTrainingSample[] = outcome.winner
-    ? eligibleDecisions.map((decision) => ({
-        generationId: config.generationId,
-        gameId: config.gameId,
-        turnNumber: decision.turnNumber,
-        player: decision.player,
-        agentId: decision.agentId,
-        opponentId: decision.opponentId,
-        personality: decision.personality,
-        fen: decision.fen,
-        features: decision.features,
-        outcomeValue: decision.player === outcome.winner ? 1 : 0,
-        winner: outcome.winner!,
-        selectedMoves: decision.selectedMoves,
-        completedDepth: decision.completedDepth,
-        valueModel: decision.valueModel ?? "incumbent",
-        valueModelCheckpoint:
-          decision.player === "RED"
-            ? config.red.valueModelCheckpoint ?? "unknown"
-            : config.blue.valueModelCheckpoint ?? "unknown",
-        codeVersion: decision.searchCodeVersion!,
-        searchBackend: decision.searchBackend!,
-        searchValueModelBackend: decision.searchValueModelBackend!,
-        searchCodeVersion: decision.searchCodeVersion!,
-      }))
+    ? eligibleDecisions.map((decision) =>
+        durableTrainingSample(decision, config, outcome.winner!)
+      )
     : [];
   const result: Omit<DurableSelfPlayGameResult, "storage"> = {
     generationId: config.generationId,

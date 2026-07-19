@@ -5,6 +5,7 @@ import {
   actionMadeProgress,
   durableSearchSlotAt,
   durableSelfPlayProgressSnapshot,
+  durableTrainingSample,
   durableGameTrainingRejectionReasons,
   isDurableTrainingDecisionEligible,
   resolveDurableInitialState,
@@ -47,6 +48,53 @@ function decision(
 }
 
 describe("durable self-play training quality", () => {
+  it("preserves behavior-quality telemetry in compact training artifacts", () => {
+    const sample = durableTrainingSample(
+      decision({
+        player: "BLUE",
+        fallback: "safe",
+        timedOut: true,
+        completedDepth: 2,
+        selectedMoves: ["a8a7", "b8b7", "c8c7"],
+      }),
+      {
+        generationId: "generation-1",
+        gameId: "game-1",
+        red: {
+          id: "red",
+          personality: "balanced",
+          timeMs: 20_000,
+          maxDepth: 2,
+          beamWidth: 6,
+          explorationTemperature: 0,
+          valueModelCheckpoint: "red-checkpoint",
+        },
+        blue: {
+          id: "blue",
+          personality: "fortress",
+          timeMs: 20_000,
+          maxDepth: 2,
+          beamWidth: 6,
+          explorationTemperature: 0,
+          valueModelCheckpoint: "blue-checkpoint",
+        },
+      },
+      "RED"
+    );
+
+    expect(sample).toMatchObject({
+      generationId: "generation-1",
+      gameId: "game-1",
+      player: "BLUE",
+      outcomeValue: 0,
+      selectedMoves: ["a8a7", "b8b7", "c8c7"],
+      completedDepth: 2,
+      fallback: "safe",
+      timedOut: true,
+      valueModelCheckpoint: "blue-checkpoint",
+    });
+  });
+
   it("places concurrent games into stable absolute search lanes", () => {
     const schedule = {
       epochMs: 1_000,

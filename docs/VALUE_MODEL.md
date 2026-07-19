@@ -125,7 +125,9 @@ remaining deficit for each data source. It also reports fallback counts,
 timed-out samples, and how many samples completed depth three or deeper. The V3
 exporter, merger, and trainer all fail closed when behavior-quality telemetry is
 missing, a reply was not completed to depth two, or the move came from a seeded
-or otherwise unverified fallback.
+or otherwise unverified fallback. New compact Blob training artifacts preserve
+the same behavior-quality fields as full-game downloads; historical artifacts
+without those fields must be re-exported from their full persisted games.
 
 ## Personalities
 
