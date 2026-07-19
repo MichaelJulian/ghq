@@ -35,6 +35,7 @@ class ProgressStructureAnalysisTests(unittest.TestCase):
                 "gameId": "game-1",
                 "completedTurns": 10,
                 "side": "RED",
+                "to_move": False,
                 "immobile_units": 1.0,
             }
         )
@@ -43,6 +44,7 @@ class ProgressStructureAnalysisTests(unittest.TestCase):
             {
                 "gameId": "game-2",
                 "side": "BLUE",
+                "to_move": True,
                 "immobile_units": 0.0,
                 "support_penalty": 2.0,
             }
@@ -52,8 +54,33 @@ class ProgressStructureAnalysisTests(unittest.TestCase):
 
         self.assertEqual(report["sidePositions"], 2)
         self.assertEqual(report["metrics"]["support_penalty"]["mean"], 1.0)
+        self.assertEqual(report["structuralDebtPositions"], 1)
         self.assertEqual(report["structuralDangerPositions"], 1)
+        self.assertEqual(report["tacticalDangerPositions"], 0)
         self.assertEqual(report["constrainedPositions"], 1)
+
+        danger["tactical_risk_value"] = 3.0
+        tactical_report = progress_structure.summarize_metric_rows(
+            [safe, danger]
+        )
+        self.assertEqual(tactical_report["tacticalDangerPositions"], 1)
+        self.assertEqual(tactical_report["repairRequiredPositions"], 1)
+        self.assertEqual(
+            tactical_report["immediateTacticalDangerPositions"], 0
+        )
+
+        immediate = dict(danger)
+        immediate.update({"gameId": "game-3", "to_move": False})
+        immediate_report = progress_structure.summarize_metric_rows(
+            [safe, danger, immediate]
+        )
+        self.assertEqual(immediate_report["repairRequiredPositions"], 1)
+        self.assertEqual(
+            immediate_report["immediateTacticalDangerPositions"], 1
+        )
+        self.assertEqual(
+            immediate_report["immediateForcedCapturePositions"], 1
+        )
 
     def test_empty_progress_is_a_valid_report(self):
         report = progress_structure.analyze_summary(

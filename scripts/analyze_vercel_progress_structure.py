@@ -31,6 +31,9 @@ METRIC_NAMES = (
     "home_rank_occupancy",
     "immobile_units",
     "mean_relocation_options",
+    "tactical_risk_value",
+    "forced_loss_value",
+    "critical_exposure_value",
 )
 
 DANGER_METRICS = (
@@ -66,15 +69,24 @@ def read_summary(base_url: str, generation_id: str) -> Dict[str, Any]:
 def snapshot_metric_rows(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
     board = engine.BaseBoard(str(snapshot["currentFen"]))
     turn_number = int(snapshot["completedTurns"]) + 1
+    tactical_probe = ghq_ai.Searcher(
+        "balanced", time_ms=60_000, beam_width=1, turn_number=turn_number
+    )
     rows: List[Dict[str, Any]] = []
     for side, color in (("RED", engine.RED), ("BLUE", engine.BLUE)):
         structure = ghq_ai.structure_metrics(board, color)
         optionality = ghq_ai.optionality_metrics(board, color)
+        tactical_risk, forced_loss, critical_exposure = (
+            tactical_probe.tactical_risk(
+                board, color, check_hq_combinations=False
+            )
+        )
         rows.append(
             {
                 "gameId": snapshot["gameId"],
                 "completedTurns": int(snapshot["completedTurns"]),
                 "side": side,
+                "to_move": board.turn == color,
                 "support_penalty": ghq_ai.support_penalty(board, color),
                 "overextension_penalty": ghq_ai.overextension_penalty(
                     board, color
@@ -107,6 +119,9 @@ def snapshot_metric_rows(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "mean_relocation_options": optionality[
                     "mean_relocation_options"
                 ],
+                "tactical_risk_value": tactical_risk,
+                "forced_loss_value": forced_loss,
+                "critical_exposure_value": critical_exposure,
             }
         )
     return rows
@@ -135,10 +150,25 @@ def summarize_metric_rows(rows: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
         if materialized
         else {}
     )
-    danger_rows = [
+    structural_debt_rows = [
         row
         for row in materialized
         if any(float(row[metric]) > 0.0 for metric in DANGER_METRICS)
+    ]
+    tactical_danger_rows = [
+        row
+        for row in materialized
+        if float(row["tactical_risk_value"]) > 0.0
+    ]
+    repair_required_rows = [
+        row
+        for row in tactical_danger_rows
+        if bool(row.get("to_move"))
+    ]
+    immediate_danger_rows = [
+        row
+        for row in tactical_danger_rows
+        if not bool(row.get("to_move"))
     ]
     constrained_rows = [
         row
@@ -149,8 +179,20 @@ def summarize_metric_rows(rows: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
     return {
         "sidePositions": len(materialized),
         "metrics": metrics,
-        "structuralDangerPositions": len(danger_rows),
-        "structuralDangerExamples": danger_rows[:12],
+        "structuralDebtPositions": len(structural_debt_rows),
+        "structuralDebtExamples": structural_debt_rows[:12],
+        # Retain the old keys for readers of v1 reports. Structural debt is
+        # not proof that a piece can actually be captured on the next turn.
+        "structuralDangerPositions": len(structural_debt_rows),
+        "structuralDangerExamples": structural_debt_rows[:12],
+        "tacticalDangerPositions": len(tactical_danger_rows),
+        "tacticalDangerExamples": tactical_danger_rows[:12],
+        "repairRequiredPositions": len(repair_required_rows),
+        "repairRequiredExamples": repair_required_rows[:12],
+        "immediateForcedCapturePositions": len(immediate_danger_rows),
+        "immediateForcedCaptureExamples": immediate_danger_rows[:12],
+        "immediateTacticalDangerPositions": len(immediate_danger_rows),
+        "immediateTacticalDangerExamples": immediate_danger_rows[:12],
         "constrainedPositions": len(constrained_rows),
         "constrainedExamples": constrained_rows[:12],
     }
