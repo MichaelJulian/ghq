@@ -17,7 +17,10 @@ import {
   VALUE_FEATURE_NAMES_V3,
 } from "../src/game/value-model/features";
 import { auditParatrooperTrainingPolicy } from "../src/game/self-play/training-policy";
-import type { DurableSelfPlayGameResult } from "../src/workflows/self-play-game";
+import {
+  isDurableTrainingDecisionEligible,
+  type DurableSelfPlayGameResult,
+} from "../src/workflows/self-play-game";
 
 interface DurableTrainingSample {
   generationId: string;
@@ -90,6 +93,51 @@ function argument(name: string): string {
 function optionalArgument(name: string): string | undefined {
   const index = process.argv.indexOf(name);
   return index === -1 ? undefined : process.argv[index + 1];
+}
+
+function argumentsFor(name: string): string[] {
+  const values: string[] = [];
+  for (let index = 0; index < process.argv.length - 1; index++) {
+    if (process.argv[index] === name) values.push(process.argv[index + 1]);
+  }
+  return values;
+}
+
+async function readDownloadedGames(
+  path: string
+): Promise<DurableSelfPlayGameResult[]> {
+  const body = await readFile(path, "utf8");
+  return body
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as DurableSelfPlayGameResult);
+}
+
+function persistedTrainingSamples(
+  game: DurableSelfPlayGameResult
+): DurableTrainingSample[] {
+  if (!game.quality.trainingEligible || !game.outcome.winner) return [];
+  return game.decisions
+    .filter((decision) =>
+      isDurableTrainingDecisionEligible(decision, game.outcome)
+    )
+    .map((decision) => ({
+      generationId: game.generationId,
+      gameId: game.gameId,
+      turnNumber: decision.turnNumber,
+      player: decision.player,
+      outcomeValue: decision.player === game.outcome.winner ? 1 : 0,
+      features: decision.features,
+      fen: decision.fen,
+      codeVersion: decision.searchCodeVersion ?? game.codeVersion,
+      valueModel: decision.valueModel ?? "incumbent",
+      valueModelCheckpoint:
+        decision.player === "RED"
+          ? game.redValueModelCheckpoint
+          : game.blueValueModelCheckpoint,
+      searchBackend: decision.searchBackend,
+      searchValueModelBackend: decision.searchValueModelBackend,
+    }));
 }
 
 async function selectedBlobs(generationPrefix: string) {
@@ -169,6 +217,14 @@ async function main() {
     optionalArgument("--value-model-backend") ?? "native-gbdt";
   const outputPath = argument("--output");
   const hqAuditPath = argument("--hq-audit-report");
+  const inputPaths = argumentsFor("--input");
+  const localCreatedAt = optionalArgument("--created-at");
+  if (inputPaths.length && !localCreatedAt) {
+    throw new Error("--created-at is required with --input");
+  }
+  if (localCreatedAt && !Number.isFinite(Date.parse(localCreatedAt))) {
+    throw new Error("--created-at must be an ISO timestamp");
+  }
   const featureSchema = optionalArgument("--feature-schema") ?? "v1";
   if (!["v1", "v2", "v3"].includes(featureSchema)) {
     throw new Error("--feature-schema must be v1, v2, or v3");
@@ -219,10 +275,14 @@ async function main() {
     throw new Error("Exact HQ audit approval summary is inconsistent");
   }
   const hqAuditSha256 = createHash("sha256").update(hqAuditText).digest("hex");
-  const gameBlobs = (
-    await Promise.all([...auditedGenerations].map(selectedGameBlobs))
+  const gameBlobs = inputPaths.length
+    ? []
+    : (
+        await Promise.all([...auditedGenerations].map(selectedGameBlobs))
+      ).flat();
+  const persistedGames: DurableSelfPlayGameResult[] = (
+    await Promise.all(inputPaths.map(readDownloadedGames))
   ).flat();
-  const persistedGames: DurableSelfPlayGameResult[] = [];
   for (let index = 0; index < gameBlobs.length; index += 12) {
     persistedGames.push(
       ...(await Promise.all(
@@ -244,13 +304,14 @@ async function main() {
           game.decisions.filter(
             (decision) =>
               decision.fallback === "seeded" ||
-              (decision.fallback !== "none" &&
-                decision.completedDepth < 2)
+              (decision.fallback !== "none" && decision.completedDepth < 2)
           ).length) === 0,
     ])
   );
-  const blobs = await selectedBlobs(generationPrefix);
-  if (!blobs.length) throw new Error("No matching training artifacts found");
+  const blobs = inputPaths.length ? [] : await selectedBlobs(generationPrefix);
+  if (!inputPaths.length && !blobs.length) {
+    throw new Error("No matching training artifacts found");
+  }
 
   const recordsByGame = new Map<
     string,
@@ -261,6 +322,17 @@ async function main() {
       samples: DurableTrainingSample[];
     }
   >();
+  for (const game of persistedGames) {
+    if (!inputPaths.length) break;
+    const samples = persistedTrainingSamples(game);
+    if (!samples.length) continue;
+    recordsByGame.set(game.gameId, {
+      createdAt: localCreatedAt!,
+      generationId: game.generationId,
+      pairId: pairedGameId(game.generationId, game.gameId),
+      samples,
+    });
+  }
   for (let index = 0; index < blobs.length; index += 12) {
     const batch = blobs.slice(index, index + 12);
     const records = await Promise.all(batch.map(readBlob));
@@ -339,6 +411,61 @@ async function main() {
             samples: [sample],
           });
         }
+      }
+    }
+  }
+
+  for (const [gameId, record] of recordsByGame) {
+    if (!auditedGenerations.has(record.generationId)) {
+      throw new Error(
+        `Generation ${record.generationId} is missing from the exact HQ audit`
+      );
+    }
+    for (const sample of record.samples) {
+      if (
+        sample.gameId !== gameId ||
+        sample.generationId !== record.generationId
+      ) {
+        throw new Error(`Inconsistent game provenance for ${gameId}`);
+      }
+      if (sample.codeVersion !== codeVersion) {
+        throw new Error(
+          `Search provenance mismatch in ${gameId}: expected ${codeVersion}, received ${
+            sample.codeVersion || "missing"
+          }`
+        );
+      }
+      if (sample.valueModelCheckpoint !== valueModelCheckpoint) {
+        throw new Error(
+          `Behavior checkpoint mismatch in ${gameId}: expected ${valueModelCheckpoint}, received ${
+            sample.valueModelCheckpoint || "missing"
+          }`
+        );
+      }
+      if (sample.searchBackend !== searchBackend) {
+        throw new Error(
+          `Search runtime mismatch in ${gameId}: expected ${searchBackend}, received ${
+            sample.searchBackend || "missing"
+          }`
+        );
+      }
+      if (sample.searchValueModelBackend !== searchValueModelBackend) {
+        throw new Error(
+          `Value runtime mismatch in ${gameId}: expected ${searchValueModelBackend}, received ${
+            sample.searchValueModelBackend || "missing"
+          }`
+        );
+      }
+      if (
+        featureSchema === "v1" &&
+        sample.features.length !== VALUE_FEATURE_NAMES.length
+      ) {
+        throw new Error(`Feature mismatch in ${gameId}`);
+      }
+      if (featureSchema !== "v1" && !sample.fen) {
+        throw new Error(
+          `Missing FEN for ${featureSchema} features in ${gameId}`
+        );
       }
     }
   }
