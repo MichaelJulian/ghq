@@ -2,7 +2,7 @@
 /** Exhaustively classify immediate HQ losses in persisted Vercel self-play. */
 
 import { execFile } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { get, list, type ListBlobResultBlob } from "@vercel/blob";
 import { config } from "dotenv";
@@ -64,6 +64,16 @@ async function readGame(blob: ListBlobResultBlob) {
   ).json()) as DurableSelfPlayGameResult;
 }
 
+async function readDownloadedGames(
+  path: string
+): Promise<DurableSelfPlayGameResult[]> {
+  const body = await readFile(path, "utf8");
+  return body
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as DurableSelfPlayGameResult);
+}
+
 async function exactAudit(
   fen: string,
   maxNodes: number
@@ -78,9 +88,12 @@ async function exactAudit(
 }
 
 async function main() {
-  const generationIds = argumentsFor("--generation");
-  if (!generationIds.length) {
-    throw new Error("Pass at least one --generation <id>");
+  const requestedGenerationIds = argumentsFor("--generation");
+  const inputPaths = argumentsFor("--input");
+  if (!requestedGenerationIds.length && !inputPaths.length) {
+    throw new Error(
+      "Pass --generation <id> or --input <downloaded-games.jsonl>"
+    );
   }
   const rawMaxNodes = argumentsFor("--max-nodes").at(-1);
   // Production counterfactual positions routinely need several hundred
@@ -91,13 +104,23 @@ async function main() {
   if (!Number.isSafeInteger(maxNodes) || maxNodes < 1) {
     throw new Error("--max-nodes must be a positive integer");
   }
-  const blobs = (await Promise.all(generationIds.map(gameBlobs))).flat();
-  const games: DurableSelfPlayGameResult[] = [];
+  const blobs = (
+    await Promise.all(requestedGenerationIds.map(gameBlobs))
+  ).flat();
+  const games: DurableSelfPlayGameResult[] = (
+    await Promise.all(inputPaths.map(readDownloadedGames))
+  ).flat();
   for (let index = 0; index < blobs.length; index += 12) {
     games.push(
       ...(await Promise.all(blobs.slice(index, index + 12).map(readGame)))
     );
   }
+  const generationIds = [
+    ...new Set([
+      ...requestedGenerationIds,
+      ...games.map((game) => game.generationId),
+    ]),
+  ].sort();
 
   const losses = games.flatMap((game) => {
     if (
