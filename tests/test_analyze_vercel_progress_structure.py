@@ -95,6 +95,9 @@ class ProgressStructureAnalysisTests(unittest.TestCase):
         self.assertEqual(report["maxPositionMultiplicity"], 0)
         self.assertEqual(report["positionMultiplicity"], [])
         self.assertEqual(report["pairDiversity"]["completeColorSwapPairs"], 0)
+        self.assertEqual(report["snapshotTelemetry"], [])
+        self.assertEqual(report["workflowRuns"], {})
+        self.assertEqual(report["activeProgressRuntime"], {})
         self.assertEqual(report["sidePositions"], 0)
         self.assertEqual(report["metrics"], {})
 

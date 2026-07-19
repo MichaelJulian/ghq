@@ -263,6 +263,33 @@ def analyze_summary(summary: Dict[str, Any]) -> Dict[str, Any]:
             position_counts.values(), reverse=True
         ),
         "pairDiversity": summarize_pair_diversity(snapshots),
+        "workflowRuns": summary.get("workflowRuns", {}),
+        "activeProgressRuntime": summary.get(
+            "activeProgressRuntime", {}
+        ),
+        "snapshotTelemetry": [
+            {
+                field: snapshot.get(field)
+                for field in (
+                    "gameId",
+                    "seed",
+                    "codeVersion",
+                    "redAgentId",
+                    "blueAgentId",
+                    "completedTurns",
+                    "currentPlayer",
+                    "currentFen",
+                    "decisions",
+                    "depthAtLeastTwoDecisions",
+                    "fallbackDecisions",
+                    "unverifiedFallbackDecisions",
+                    "timedOutDecisions",
+                    "status",
+                    "updatedAt",
+                )
+            }
+            for snapshot in snapshots
+        ],
         "completedTurns": sorted(
             {int(snapshot["completedTurns"]) for snapshot in snapshots}
         ),
