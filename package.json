@@ -25,6 +25,7 @@
     "self-play:generation": "tsx scripts/run_self_play_generation.ts",
     "self-play:download": "python3 scripts/download_vercel_generation.py",
     "self-play:analyze": "tsx scripts/analyze_vercel_self_play.ts",
+    "self-play:analyze-progress": ".venv/bin/python scripts/analyze_vercel_progress_structure.py",
     "self-play:audit-hq": "tsx scripts/audit_vercel_hq_losses.ts",
     "self-play:counterfactual:prepare": "tsx scripts/prepare_counterfactual_rollouts.ts",
     "self-play:counterfactual:analyze": "tsx scripts/analyze_counterfactual_rollouts.ts"
