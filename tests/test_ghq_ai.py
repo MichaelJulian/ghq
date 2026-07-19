@@ -1005,6 +1005,12 @@ class SearchTests(unittest.TestCase):
         )
         self.assertNotIn("f5h3", timed_out_search["best_turn"]["actions"])
         self.assertTrue(
+            all(
+                "f5h3" not in candidate["actions"]
+                for candidate in timed_out_search["candidate_turns"]
+            )
+        )
+        self.assertTrue(
             timed_out_search["search"]["tactical_return_guard_used"]
         )
         self.assertTrue(

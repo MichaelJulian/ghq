@@ -6387,6 +6387,15 @@ def search(
             )
         )
 
+    # Candidate telemetry is also the exploration policy's action set. Never
+    # expose a line that complete-turn safety has already proved loses material
+    # by force: a timed-out improvement pass may leave such branches in
+    # ``root_ranked_turns`` even after the final return guard replaces the best
+    # move. This exact leak once left f5-h3 available for self-play sampling.
+    ranked_root_turns = [
+        item for item in ranked_root_turns if item[1].tactically_safe
+    ]
+
     selected_move_key = tuple(move.uci() for move in first_turn)
     if not any(
         tuple(move.uci() for move in turn.moves) == selected_move_key
