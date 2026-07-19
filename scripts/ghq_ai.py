@@ -2822,6 +2822,31 @@ class Searcher:
                 )
             )
             for move in moves:
+                target = move.capture_preference
+                if (
+                    target is not None
+                    and current.piece_type_at(target) == engine.HQ
+                ):
+                    self.exact_same_turn_hq_capture_cache[cache_key] = True
+                    return True
+                # A third voluntary action ends the attacker's turn.  It can
+                # still win immediately by leaving the defending HQ under a
+                # terminal bombardment, so push it and inspect the outcome.
+                # Do not enqueue a non-terminal child whose turn has already
+                # passed: the old proof popped hundreds of thousands of those
+                # dead leaves only to discard them below. Forced AutoCaptures
+                # do not consume a voluntary action and must still be followed.
+                if (
+                    current.turn_moves >= self.max_actions - 1
+                    and move.name != "AutoCapture"
+                ):
+                    child = current.copy()
+                    child.push(move)
+                    outcome = child.outcome()
+                    if outcome is not None and outcome.winner == attacker:
+                        self.exact_same_turn_hq_capture_cache[cache_key] = True
+                        return True
+                    continue
                 child = current.copy()
                 child.push(move)
                 frontier.append(child)

@@ -1081,6 +1081,33 @@ class SearchTests(unittest.TestCase):
             )
         )
 
+    def test_exact_hq_probe_prunes_terminal_non_capturing_third_actions(self):
+        root = engine.BaseBoard(
+            "1I2p3/2I2r↓2/8/8/2q5/5I2/"
+            "1R↑T↑1H→R↑I1/1P5Q - - b"
+        )
+        escaped = root.copy()
+        for uci in ("c4d5", "f7e7↙", "e8f8"):
+            escaped.push(engine.Move.from_uci(uci))
+        searcher = ghq_ai.Searcher(
+            "para_specialist",
+            time_ms=60_000,
+            beam_width=6,
+            turn_number=158,
+        )
+        remaining_nodes = [100_000]
+
+        self.assertFalse(
+            searcher.exact_same_turn_hq_capture(
+                escaped, escaped.turn, remaining_nodes
+            )
+        )
+        # The old enumerator materialized every non-capturing third action
+        # even though that action ended the turn.  This same exact proof used
+        # more than 640k popped nodes and timed out on Vercel.
+        self.assertLess(searcher.hq_survival_reply_nodes, 20_000)
+        self.assertGreater(remaining_nodes[0], 0)
+
     def test_sparse_orientation_proof_reclassifies_old_turn_107_escape(self):
         root = engine.BaseBoard(
             "q5pr↓/i1i5/1i6/8/3f4/t↓1r↓1i3/"
