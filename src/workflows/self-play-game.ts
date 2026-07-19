@@ -99,6 +99,8 @@ export interface DurableSelfPlayDecision {
     policyReturnGuardUsed?: boolean;
     seedReplyVerified?: boolean;
     seedReplyRetryUsed?: boolean;
+    seedSafetyRetryUsed?: boolean;
+    seedSafetyRetryVerified?: boolean;
   };
   persistentCacheHit?: boolean;
   timedOut: boolean;
@@ -297,6 +299,10 @@ async function playDurableTurn(
         analysis.search.search.policy_return_guard_used === true,
       seedReplyVerified: analysis.search.search.seed_reply_verified === true,
       seedReplyRetryUsed: analysis.search.search.seed_reply_retry_used === true,
+      seedSafetyRetryUsed:
+        analysis.search.search.seed_safety_retry_used === true,
+      seedSafetyRetryVerified:
+        analysis.search.search.seed_safety_retry_verified === true,
     },
     persistentCacheHit: analysis.search.search.persistent_cache_hit === true,
     timedOut: analysis.search.search.timed_out,

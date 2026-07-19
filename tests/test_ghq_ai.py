@@ -1706,6 +1706,10 @@ class SearchTests(unittest.TestCase):
         searcher = ghq_ai.Searcher(
             "para_specialist", time_ms=5000, beam_width=16, turn_number=8
         )
+        # This is a semantic generation invariant, not a five-second
+        # performance assertion. Disable the wall clock so slower CI workers
+        # cannot turn a valid candidate set into a SearchTimeout.
+        searcher.deadline = float("inf")
 
         candidates = searcher.generate_turn_candidates(board)
         forbidden = {"c5b5↓", "f6g5↓"}
@@ -1984,6 +1988,71 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(result["search"]["completed_depth_in_turns"], 2)
         self.assertEqual(result["search"]["fallback_used"], "safe")
         self.assertFalse(result["search"]["safe_fallback_reply_verified"])
+        self.assertEqual(
+            result["best_turn"]["all_moves"],
+            [move.uci() for move in seed_moves],
+        )
+
+    def test_reply_verified_seed_retries_inconclusive_material_safety(self):
+        root = engine.BaseBoard()
+        seed = ghq_ai.purposeful_complete_turn_seed(
+            root,
+            "balanced",
+            turn_number=8,
+            max_actions=3,
+            time_ms=80,
+        )
+        seed_moves, _ = ghq_ai.first_turn_from_pv(root, seed.pv)
+        calls = []
+        safe = ghq_ai.TacticalSafety(0, 0, 0, 0, 0, True)
+
+        def staged_alphabeta(searcher, board, depth, alpha, beta):
+            calls.append((board.turn, depth))
+            if len(calls) == 1:
+                return ghq_ai.SearchResult(0.0, [])
+            if len(calls) == 2:
+                unsafe_moves, unsafe_board = ghq_ai.deterministic_skip_turn(
+                    board
+                )
+                unsafe = ghq_ai.TurnCandidate(
+                    unsafe_moves,
+                    unsafe_board,
+                    0.0,
+                    tactically_safe=False,
+                )
+                searcher.root_ranked_turns = [(1.0, unsafe)]
+                return ghq_ai.SearchResult(1.0, list(unsafe.moves))
+            raise ghq_ai.SearchTimeout
+
+        with patch.object(
+            ghq_ai,
+            "purposeful_complete_turn_seed",
+            return_value=ghq_ai.SearchResult(seed.score, list(seed.pv)),
+        ), patch.object(
+            ghq_ai,
+            "bounded_seed_safety",
+            side_effect=[None, safe],
+        ) as safety_probe, patch.object(
+            ghq_ai.Searcher,
+            "alphabeta",
+            staged_alphabeta,
+        ):
+            result = ghq_ai.search(
+                root,
+                "balanced",
+                time_ms=1_000,
+                max_depth=2,
+                beam_width=6,
+                turn_number=8,
+            )
+
+        self.assertEqual(safety_probe.call_count, 2)
+        self.assertTrue(result["search"]["seed_reply_verified"])
+        self.assertTrue(result["search"]["seed_safety_retry_used"])
+        self.assertTrue(result["search"]["seed_safety_retry_verified"])
+        self.assertTrue(result["search"]["tactical_return_guard_used"])
+        self.assertEqual(result["search"]["completed_depth_in_turns"], 2)
+        self.assertEqual(result["search"]["fallback_used"], "safe")
         self.assertEqual(
             result["best_turn"]["all_moves"],
             [move.uci() for move in seed_moves],

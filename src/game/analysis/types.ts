@@ -171,6 +171,10 @@ export interface GhqSearchResult {
     seed_reply_verified?: boolean;
     /** The reserved final deadline slice was needed to certify that reply. */
     seed_reply_retry_used?: boolean;
+    /** An inconclusive pre-search material probe was retried after the reply. */
+    seed_safety_retry_used?: boolean;
+    /** The retried material probe certified the reply-verified seed. */
+    seed_safety_retry_verified?: boolean;
     /** True when a shared reply-verified early search was reused. */
     persistent_cache_hit?: boolean;
     /** Runtime provenance for training and production diagnostics. */

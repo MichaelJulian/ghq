@@ -83,6 +83,10 @@ async function main() {
         safeFallbackReplyNodes:
           replay.search.search.safe_fallback_reply_nodes ?? 0,
         seedReplyVerified: replay.search.search.seed_reply_verified ?? false,
+        seedSafetyRetryUsed:
+          replay.search.search.seed_safety_retry_used ?? false,
+        seedSafetyRetryVerified:
+          replay.search.search.seed_safety_retry_verified ?? false,
         hqSurvivalReplyVerified:
           replay.search.search.hq_survival_reply_verified ?? false,
         codeVersion: replay.search.search.code_version,

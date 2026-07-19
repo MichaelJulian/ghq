@@ -5565,6 +5565,8 @@ def search(
     emergency_seed: Optional[SearchResult] = None
     emergency_seed_safe = False
     seed_reply_retry_used = False
+    seed_safety_retry_used = False
+    seed_safety_retry_verified = False
     seed_moves: List[engine.Move] = []
     seed_board = board
     verified_seed: Optional[SearchResult] = None
@@ -5645,6 +5647,47 @@ def search(
                 list(seed_moves) + list(reply.pv),
             )
 
+        def retry_verified_seed_safety() -> None:
+            """Pair a completed seed reply with an objective safety proof.
+
+            The cheap pre-search probe can be inconclusive on a cold worker.
+            If minimax nevertheless completes the opponent reply, retry only
+            the material portion of that proof before broadening the root.
+            This leaves a doubly certified floor that the final return guard
+            can restore without creating a depth-zero safe replacement.
+            """
+            nonlocal emergency_seed_safe
+            nonlocal seed_safety_retry_used
+            nonlocal seed_safety_retry_verified
+            if (
+                verified_seed is None
+                or emergency_seed_safe
+                or seed_board.is_game_over()
+                or seed_purpose["paratrooper_mission_penalty"] > 0.0
+            ):
+                return
+            retry_budget = remaining_overall_ms(seed_time_ms)
+            if retry_budget < 50:
+                return
+            seed_safety_retry_used = True
+            retry = bounded_seed_safety(
+                board,
+                seed_board,
+                personality,
+                turn_number,
+                beam_width,
+                max_actions,
+                retry_budget,
+                # The tactical return guard runs after the dedicated HQ
+                # survival pass. A seed certified here may therefore be
+                # restored without another HQ check; include HQ combinations
+                # so "material safe" cannot silently mean "loses the HQ."
+                check_hq_combinations=True,
+            )
+            if retry is not None and retry.tactically_safe:
+                emergency_seed_safe = True
+                seed_safety_retry_verified = True
+
         if seed_board.is_game_over() or seed_counted_actions >= searcher.max_actions:
             # Seed construction and safety are a bounded pre-search floor.
             # Running this check on the main Searcher let a complicated
@@ -5724,6 +5767,7 @@ def search(
                         seed_board, 1, -math.inf, math.inf
                     )
                     verified_seed = scored_verified_seed(reply)
+                    retry_verified_seed_safety()
                 except SearchTimeout:
                     timed_out = True
                 finally:
@@ -5805,6 +5849,7 @@ def search(
                             seed_board, 1, -math.inf, math.inf
                         )
                         verified_seed = scored_verified_seed(reply)
+                        retry_verified_seed_safety()
                     except SearchTimeout:
                         timed_out = True
                     finally:
@@ -5935,6 +5980,11 @@ def search(
             or exact_return_hq_threat
         )
     ):
+        # An identified one-turn HQ loss outranks the material-safety reserve.
+        # Give the exact survival search the full absolute deadline; a found
+        # survival line is already exempt from the later material replacement
+        # guard, while returning mate to preserve that reserve is never useful.
+        searcher.deadline = overall_deadline
         survival = searcher.find_hq_survival_turn(
             board,
             max_reply_nodes=(
@@ -6580,6 +6630,8 @@ def search(
             "safe_fallback_reply_nodes": safe_fallback_reply_nodes,
             "seed_reply_verified": verified_seed is not None,
             "seed_reply_retry_used": seed_reply_retry_used,
+            "seed_safety_retry_used": seed_safety_retry_used,
+            "seed_safety_retry_verified": seed_safety_retry_verified,
         },
         "evaluation": {
             "before": root_eval,
