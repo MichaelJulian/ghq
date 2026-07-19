@@ -124,9 +124,63 @@ def snapshot_metric_rows(snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "tactical_risk_value": tactical_risk,
                 "forced_loss_value": forced_loss,
                 "critical_exposure_value": critical_exposure,
+                "piece_inventory": piece_inventory(board, color),
+                "forced_capture_targets": forced_capture_targets(
+                    board, color
+                ),
             }
         )
     return rows
+
+
+def piece_inventory(board: engine.BaseBoard, color: bool) -> Dict[str, int]:
+    return {
+        str(engine.PIECE_NAMES[piece_type]): (
+            engine.popcount(board.pieces_mask(piece_type, color))
+            + board.get_reserve_count(piece_type, color)
+        )
+        for piece_type in ghq_ai.NON_HQ_TYPES
+    }
+
+
+def forced_capture_targets(
+    board: engine.BaseBoard, defender: bool
+) -> List[Dict[str, Any]]:
+    probe = ghq_ai.Searcher.board_as_turn(board, not defender)
+    frontier = [probe]
+    targets: Dict[tuple[int, int], Dict[str, Any]] = {}
+    for _ in range(8):
+        next_frontier = []
+        for position in frontier[:12]:
+            legal = list(position.generate_legal_moves())
+            if not legal or not all(
+                move.name == "AutoCapture" for move in legal
+            ):
+                continue
+            for move in legal[:12]:
+                target = move.capture_preference
+                if target is not None and (
+                    engine.BB_SQUARES[target]
+                    & position.occupied_co[defender]
+                ):
+                    piece_type = position.piece_type_at(target)
+                    if piece_type is not None:
+                        targets[(target, piece_type)] = {
+                            "square": engine.square_name(target),
+                            "pieceType": str(
+                                engine.PIECE_NAMES[piece_type]
+                            ),
+                            "value": ghq_ai.PIECE_VALUES[piece_type],
+                        }
+                child = position.copy()
+                child.push(move)
+                next_frontier.append(child)
+        if not next_frontier:
+            break
+        frontier = next_frontier[:12]
+    return sorted(
+        targets.values(), key=lambda target: (target["square"], target["pieceType"])
+    )
 
 
 def summarize_metric_rows(rows: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
@@ -191,6 +245,8 @@ def summarize_metric_rows(rows: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
         "tacticalDangerExamples": tactical_danger_rows[:12],
         "repairRequiredPositions": len(repair_required_rows),
         "repairRequiredExamples": repair_required_rows[:12],
+        "immediateCaptureThreatPositions": len(immediate_danger_rows),
+        "immediateCaptureThreatExamples": immediate_danger_rows[:12],
         "immediateForcedCapturePositions": len(immediate_danger_rows),
         "immediateForcedCaptureExamples": immediate_danger_rows[:12],
         "immediateTacticalDangerPositions": len(immediate_danger_rows),
@@ -352,14 +408,59 @@ def compare_checkpoint_reports(
             if current is not None
             else None
         )
+        before_snapshot = before_games.get(key[0])
+        after_snapshot = after_games.get(key[0])
+        color = engine.RED if key[1] == "RED" else engine.BLUE
+        prior_board = (
+            engine.BaseBoard(str(before_snapshot["currentFen"]))
+            if before_snapshot and before_snapshot.get("currentFen")
+            else None
+        )
+        current_board = (
+            engine.BaseBoard(str(after_snapshot["currentFen"]))
+            if after_snapshot and after_snapshot.get("currentFen")
+            else None
+        )
+        targets = (
+            forced_capture_targets(prior_board, color)
+            if prior_board is not None
+            else []
+        )
+        prior_inventory = (
+            piece_inventory(prior_board, color)
+            if prior_board is not None
+            else {}
+        )
+        current_inventory = (
+            piece_inventory(current_board, color)
+            if current_board is not None
+            else {}
+        )
+        target_types = sorted(
+            {str(target["pieceType"]) for target in targets}
+        )
+        retained_by_type = {
+            piece_type: (
+                current_inventory.get(piece_type, 0)
+                >= prior_inventory.get(piece_type, 0)
+            )
+            for piece_type in target_types
+        }
         repair_outcomes.append(
             {
                 "gameId": key[0],
                 "side": key[1],
                 "priorRiskValue": float(prior["tactical_risk_value"]),
-                "currentRiskValue": current_risk,
-                "riskClearedAtCheckpoint": (
+                "laterCheckpointRiskValue": current_risk,
+                "sameSideRiskFreeAtLaterCheckpoint": (
                     current_risk == 0.0 if current_risk is not None else None
+                ),
+                "priorForcedCaptureTargets": targets,
+                "threatenedInventoryRetainedByType": retained_by_type,
+                "allThreatenedInventoryRetained": (
+                    all(retained_by_type.values())
+                    if retained_by_type
+                    else None
                 ),
             }
         )
@@ -369,8 +470,12 @@ def compare_checkpoint_reports(
         "sharedGames": len(shared_games),
         "counterDeltas": counter_deltas,
         "repairObligations": len(repair_outcomes),
-        "repairsClearedAtCheckpoint": sum(
-            outcome["riskClearedAtCheckpoint"] is True
+        "sameSideRiskFreeAtLaterCheckpoint": sum(
+            outcome["sameSideRiskFreeAtLaterCheckpoint"] is True
+            for outcome in repair_outcomes
+        ),
+        "threatenedInventoryRetained": sum(
+            outcome["allThreatenedInventoryRetained"] is True
             for outcome in repair_outcomes
         ),
         "repairOutcomes": repair_outcomes,
@@ -382,6 +487,18 @@ def compare_checkpoint_reports(
             after.get("immediateForcedCapturePositions", 0)
         )
         - int(before.get("immediateForcedCapturePositions", 0)),
+        "immediateCaptureThreatPositionDelta": int(
+            after.get(
+                "immediateCaptureThreatPositions",
+                after.get("immediateForcedCapturePositions", 0),
+            )
+        )
+        - int(
+            before.get(
+                "immediateCaptureThreatPositions",
+                before.get("immediateForcedCapturePositions", 0),
+            )
+        ),
     }
 
 
@@ -416,6 +533,9 @@ def main() -> None:
                     ],
                     "immediateForcedCapturePositions": report[
                         "immediateForcedCapturePositions"
+                    ],
+                    "immediateCaptureThreatPositions": report[
+                        "immediateCaptureThreatPositions"
                     ],
                     "checkpointComparison": report.get(
                         "checkpointComparison"

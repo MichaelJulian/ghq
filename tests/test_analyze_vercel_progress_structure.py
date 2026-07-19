@@ -81,6 +81,9 @@ class ProgressStructureAnalysisTests(unittest.TestCase):
         self.assertEqual(
             immediate_report["immediateForcedCapturePositions"], 1
         )
+        self.assertEqual(
+            immediate_report["immediateCaptureThreatPositions"], 1
+        )
 
     def test_empty_progress_is_a_valid_report(self):
         report = progress_structure.analyze_summary(
@@ -160,10 +163,35 @@ class ProgressStructureAnalysisTests(unittest.TestCase):
             comparison["counterDeltas"]["depthAtLeastTwoDecisions"], 9
         )
         self.assertEqual(comparison["counterDeltas"]["fallbackDecisions"], 1)
-        self.assertEqual(comparison["repairsClearedAtCheckpoint"], 1)
+        self.assertEqual(
+            comparison["sameSideRiskFreeAtLaterCheckpoint"], 1
+        )
+        self.assertEqual(comparison["threatenedInventoryRetained"], 0)
         self.assertEqual(comparison["structuralDebtPositionDelta"], -1)
         self.assertEqual(
             comparison["immediateForcedCapturePositionDelta"], -1
+        )
+        self.assertEqual(
+            comparison["immediateCaptureThreatPositionDelta"], -1
+        )
+
+    def test_identifies_the_live_forced_armored_artillery_target(self):
+        board = progress_structure.engine.BaseBoard(
+            "qf1i2p1/i1ir↓if2/1ir↓t↓1h↓r↓f/8/7I/"
+            "I4T↑I1/1FIIH↑R↑IQ/IP2IF1F RR iii r"
+        )
+        targets = progress_structure.forced_capture_targets(
+            board, progress_structure.engine.RED
+        )
+        self.assertEqual(
+            targets,
+            [
+                {
+                    "square": "f3",
+                    "pieceType": "ARMORED_ARTILLERY",
+                    "value": 5.0,
+                }
+            ],
         )
 
 

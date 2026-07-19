@@ -57,6 +57,10 @@ TURN_20_ARMORED_ARTILLERY_SAVE_FEN = (
     "qf1i2p1/i1ir↓if2/1ir↓t↓1h↓r↓f/8/7I/I4T↑I1/"
     "1FIIH↑R↑IQ/IP2IF1F RR iii r"
 )
+TURN_30_MULTI_THREAT_RESCUE_FEN = (
+    "qf1i1i1p/i1i1i1i1/1ir↓t↓1f2/2h↓5/3r↘4/I3I1I1/"
+    "1FT↑IH↑R↑1Q/I1R↑1IFIF R i r"
+)
 TURN_6_FEN = (
     "qr↓1r↓1i2/iiiii3/8/8/8/5T↑2/4H↑III/"
     "PFR↑FF1R↑Q IIIIIR iifffprth b"
@@ -1551,6 +1555,37 @@ class SearchTests(unittest.TestCase):
                 )
                 self.assertTrue(safety.tactically_safe)
                 self.assertEqual(safety.forced_loss_value, 0.0)
+
+    def test_live_turn_thirty_resolves_nine_point_capture_chain(self):
+        board = engine.BaseBoard(TURN_30_MULTI_THREAT_RESCUE_FEN)
+        verifier = ghq_ai.Searcher(
+            "balanced", time_ms=10_000, beam_width=6, turn_number=31
+        )
+        self.assertEqual(
+            verifier.tactical_risk(board, engine.RED)[1], 9.0
+        )
+
+        recovery = ghq_ai.material_safe_recovery_turn(
+            board,
+            "para_specialist",
+            turn_number=31,
+            beam_width=6,
+            max_actions=3,
+            time_ms=3_000,
+        )
+        self.assertIsNotNone(recovery)
+        assert recovery is not None
+        self.assertTrue(
+            any(
+                move.capture_preference == engine.parse_square("d4")
+                for move in recovery.moves
+            )
+        )
+        safety = verifier.assess_turn_safety(
+            board, recovery.board, engine.RED
+        )
+        self.assertTrue(safety.tactically_safe)
+        self.assertEqual(safety.forced_loss_value, 0.0)
 
     def test_value_model_is_used_in_leaf_score(self):
         searcher = ghq_ai.Searcher(
