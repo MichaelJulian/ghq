@@ -20,7 +20,10 @@ from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tupl
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "public"))
 
-import engine  # noqa: E402
+try:
+    import _engine as engine  # type: ignore[no-redef]  # noqa: E402
+except ModuleNotFoundError:
+    import engine  # type: ignore[no-redef]  # noqa: E402
 
 
 PIECE_VALUES = {
